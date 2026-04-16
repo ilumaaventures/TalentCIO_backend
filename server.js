@@ -21,11 +21,11 @@ const isAllowedOrigin = (origin) => {
             hostname === 'localhost' ||
             hostname.endsWith('.localhost') ||           // ilumaa.localhost
             hostname.endsWith('.vercel.app') ||          // *.vercel.app (all Vercel deployments)
-            hostname.endsWith('.talentcio.com') ||       // ilumaa.talentcio.com
-            hostname === 'talentcio.com' ||
-            hostname.endsWith('.telentcio.com') ||       // (typo variant in use)
+            hostname.endsWith('.talentcio.in') ||       // ilumaa.talentcio.com
+            hostname === 'talentcio.in' ||
+            hostname.endsWith('.telentcio.in') ||       // (typo variant in use)
             hostname === 'telentcio.com' ||
-            hostname.endsWith('.onrender.com')           // inter-service on Render
+            hostname.endsWith('.onrender.in')           // inter-service on Render
         );
     } catch {
         return false;
