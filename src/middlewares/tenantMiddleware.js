@@ -12,8 +12,8 @@ const Company = require('../models/Company');
  *   - localhost            → no tenant (main app)
  *   - ilumaa.localhost     → tenant: ilumaa
  *   - telentcio.vercel.app → tenant: telentcio   (full Vercel slug = tenant slug)
- *   - ilumaa.talentcio.com → tenant: ilumaa       (subdomain of main custom domain)
- *   - talentcio.com        → no tenant (main marketing site)
+ *   - ilumaa.talentcio.in → tenant: ilumaa       (subdomain of main custom domain)
+ *   - talentcio.in        → no tenant (main marketing site)
  *   - talentcio.onrender.com → no tenant (backend itself)
  */
 

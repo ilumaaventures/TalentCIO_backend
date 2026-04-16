@@ -21,7 +21,7 @@ const isAllowedOrigin = (origin) => {
             hostname === 'localhost' ||
             hostname.endsWith('.localhost') ||           // ilumaa.localhost
             hostname.endsWith('.vercel.app') ||          // *.vercel.app (all Vercel deployments)
-            hostname.endsWith('.talentcio.in') ||       // ilumaa.talentcio.com
+            hostname.endsWith('.talentcio.in') ||       // ilumaa.talentcio.in
             hostname === 'talentcio.in' ||
             hostname.endsWith('.telentcio.in') ||       // (typo variant in use)
             hostname === 'telentcio.com' ||

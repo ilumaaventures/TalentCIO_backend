@@ -7,7 +7,7 @@ const axios = require('axios');
 const getTransporter = () => {
     const host = process.env.EMAIL_HOST || 'smtp-relay.brevo.com';
     const port = parseInt(process.env.EMAIL_PORT) || 587;
-    
+
     return nodemailer.createTransport({
         host,
         port,
@@ -27,13 +27,13 @@ const getTransporter = () => {
  */
 const sendEmail = async ({ to, subject, html, text, attachments = [] }) => {
     const apiKey = process.env.BREVO_API_KEY || process.env.EMAIL_PASS;
-    const fromEmail = process.env.EMAIL_FROM || 'no-reply@talentcio.com';
+    const fromEmail = process.env.EMAIL_FROM || 'no-reply@talentcio.in';
 
     // 1. Try Brevo HTTP API first (Most reliable for production/Render)
     if (apiKey && apiKey.startsWith('xkeysib-')) {
         try {
             console.log(`[EMAIL] Attempting to send via Brevo API: ${to}`);
-            
+
             // Format attachments for Brevo API if they exist
             const brevoAttachments = attachments.map(att => ({
                 name: att.filename || att.name,
