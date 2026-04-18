@@ -11,6 +11,7 @@ const companySchema = new mongoose.Schema({
     timezone: { type: String, default: 'Asia/Kolkata' },
     status: { type: String, enum: ['Active', 'Suspended', 'Trial', 'Inactive'], default: 'Active' },
     planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },
+    allowedDomains: { type: [String], default: [] },
     enabledModules: {
         type: [String],
         default: ['attendance', 'leaves', 'helpdesk', 'userManagement']
@@ -66,6 +67,7 @@ const companySchema = new mongoose.Schema({
             },
             exportFormat: { type: String, default: 'Standard' },
             allowPastEntries: { type: Boolean, default: true },
+            requireAttachment: { type: Boolean, default: false },
         },
         // File Import/Export
         excelImportFormat: { type: String, default: 'default' },

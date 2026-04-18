@@ -64,6 +64,14 @@ const createCompany = async (req, res) => {
             return res.status(400).json({ message: 'Admin user details are mandatory for creating a company.' });
         }
 
+        // Validate allowedDomains if provided
+        if (companyData.allowedDomains && Array.isArray(companyData.allowedDomains) && companyData.allowedDomains.length > 0) {
+            const adminEmailDomain = adminUser.email.split('@')[1];
+            if (!companyData.allowedDomains.includes(adminEmailDomain)) {
+                return res.status(400).json({ message: `Admin email domain '@${adminEmailDomain}' is not in the allowed domains list: ${companyData.allowedDomains.join(', ')}` });
+            }
+        }
+
         // 1. Pre-flight Validation
         const existingSubdomain = await Company.findOne({ subdomain: companyData.subdomain.toLowerCase() });
         if (existingSubdomain) {
@@ -132,6 +140,12 @@ const updateCompany = async (req, res) => {
         const updateData = { ...req.body };
         if (updateData.planId === "") {
             updateData.planId = null;
+        }
+
+        // Validate allowedDomains if provided in update
+        if (updateData.allowedDomains && Array.isArray(updateData.allowedDomains) && updateData.allowedDomains.length > 0) {
+            // Optional: You might want to check existing users against new domains? 
+            // For now, we'll just allow the update of the policy.
         }
 
         const company = await Company.findByIdAndUpdate(req.params.id, updateData, { new: true, runValidators: true });

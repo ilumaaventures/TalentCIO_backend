@@ -110,6 +110,7 @@ require('./src/models/User');
 require('./src/models/EmployeeProfile');
 require('./src/models/AuditLog');
 require('./src/models/Attendance');
+require('./src/models/AttendanceDocument');
 require('./src/models/Project');
 require('./src/models/Project');
 require('./src/models/Timesheet');
@@ -150,6 +151,7 @@ const interviewWorkflowRoutes = require('./src/routes/interviewWorkflowRoutes');
 const notificationRoutes = require('./src/routes/notificationRoutes');
 const discussionRoutes = require('./src/routes/discussionRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
+const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 
 // Super Admin Routes
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
@@ -190,6 +192,7 @@ app.use('/api', (req, res, next) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/attendance/attachments', attendanceDocumentRoutes);
 app.use('/api/timesheet', timesheetRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/projects', projectRoutes);

@@ -241,14 +241,14 @@ const addEntry = async (req, res) => {
     }
 };
 
+
 // @desc    Submit Timesheet
 // @route   POST /api/timesheet/submit
 // @access  Private
 const submitTimesheet = async (req, res) => {
-    const { month } = req.body; // In weekly/daily mode, this is the periodId (e.g. 2024-W12)
+    const { month } = req.body;
     try {
-        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
-        
+        const company = req.company;
         const timesheet = await Timesheet.findOne({
             user: req.user._id,
             month: month,
@@ -259,9 +259,8 @@ const submitTimesheet = async (req, res) => {
             return res.status(404).json({ message: 'Timesheet not found' });
         }
 
-        // For now, we allow the submission but we could add cycle-specific validations here
-        // (e.g. ensuring a weekly timesheet is only submitted at the end of the week)
-
+        const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        
         timesheet.status = 'SUBMITTED';
         timesheet.submissionCycle = cycle;
         timesheet.submittedAt = new Date();

@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Project = require('../models/Project');
+const Company = require('../models/Company');
 
 // @desc    Get Dashboard Statistics
 // @route   GET /api/dashboard
@@ -25,20 +26,31 @@ const getDashboardStats = async (req, res) => {
             .populate('roles', 'name isSystem')
             .lean();
 
-        // 3. Filter to exclude ONLY the primary system user
-        const filteredUsers = allActiveUsers.filter(u => {
-            const hasSystemRole = u.roles?.some(r => r.isSystem);
-            // Targeted: Only exclude the account typically used as 'System' (admin@gmail.com)
-            // or if it's explicitly named 'Admin User' and has a system role.
-            const isSystemIdentity = u.email === 'admin@gmail.com' || (u.firstName === 'Admin' && u.lastName === 'User');
+        // 3. Fetch company to identify primary admin
+        const company = await Company.findById(req.companyId).select('email').lean();
+        const primaryAdminEmail = company?.email?.toLowerCase();
 
-            return !(hasSystemRole && isSystemIdentity);
+        // 4. Identify the Primary Admin based on email match OR being the earliest created system user
+        const systemUsers = allActiveUsers.filter(u => u.roles?.some(r => r.isSystem === true));
+        const oldestSystemUser = systemUsers.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+        const oldestSystemUserId = oldestSystemUser?._id?.toString();
+
+        // 5. Filter for dashboard metrics
+        const filteredUsers = allActiveUsers.filter(u => {
+            const hasSystemRole = u.roles?.some(r => r.isSystem === true);
+            const isMatchByEmail = u.email?.toLowerCase() === primaryAdminEmail;
+            const isMatchByOldest = u._id?.toString() === oldestSystemUserId;
+
+            // Targeted exclusion: Only exclude the original account (Primary Admin)
+            const isPrimaryAccount = isMatchByEmail || isMatchByOldest;
+
+            return !(hasSystemRole && isPrimaryAccount);
         });
 
         const nonSystemUserIds = filteredUsers.map(u => u._id);
         const totalEmployees = nonSystemUserIds.length;
 
-        // 4. Run calculations based on filtered user list
+        // 6. Run calculations based on filtered user list
         const [
             presentTodayCount,
             pendingRequests,

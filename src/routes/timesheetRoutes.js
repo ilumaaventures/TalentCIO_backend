@@ -17,6 +17,7 @@ const {
     updateEntry
 } = require('../controllers/timesheetController');
 const { getTimesheetBootstrap } = require('../controllers/pageBootstrapController');
+const { upload } = require('../config/cloudinary');
 
 router.use(protect); 
 router.use(requireModule(['timesheet', 'attendance']));
