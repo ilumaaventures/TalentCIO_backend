@@ -16,13 +16,7 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
 exports.getQueryTypes = async (req, res) => {
     try {
         setPrivateCache(res, 60);
-        const types = await QueryType.find({
-            $or: [
-                { companyId: req.companyId },
-                { companyId: { $exists: false } },
-                { companyId: null }
-            ]
-        })
+        const types = await QueryType.find({ companyId: req.companyId })
             .populate('assignedRole', 'name')
             .populate('assignedPerson', 'firstName lastName email')
             .populate('escalationRole', 'name')
@@ -109,11 +103,7 @@ exports.createQuery = async (req, res) => {
 
         const qType = await QueryType.findOne({ 
             _id: queryTypeId,
-            $or: [
-                { companyId: req.companyId },
-                { companyId: { $exists: false } },
-                { companyId: null }
-            ]
+            companyId: req.companyId
         });
         if (!qType || !qType.isActive) return res.status(400).json({ success: false, message: 'Invalid or inactive query type.' });
 
@@ -130,37 +120,15 @@ exports.createQuery = async (req, res) => {
 
         await newQuery.save();
 
-        // --- BULLETPROOF NOTIFICATIONS ---
+        // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
         const notificationTargets = new Set();
         
-        // 1. Specific Assigned Person (Immediate Priority)
+        // Only Notify Specific Assigned Person
         if (qType.assignedPerson) {
             notificationTargets.add(qType.assignedPerson.toString());
         }
 
-        // 2. Broadcast to Admins and Support Roles (Case-Insensitive)
-        const roleRegex = /admin|system|super|it|hr/i;
-        const roles = await Role.find({
-            companyId: req.companyId,
-            $or: [
-                { name: { $regex: roleRegex } },
-                { _id: qType.assignedRole }
-            ]
-        }).select('_id name');
-        
-        const targetRoleIds = roles.map(r => r._id);
-        // console.log(`[NOTIF DEBUG] Found ${roles.length} matching roles: ${roles.map(r => r.name).join(', ')}`);
-
-        // 3. Find all users with those roles
-        if (targetRoleIds.length > 0) {
-            const usersWithRoles = await User.find({
-                companyId: req.companyId,
-                isActive: true,
-                roles: { $in: targetRoleIds }
-            }).select('_id');
-            usersWithRoles.forEach(u => notificationTargets.add(u._id.toString()));
-        }
 
         // 4. Cleanup & Logging
         notificationTargets.delete(req.user._id.toString()); // Don't notify the raiser twice

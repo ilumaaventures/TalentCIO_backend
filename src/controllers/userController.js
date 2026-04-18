@@ -41,9 +41,22 @@ const createUser = async (req, res) => {
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        // Plan Enforcement: Check maxUsers
+        // Fetch company to check allowedDomains
         const company = await Company.findById(req.companyId).populate('planId');
-        if (company && company.planId) {
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        // Check Allowed Domains
+        if (company.allowedDomains && company.allowedDomains.length > 0) {
+            const userEmailDomain = email.split('@')[1];
+            if (!company.allowedDomains.includes(userEmailDomain)) {
+                return res.status(400).json({ message: `Access Denied: Email domain '@${userEmailDomain}' is not allowed for this company. Allowed domains: ${company.allowedDomains.join(', ')}` });
+            }
+        }
+
+        // Plan Enforcement: Check maxUsers
+        if (company.planId) {
             const activeUserCount = await User.countDocuments({ companyId: req.companyId, isActive: true });
             if (activeUserCount >= company.planId.maxUsers) {
                 return res.status(403).json({
@@ -130,6 +143,17 @@ const updateUser = async (req, res) => {
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Validate Email Domain if email is being updated
+        if (email && email !== user.email) {
+            const company = await Company.findById(req.companyId);
+            if (company && company.allowedDomains && company.allowedDomains.length > 0) {
+                const userEmailDomain = email.split('@')[1];
+                if (!company.allowedDomains.includes(userEmailDomain)) {
+                    return res.status(400).json({ message: `Access Denied: Email domain '@${userEmailDomain}' is not allowed for this company. Allowed domains: ${company.allowedDomains.join(', ')}` });
+                }
+            }
         }
 
         user.firstName = firstName || user.firstName;

@@ -2005,6 +2005,25 @@ exports.transferToActiveEmployee = async (req, res) => {
             return res.status(400).json({ message: 'This employee has already been transferred to an active user.' });
         }
 
+        // Validate Allowed Domains & Plan Limits
+        const company = await Company.findById(req.companyId).populate('planId');
+        if (company && company.allowedDomains && company.allowedDomains.length > 0) {
+            const userEmailDomain = employee.email.split('@')[1];
+            if (!company.allowedDomains.includes(userEmailDomain)) {
+                return res.status(400).json({ message: "Email for this user is not authorized for this company. Please update to an allowed domain before transferring." });
+            }
+        }
+
+        // Plan Enforcement: Check maxUsers
+        if (company && company.planId) {
+            const activeUserCount = await User.countDocuments({ companyId: req.companyId, isActive: true });
+            if (activeUserCount >= company.planId.maxUsers) {
+                return res.status(403).json({
+                    message: `Plan Limit Reached: You have used all ${company.planId.maxUsers} active user slots. Please upgrade your plan to activate this employee.`
+                });
+            }
+        }
+
         // Check if user with this email already exists
         const existingUser = await User.findOne({ email: employee.email, companyId: req.companyId });
         if (existingUser) {

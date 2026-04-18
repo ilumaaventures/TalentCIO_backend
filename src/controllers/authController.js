@@ -21,6 +21,14 @@ const register = async (req, res) => {
     const { email, password, firstName, lastName } = req.body;
 
     try {
+        const company = await require('../models/Company').findById(req.companyId);
+        if (company && company.allowedDomains && company.allowedDomains.length > 0) {
+            const userEmailDomain = email.split('@')[1];
+            if (!company.allowedDomains.includes(userEmailDomain)) {
+                return res.status(400).json({ message: `Registration Denied: Email domain '@${userEmailDomain}' is not allowed for this workspace. Allowed domains: ${company.allowedDomains.join(', ')}` });
+            }
+        }
+
         const userExists = await User.findOne({ email, companyId: req.companyId });
         if (userExists) {
             return res.status(400).json({ message: 'User already exists in this workspace.' });

@@ -588,13 +588,11 @@ exports.getHelpdeskBootstrap = async (req, res) => {
             .populate('assignedTo', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .lean();
-        const assignedQueriesPromise = isResolverRole
-            ? HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
+        const assignedQueriesPromise = HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
                 .populate('raisedBy', 'firstName lastName email')
                 .populate('queryType', 'name')
                 .sort({ priority: -1, createdAt: 1 })
-                .lean()
-            : Promise.resolve([]);
+                .lean();
         const allQueriesPromise = isAdmin
             ? HelpdeskQuery.find({ companyId: req.companyId })
                 .populate('raisedBy', 'firstName lastName email')
