@@ -150,14 +150,26 @@ const flattenObject = (obj, prefix = '') => {
 // PUT /api/superadmin/companies/:id
 const updateCompany = async (req, res) => {
     try {
-        console.log('VERSION 3.0 – Forced Persistence fix deployed');
-        console.log(`[updateCompany] Updating company ${req.params.id} with body:`, JSON.stringify(req.body, null, 2));
+        console.log('[updateCompany] Request received', {
+            companyId: req.params.id,
+            updatedBy: req.superAdmin?.email || req.superAdmin?._id || 'unknown',
+            topLevelKeys: Object.keys(req.body || {}),
+            settingsKeys: Object.keys(req.body.settings || {}),
+            incomingRequireAttachment: req.body.settings?.timesheet?.requireAttachment
+        });
+        console.log(`[updateCompany] Payload for company ${req.params.id}:`, JSON.stringify(req.body, null, 2));
 
         const company = await Company.findById(req.params.id);
         if (!company) {
             console.warn(`[updateCompany] Company ${req.params.id} not found`);
             return res.status(404).json({ message: 'Company not found' });
         }
+
+        console.log('[updateCompany] Current DB snapshot before update', {
+            companyId: company._id.toString(),
+            currentRequireAttachment: company.settings?.timesheet?.requireAttachment,
+            currentTimesheet: company.settings?.timesheet || {}
+        });
 
         // --- Handle basic fields ---
         const fieldsToUpdate = ['name', 'subdomain', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
@@ -176,10 +188,13 @@ const updateCompany = async (req, res) => {
             // Ensure the timesheet object exists
             if (!company.settings) company.settings = {};
             if (!company.settings.timesheet) company.settings.timesheet = {};
-            
+
             company.settings.timesheet.requireAttachment = req.body.settings.timesheet.requireAttachment === true || req.body.settings.timesheet.requireAttachment === 'true';
-            company.markModified('settings.timesheet'); // 🔥 Critical for nested persistence
-            console.log('[DEPLOY] Explicitly set requireAttachment to:', company.settings.timesheet.requireAttachment);
+            company.markModified('settings.timesheet');
+            console.log('[updateCompany] Explicitly set requireAttachment', {
+                incomingValue: req.body.settings.timesheet.requireAttachment,
+                normalizedValue: company.settings.timesheet.requireAttachment
+            });
         }
 
         // --- Handle all other settings via flattening ---
@@ -188,12 +203,14 @@ const updateCompany = async (req, res) => {
 
             // Flatten and apply the rest (attendance, themeColor, etc.)
             const flattened = flattenObject(otherSettings, 'settings');
+            console.log('[updateCompany] Flattened non-timesheet settings', flattened);
             Object.entries(flattened).forEach(([path, value]) => {
                 company.set(path, value);
             });
 
             // If timesheet has other fields besides requireAttachment, handle them too
             if (timesheet) {
+                console.log('[updateCompany] Incoming timesheet settings', timesheet);
                 Object.keys(timesheet).forEach(key => {
                     if (key !== 'requireAttachment') { // already handled
                         if (!company.settings.timesheet) company.settings.timesheet = {};
@@ -206,11 +223,25 @@ const updateCompany = async (req, res) => {
             company.markModified('settings'); // Fallback
         }
 
+        console.log('[updateCompany] Snapshot before save', {
+            companyId: company._id.toString(),
+            requireAttachmentBeforeSave: company.settings?.timesheet?.requireAttachment,
+            timesheetBeforeSave: company.settings?.timesheet || {}
+        });
+
         await company.save();
+        console.log('[updateCompany] Save completed', {
+            companyId: company._id.toString(),
+            requireAttachmentAfterSave: company.settings?.timesheet?.requireAttachment
+        });
 
         // Verify persistence with a fresh lean fetch
         const updated = await Company.findById(company._id).lean();
-        console.log('[updateCompany] Final requireAttachment in DB =', updated.settings?.timesheet?.requireAttachment);
+        console.log('[updateCompany] Fresh DB read after save', {
+            companyId: company._id.toString(),
+            finalRequireAttachmentInDb: updated.settings?.timesheet?.requireAttachment,
+            finalTimesheetInDb: updated.settings?.timesheet || {}
+        });
 
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
         res.json(company);
