@@ -150,13 +150,29 @@ const flattenObject = (obj, prefix = '') => {
 // PUT /api/superadmin/companies/:id
 const updateCompany = async (req, res) => {
     try {
+        const rawRequireAttachmentValue =
+            req.body.settings?.timesheet?.requireAttachment ??
+            req.body.timesheet?.requireAttachment ??
+            req.body.settings?.requireAttachment ??
+            req.body.requireAttachment;
+        const requireAttachmentSource =
+            req.body.settings?.timesheet?.requireAttachment !== undefined ? 'settings.timesheet.requireAttachment' :
+            req.body.timesheet?.requireAttachment !== undefined ? 'timesheet.requireAttachment' :
+            req.body.settings?.requireAttachment !== undefined ? 'settings.requireAttachment' :
+            req.body.requireAttachment !== undefined ? 'requireAttachment' :
+            'not_provided';
+        const incomingTimesheetSettings = req.body.settings?.timesheet || req.body.timesheet || null;
+
         console.log('[updateCompany] Request received', {
             companyId: req.params.id,
             updatedBy: req.superAdmin?.email || req.superAdmin?._id || 'unknown',
             topLevelKeys: Object.keys(req.body || {}),
             settingsKeys: Object.keys(req.body.settings || {}),
-            incomingRequireAttachment: req.body.settings?.timesheet?.requireAttachment
+            incomingRequireAttachment: rawRequireAttachmentValue,
+            requireAttachmentSource
         });
+        console.log('[FULL BODY]', JSON.stringify(req.body, null, 2));
+        console.log('[DEBUG] requireAttachment raw value:', rawRequireAttachmentValue);
         console.log(`[updateCompany] Payload for company ${req.params.id}:`, JSON.stringify(req.body, null, 2));
 
         const company = await Company.findById(req.params.id);
@@ -183,16 +199,22 @@ const updateCompany = async (req, res) => {
             }
         });
 
-        // --- EXPLICITLY handle settings.timesheet.requireAttachment ---
-        if (req.body.settings?.timesheet?.requireAttachment !== undefined) {
+        // --- EXPLICITLY handle requireAttachment from multiple possible payload shapes ---
+        if (rawRequireAttachmentValue !== undefined) {
             // Ensure the timesheet object exists
             if (!company.settings) company.settings = {};
             if (!company.settings.timesheet) company.settings.timesheet = {};
 
-            company.settings.timesheet.requireAttachment = req.body.settings.timesheet.requireAttachment === true || req.body.settings.timesheet.requireAttachment === 'true';
+            company.settings.timesheet.requireAttachment =
+                rawRequireAttachmentValue === true ||
+                rawRequireAttachmentValue === 'true' ||
+                rawRequireAttachmentValue === 'True' ||
+                rawRequireAttachmentValue === 1 ||
+                rawRequireAttachmentValue === '1';
             company.markModified('settings.timesheet');
             console.log('[updateCompany] Explicitly set requireAttachment', {
-                incomingValue: req.body.settings.timesheet.requireAttachment,
+                incomingValue: rawRequireAttachmentValue,
+                source: requireAttachmentSource,
                 normalizedValue: company.settings.timesheet.requireAttachment
             });
         }
@@ -208,19 +230,20 @@ const updateCompany = async (req, res) => {
                 company.set(path, value);
             });
 
-            // If timesheet has other fields besides requireAttachment, handle them too
-            if (timesheet) {
-                console.log('[updateCompany] Incoming timesheet settings', timesheet);
-                Object.keys(timesheet).forEach(key => {
-                    if (key !== 'requireAttachment') { // already handled
-                        if (!company.settings.timesheet) company.settings.timesheet = {};
-                        company.settings.timesheet[key] = timesheet[key];
-                    }
-                });
-                company.markModified('settings.timesheet');
-            }
-
             company.markModified('settings'); // Fallback
+        }
+
+        // Handle timesheet settings whether they arrive inside settings or at root level
+        if (incomingTimesheetSettings) {
+            console.log('[updateCompany] Incoming timesheet settings', incomingTimesheetSettings);
+            Object.keys(incomingTimesheetSettings).forEach(key => {
+                if (key !== 'requireAttachment') {
+                    if (!company.settings) company.settings = {};
+                    if (!company.settings.timesheet) company.settings.timesheet = {};
+                    company.settings.timesheet[key] = incomingTimesheetSettings[key];
+                }
+            });
+            company.markModified('settings.timesheet');
         }
 
         console.log('[updateCompany] Snapshot before save', {
