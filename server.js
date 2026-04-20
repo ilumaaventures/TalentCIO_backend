@@ -8,102 +8,141 @@ const mongoose = require('mongoose');
 const connectDB = require('./db');
 
 const app = express();
-// Trust the first proxy (Render) so rate limiting uses correct client IPs
 app.set('trust proxy', 1);
-const server = http.createServer(app);
 
-// CORS — smart pattern-based, covers all envs: Vercel, custom domains, localhost, Render
+const server = http.createServer(app);
+const PORT = process.env.PORT || 5000;
+const MAX_SOCKET_CONNECTIONS_PER_IP = Math.max(parseInt(process.env.SOCKET_MAX_CONNECTIONS_PER_IP || '10', 10), 1);
+const MAX_SOCKET_ROOMS_PER_SOCKET = Math.max(parseInt(process.env.SOCKET_MAX_ROOMS_PER_SOCKET || '20', 10), 1);
+const SOCKET_MAX_HTTP_BUFFER_SIZE = Math.max(parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_SIZE || '1048576', 10), 1024);
+const activeSocketCounts = new Map();
+const trackedSocketIps = new Map();
+const requestTiming = require('./src/middlewares/requestTiming');
+
+const allowedOriginPatterns = [
+    /^https?:\/\/localhost(?::\d+)?$/i,
+    /^https?:\/\/([a-z0-9-]+\.)+localhost(?::\d+)?$/i,
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
+    /^https:\/\/([a-z0-9-]+\.)*talentcio\.in$/i,
+    /^https:\/\/([a-z0-9-]+\.)*telentcio\.in$/i,
+    /^https:\/\/telentcio\.com$/i,
+    /^https:\/\/([a-z0-9-]+\.)*onrender\.(?:com|in)$/i
+];
+
 const isAllowedOrigin = (origin) => {
-    if (!origin) return true; // server-to-server / Postman / curl
-    try {
-        const { hostname } = new URL(origin);
-        return (
-            hostname === 'localhost' ||
-            hostname.endsWith('.localhost') ||           // ilumaa.localhost
-            hostname.endsWith('.vercel.app') ||          // *.vercel.app (all Vercel deployments)
-            hostname.endsWith('.talentcio.in') ||       // ilumaa.talentcio.in
-            hostname === 'talentcio.in' ||
-            hostname.endsWith('.telentcio.in') ||       // (typo variant in use)
-            hostname === 'telentcio.com' ||
-            hostname.endsWith('.onrender.in')           // inter-service on Render
-        );
-    } catch {
-        return false;
-    }
+    if (!origin) return true;
+    return allowedOriginPatterns.some(pattern => pattern.test(origin));
 };
 
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (isAllowedOrigin(origin)) {
-        // Echo back the exact origin so credentials work when needed
-        res.setHeader('Access-Control-Allow-Origin', origin || '*');
-        if (origin) res.setHeader('Vary', 'Origin');
-    }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tenant-id, Accept, Cache-Control, Pragma, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+const corsOptions = {
+    origin(origin, callback) {
+        if (isAllowedOrigin(origin)) {
+            return callback(null, true);
+        }
 
-    if (req.method === 'OPTIONS') {
-        return res.status(204).end();
-    }
-    next();
-});
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'Accept', 'Cache-Control', 'Pragma', 'X-Requested-With']
+};
 
-// Helmet — after CORS, with cross-origin policies disabled to avoid header conflicts
+const getSocketClientIp = (socket) => {
+    const forwardedFor = socket.handshake.headers['x-forwarded-for'];
+    if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+        return forwardedFor.split(',')[0].trim();
+    }
+
+    return socket.handshake.address || 'unknown';
+};
+
+app.use(cors(corsOptions));
 app.use(helmet({
     crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
 }));
 
-
-// sample added comment for checking the CI/CD line 59 server.js file 
-// sample line 2 for checking again
-// sample added comment for checking the CI/CD line 59 server.js file 
-// sample line 2 for checking again
-
-// Setup Socket.IO
 const io = new Server(server, {
     cors: {
-        origin: function (origin, callback) {
-            callback(null, true);
+        origin(origin, callback) {
+            if (isAllowedOrigin(origin)) {
+                return callback(null, true);
+            }
+
+            return callback(new Error('Not allowed by CORS'));
         },
         credentials: true,
-        methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
-    }
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+    },
+    serveClient: false,
+    maxHttpBufferSize: SOCKET_MAX_HTTP_BUFFER_SIZE,
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-// Expose io to routes
+io.use((socket, next) => {
+    const ip = getSocketClientIp(socket);
+    const currentConnections = activeSocketCounts.get(ip) || 0;
+
+    if (currentConnections >= MAX_SOCKET_CONNECTIONS_PER_IP) {
+        return next(new Error('Too many socket connections from this IP'));
+    }
+
+    activeSocketCounts.set(ip, currentConnections + 1);
+    trackedSocketIps.set(socket.id, ip);
+    return next();
+});
+
 app.set('io', io);
 
-// Socket Event Listeners
 io.on('connection', (socket) => {
-    // console.log(`User connected to socket: ${socket.id}`);
+    const joinRoomIfAllowed = (roomId) => {
+        const normalizedRoomId = typeof roomId === 'string'
+            ? roomId.trim()
+            : String(roomId || '').trim();
 
-    // Join a private room for the user to receive targeted notifications
-    socket.on('join_user_room', (userId) => {
-        if (userId) {
-            socket.join(userId.toString());
-            // console.log(`Socket ${socket.id} joined personal room ${userId}`);
+        if (!mongoose.isValidObjectId(normalizedRoomId)) {
+            return;
         }
+
+        if (socket.rooms.has(normalizedRoomId)) {
+            return;
+        }
+
+        if ((socket.rooms.size - 1) >= MAX_SOCKET_ROOMS_PER_SOCKET) {
+            socket.emit('socket_error', { message: 'Socket room limit reached' });
+            return;
+        }
+
+        socket.join(normalizedRoomId);
+    };
+
+    socket.on('join_user_room', (userId) => {
+        joinRoomIfAllowed(userId);
     });
 
-    // Join a specific query room for real-time ticket updates
     socket.on('join_query', (queryId) => {
-        socket.join(queryId);
-        // console.log(`Socket ${socket.id} joined room ${queryId}`);
+        joinRoomIfAllowed(queryId);
     });
 
     socket.on('disconnect', () => {
-        // console.log(`User disconnected from socket: ${socket.id}`);
+        const ip = trackedSocketIps.get(socket.id);
+        if (!ip) return;
+
+        const remainingConnections = Math.max((activeSocketCounts.get(ip) || 1) - 1, 0);
+        if (remainingConnections === 0) {
+            activeSocketCounts.delete(ip);
+        } else {
+            activeSocketCounts.set(ip, remainingConnections);
+        }
+
+        trackedSocketIps.delete(socket.id);
     });
 });
 
-const PORT = process.env.PORT || 5000;
-
-// Middleware
+app.use(requestTiming);
 app.use(express.json());
 
-// Models (Register Schemas)
 require('./src/models/Permission');
 require('./src/models/Role');
 require('./src/models/User');
@@ -111,7 +150,6 @@ require('./src/models/EmployeeProfile');
 require('./src/models/AuditLog');
 require('./src/models/Attendance');
 require('./src/models/AttendanceDocument');
-require('./src/models/Project');
 require('./src/models/Project');
 require('./src/models/Timesheet');
 require('./src/models/LeaveConfig');
@@ -126,13 +164,11 @@ require('./src/models/ActivityLog');
 require('./src/models/SuperAdminUser');
 require('./src/models/OnboardingEmployee');
 
-// Services
 const syncPermissions = require('./src/services/permissionSync');
 const startEscalationCron = require('./src/services/escalationCron');
 const startAutoCheckoutCron = require('./src/services/attendanceAutoCheckoutCron');
 const cleanupStaleIndexes = require('./src/services/indexCleanup');
 
-// Routes
 const authRoutes = require('./src/routes/authRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
 const timesheetRoutes = require('./src/routes/timesheetRoutes');
@@ -153,7 +189,6 @@ const discussionRoutes = require('./src/routes/discussionRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 
-// Super Admin Routes
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
 const companyRoutes = require('./src/routes/companyRoutes');
 const globalUserRoutes = require('./src/routes/globalUserRoutes');
@@ -161,22 +196,20 @@ const analyticsRoutes = require('./src/routes/analyticsRoutes');
 const planRoutes = require('./src/routes/planRoutes');
 const superAdminMiscRoutes = require('./src/routes/superAdminMiscRoutes');
 
-// Multi-tenant & Licensing Middleware
 const tenantMiddleware = require('./src/middlewares/tenantMiddleware');
 const planGuard = require('./src/middlewares/planGuard');
 const { globalLimiter } = require('./src/middlewares/rateLimitMiddleware');
 
-// Database Connection & Init
 const initServer = async () => {
     await connectDB();
     await cleanupStaleIndexes();
     await syncPermissions();
-    startEscalationCron(io); // Start the background Helpdesk escalation job
-    startAutoCheckoutCron(); // Start the background auto-checkout job
+    startEscalationCron(io);
+    startAutoCheckoutCron();
 };
+
 initServer();
 
-// Mount Routes (Tenant-Facing)
 app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/superadmin')) return next();
     globalLimiter(req, res, next);
@@ -210,7 +243,6 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/discussions', discussionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 
-// Super Admin API Namespace
 app.use('/api/superadmin/auth', superAdminAuthRoutes);
 app.use('/api/superadmin/companies', companyRoutes);
 app.use('/api/superadmin/users', globalUserRoutes);
@@ -222,14 +254,10 @@ app.get('/', (req, res) => {
     res.json({ message: 'TalentCio API is running' });
 });
 
-// Start Server
 server.listen(PORT, () => {
     console.log(`Server & Socket.IO running on port ${PORT}`);
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
+process.on('unhandledRejection', (err) => {
     console.log(`Error: ${err.message}`);
-    // Close server & exit process
-    // server.close(() => process.exit(1));
 });
