@@ -154,13 +154,12 @@ const updateCompany = async (req, res) => {
         console.log(`[updateCompany] Updating company ${req.params.id} with body:`, JSON.stringify(req.body, null, 2));
 
         const company = await Company.findById(req.params.id);
-
         if (!company) {
             console.warn(`[updateCompany] Company ${req.params.id} not found`);
             return res.status(404).json({ message: 'Company not found' });
         }
 
-        // Basic Info Update
+        // --- Handle basic fields ---
         const fieldsToUpdate = ['name', 'subdomain', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
         fieldsToUpdate.forEach(field => {
             if (req.body[field] !== undefined) {
@@ -172,40 +171,51 @@ const updateCompany = async (req, res) => {
             }
         });
 
-        // Forced Persistence Fix for requireAttachment
+        // --- EXPLICITLY handle settings.timesheet.requireAttachment ---
         if (req.body.settings?.timesheet?.requireAttachment !== undefined) {
+            // Ensure the timesheet object exists
             if (!company.settings) company.settings = {};
             if (!company.settings.timesheet) company.settings.timesheet = {};
             
-            const newValue = req.body.settings.timesheet.requireAttachment === true || req.body.settings.timesheet.requireAttachment === 'true';
-            company.settings.timesheet.requireAttachment = newValue;
-            company.markModified('settings.timesheet');
+            company.settings.timesheet.requireAttachment = req.body.settings.timesheet.requireAttachment === true || req.body.settings.timesheet.requireAttachment === 'true';
+            company.markModified('settings.timesheet'); // 🔥 Critical for nested persistence
             console.log('[DEPLOY] Explicitly set requireAttachment to:', company.settings.timesheet.requireAttachment);
         }
 
-        // Deep Settings Update (for all other settings)
+        // --- Handle all other settings via flattening ---
         if (req.body.settings) {
-            const flattened = flattenObject(req.body.settings, 'settings');
-            console.log('[updateCompany] Applying flattened settings:', JSON.stringify(flattened, null, 2));
-            
+            const { timesheet, ...otherSettings } = req.body.settings;
+
+            // Flatten and apply the rest (attendance, themeColor, etc.)
+            const flattened = flattenObject(otherSettings, 'settings');
             Object.entries(flattened).forEach(([path, value]) => {
-                // Skip requireAttachment as we handled it explicitly above
-                if (path !== 'settings.timesheet.requireAttachment') {
-                    company.set(path, value);
-                }
+                company.set(path, value);
             });
-            
-            company.markModified('settings');
+
+            // If timesheet has other fields besides requireAttachment, handle them too
+            if (timesheet) {
+                Object.keys(timesheet).forEach(key => {
+                    if (key !== 'requireAttachment') { // already handled
+                        if (!company.settings.timesheet) company.settings.timesheet = {};
+                        company.settings.timesheet[key] = timesheet[key];
+                    }
+                });
+                company.markModified('settings.timesheet');
+            }
+
+            company.markModified('settings'); // Fallback
         }
 
         await company.save();
 
-        console.log(`[updateCompany] Successfully updated company ${req.params.id}. Final requireAttachment in DB:`, company.settings?.timesheet?.requireAttachment);
+        // Verify persistence with a fresh lean fetch
+        const updated = await Company.findById(company._id).lean();
+        console.log('[updateCompany] Final requireAttachment in DB =', updated.settings?.timesheet?.requireAttachment);
 
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
         res.json(company);
     } catch (err) {
-        console.error('[updateCompany] Error:', err);
+        console.error('[updateCompany] ERROR:', err);
         res.status(500).json({ message: err.message });
     }
 };
