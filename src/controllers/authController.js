@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
 const crypto = require('crypto');
 
+//adding comment to check the CI/CD pipeline
+
 // Generate JWT Helper
 const generateToken = (id, tokenVersion) => {
     return jwt.sign({ id, tokenVersion }, process.env.JWT_SECRET, {
