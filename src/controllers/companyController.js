@@ -180,6 +180,7 @@ const updateCompany = async (req, res) => {
             console.warn(`[updateCompany] Company ${req.params.id} not found`);
             return res.status(404).json({ message: 'Company not found' });
         }
+        const existingRequireAttachment = company.settings?.timesheet?.requireAttachment;
 
         console.log('[updateCompany] Current DB snapshot before update', {
             companyId: company._id.toString(),
@@ -244,6 +245,16 @@ const updateCompany = async (req, res) => {
                 }
             });
             company.markModified('settings.timesheet');
+        }
+
+        if (
+            company.settings?.timesheet &&
+            company.settings.timesheet.requireAttachment === undefined &&
+            existingRequireAttachment !== undefined
+        ) {
+            company.settings.timesheet.requireAttachment = existingRequireAttachment;
+            company.markModified('settings.timesheet');
+            console.log('[FIX] Restored missing requireAttachment to', existingRequireAttachment);
         }
 
         console.log('[updateCompany] Snapshot before save', {
