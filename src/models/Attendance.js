@@ -64,6 +64,9 @@ attendanceSchema.index({ companyId: 1, user: 1, date: 1 }, { unique: true });
 // Dashboard: "today's attendance" filter with company scoping
 attendanceSchema.index({ companyId: 1, date: 1 });
 
+// Daily auto-checkout scans records by date across all companies.
+attendanceSchema.index({ date: 1, clockIn: 1, clockOut: 1 });
+
 // Dashboard: present/absent count with company scoping
 attendanceSchema.index({ companyId: 1, date: 1, status: 1 });
 

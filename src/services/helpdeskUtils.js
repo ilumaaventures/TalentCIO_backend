@@ -21,25 +21,25 @@ exports.calculateWorkHours = (startDate, endDate, weeklyOff = ['Saturday', 'Sund
     const offDayNums = (weeklyOff || []).map(day => dayMap[day]).filter(n => n !== undefined);
 
     let totalMs = 0;
-    let current = new Date(start);
+    let currentDay = new Date(start);
+    currentDay.setHours(0, 0, 0, 0);
 
-    // If start is an off day, move to the beginning of the next working day
-    // For simplicity, we just iterate hour by hour if it's a small range (like 48h)
-    // For a more robust solution across weeks, we could iterate by full days.
-    
-    // Hour-by-hour iteration for accuracy in partial days
-    while (current < end) {
-        const currentHour = new Date(current);
-        const nextHour = new Date(current);
-        nextHour.setHours(current.getHours() + 1);
-        
-        const effectiveEnd = nextHour > end ? end : nextHour;
-        
-        if (!offDayNums.includes(currentHour.getDay())) {
-            totalMs += (effectiveEnd - current);
+    // Iterate day-by-day instead of hour-by-hour so long-lived tickets do not
+    // burn CPU just to compute elapsed working time.
+    while (currentDay < end) {
+        const nextDay = new Date(currentDay);
+        nextDay.setDate(nextDay.getDate() + 1);
+
+        if (!offDayNums.includes(currentDay.getDay())) {
+            const effectiveStart = start > currentDay ? start : currentDay;
+            const effectiveEnd = end < nextDay ? end : nextDay;
+
+            if (effectiveStart < effectiveEnd) {
+                totalMs += (effectiveEnd - effectiveStart);
+            }
         }
-        
-        current = nextHour;
+
+        currentDay = nextDay;
     }
 
     return totalMs / (1000 * 60 * 60);
