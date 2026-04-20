@@ -56,10 +56,7 @@ app.use(helmet({
 }));
 
 
-// sample added comment for checking the CI/CD line 59 server.js file 
-// sample line 2 for checking again
-// sample added comment for checking the CI/CD line 59 server.js file 
-// sample line 2 for checking again
+// DEPLOY MARKER v4 – requireAttachment fix – 2026-04-20
 
 // Setup Socket.IO
 const io = new Server(server, {
