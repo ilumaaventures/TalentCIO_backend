@@ -134,25 +134,57 @@ const createCompany = async (req, res) => {
     }
 };
 
+// Helper to flatten nested objects for Mongoose $set updates
+const flattenObject = (obj, prefix = '') => {
+    return Object.keys(obj).reduce((acc, k) => {
+        const pre = prefix.length ? prefix + '.' : '';
+        if (typeof obj[k] === 'object' && obj[k] !== null && !Array.isArray(obj[k])) {
+            Object.assign(acc, flattenObject(obj[k], pre + k));
+        } else {
+            acc[pre + k] = obj[k];
+        }
+        return acc;
+    }, {});
+};
+
 // PUT /api/superadmin/companies/:id
 const updateCompany = async (req, res) => {
     try {
-        const updateData = { ...req.body };
+        console.log(`[updateCompany] Updating company ${req.params.id} with body:`, JSON.stringify(req.body, null, 2));
+
+        let updateData = { ...req.body };
+
         if (updateData.planId === "") {
             updateData.planId = null;
         }
 
-        // Validate allowedDomains if provided in update
-        if (updateData.allowedDomains && Array.isArray(updateData.allowedDomains) && updateData.allowedDomains.length > 0) {
-            // Optional: You might want to check existing users against new domains? 
-            // For now, we'll just allow the update of the policy.
+        // If 'settings' is present, we flatten it to ensure nested updates (like settings.timesheet.requireAttachment) 
+        // are correctly merged into the document rather than replacing the whole 'settings' object.
+        // This is safer and more reliable in various MongoDB/Mongoose environments.
+        if (updateData.settings) {
+            const flattenedSettings = flattenObject(updateData.settings, 'settings');
+            delete updateData.settings;
+            updateData = { ...updateData, ...flattenedSettings };
+            console.log('[updateCompany] Flattened updateData:', JSON.stringify(updateData, null, 2));
         }
 
-        const company = await Company.findByIdAndUpdate(req.params.id, updateData, { new: true, runValidators: true });
-        if (!company) return res.status(404).json({ message: 'Company not found' });
+        const company = await Company.findByIdAndUpdate(
+            req.params.id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        );
+
+        if (!company) {
+            console.warn(`[updateCompany] Company ${req.params.id} not found`);
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        console.log(`[updateCompany] Successfully updated company ${req.params.id}. New settings.timesheet:`, company.settings?.timesheet);
+
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
         res.json(company);
     } catch (err) {
+        console.error('[updateCompany] Error:', err);
         res.status(500).json({ message: err.message });
     }
 };
