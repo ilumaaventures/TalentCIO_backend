@@ -62,6 +62,10 @@ app.use(helmet({
     crossOriginOpenerPolicy: false,
 }));
 
+
+// DEPLOY MARKER v4 – requireAttachment fix – 2026-04-20
+
+// Setup Socket.IO
 const io = new Server(server, {
     cors: {
         origin(origin, callback) {
