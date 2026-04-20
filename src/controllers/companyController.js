@@ -150,6 +150,7 @@ const flattenObject = (obj, prefix = '') => {
 // PUT /api/superadmin/companies/:id
 const updateCompany = async (req, res) => {
     try {
+        console.log('VERSION 3.0 – Forced Persistence fix deployed');
         console.log(`[updateCompany] Updating company ${req.params.id} with body:`, JSON.stringify(req.body, null, 2));
 
         const company = await Company.findById(req.params.id);
@@ -171,13 +172,27 @@ const updateCompany = async (req, res) => {
             }
         });
 
-        // Deep Settings Update
+        // Forced Persistence Fix for requireAttachment
+        if (req.body.settings?.timesheet?.requireAttachment !== undefined) {
+            if (!company.settings) company.settings = {};
+            if (!company.settings.timesheet) company.settings.timesheet = {};
+            
+            const newValue = req.body.settings.timesheet.requireAttachment === true || req.body.settings.timesheet.requireAttachment === 'true';
+            company.settings.timesheet.requireAttachment = newValue;
+            company.markModified('settings.timesheet');
+            console.log('[DEPLOY] Explicitly set requireAttachment to:', company.settings.timesheet.requireAttachment);
+        }
+
+        // Deep Settings Update (for all other settings)
         if (req.body.settings) {
             const flattened = flattenObject(req.body.settings, 'settings');
             console.log('[updateCompany] Applying flattened settings:', JSON.stringify(flattened, null, 2));
             
             Object.entries(flattened).forEach(([path, value]) => {
-                company.set(path, value);
+                // Skip requireAttachment as we handled it explicitly above
+                if (path !== 'settings.timesheet.requireAttachment') {
+                    company.set(path, value);
+                }
             });
             
             company.markModified('settings');
@@ -185,7 +200,7 @@ const updateCompany = async (req, res) => {
 
         await company.save();
 
-        console.log(`[updateCompany] Successfully updated company ${req.params.id}. Final requireAttachment:`, company.settings?.timesheet?.requireAttachment);
+        console.log(`[updateCompany] Successfully updated company ${req.params.id}. Final requireAttachment in DB:`, company.settings?.timesheet?.requireAttachment);
 
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
         res.json(company);
