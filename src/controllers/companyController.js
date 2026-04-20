@@ -152,34 +152,40 @@ const updateCompany = async (req, res) => {
     try {
         console.log(`[updateCompany] Updating company ${req.params.id} with body:`, JSON.stringify(req.body, null, 2));
 
-        let updateData = { ...req.body };
-
-        if (updateData.planId === "") {
-            updateData.planId = null;
-        }
-
-        // If 'settings' is present, we flatten it to ensure nested updates (like settings.timesheet.requireAttachment) 
-        // are correctly merged into the document rather than replacing the whole 'settings' object.
-        // This is safer and more reliable in various MongoDB/Mongoose environments.
-        if (updateData.settings) {
-            const flattenedSettings = flattenObject(updateData.settings, 'settings');
-            delete updateData.settings;
-            updateData = { ...updateData, ...flattenedSettings };
-            console.log('[updateCompany] Flattened updateData:', JSON.stringify(updateData, null, 2));
-        }
-
-        const company = await Company.findByIdAndUpdate(
-            req.params.id,
-            { $set: updateData },
-            { new: true, runValidators: true }
-        );
+        const company = await Company.findById(req.params.id);
 
         if (!company) {
             console.warn(`[updateCompany] Company ${req.params.id} not found`);
             return res.status(404).json({ message: 'Company not found' });
         }
 
-        console.log(`[updateCompany] Successfully updated company ${req.params.id}. New settings.timesheet:`, company.settings?.timesheet);
+        // Basic Info Update
+        const fieldsToUpdate = ['name', 'subdomain', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
+        fieldsToUpdate.forEach(field => {
+            if (req.body[field] !== undefined) {
+                if (field === 'planId' && req.body[field] === "") {
+                    company[field] = null;
+                } else {
+                    company[field] = req.body[field];
+                }
+            }
+        });
+
+        // Deep Settings Update
+        if (req.body.settings) {
+            const flattened = flattenObject(req.body.settings, 'settings');
+            console.log('[updateCompany] Applying flattened settings:', JSON.stringify(flattened, null, 2));
+            
+            Object.entries(flattened).forEach(([path, value]) => {
+                company.set(path, value);
+            });
+            
+            company.markModified('settings');
+        }
+
+        await company.save();
+
+        console.log(`[updateCompany] Successfully updated company ${req.params.id}. Final requireAttachment:`, company.settings?.timesheet?.requireAttachment);
 
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
         res.json(company);
