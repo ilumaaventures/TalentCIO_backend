@@ -37,11 +37,24 @@ const getISTTime = () => {
     return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 };
 
-// Helper to get Start of Day in IST (returned as a Date object)
-const getStartOfDayIST = () => {
-    const now = new Date();
-    const istString = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+// Helper to get Start of Day in IST (returned as a Date object at midnight server time)
+const getStartOfDayIST = (dateInput = new Date()) => {
+    const d = new Date(dateInput);
+    const istString = d.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
     return new Date(istString);
+};
+
+const parseDateAsIST = (dateInput) => {
+    if (!dateInput) return null;
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return startOfDay(new Date());
+
+    // Extract YYYY-MM-DD components according to IST
+    const istString = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // Format: YYYY-MM-DD
+    const [year, month, day] = istString.split('-').map(Number);
+    
+    // Return a date at midnight in the server's local time for consistent comparison
+    return new Date(year, month - 1, day);
 };
 
 // Helper to extract clean IP address, handling proxies
@@ -211,7 +224,7 @@ exports.getMyAttendance = async (req, res) => {
         const { month } = req.query; // YYYY-MM
         let query = { user: req.user._id, companyId: req.companyId };
         if (month) {
-            const start = new Date(month + '-01');
+            const start = parseDateAsIST(month + '-01');
             const end = new Date(start);
             end.setMonth(end.getMonth() + 1);
             query.date = { $gte: start, $lt: end };
@@ -253,7 +266,7 @@ exports.getAttendanceByMonth = async (req, res) => {
         }
 
         if (resolvedMonth) {
-            const start = new Date(resolvedMonth + '-01');
+            const start = parseDateAsIST(resolvedMonth + '-01');
             const end = new Date(start);
             end.setMonth(end.getMonth() + 1);
             query.date = { $gte: start, $lt: end };
@@ -356,7 +369,7 @@ exports.createAttendance = async (req, res) => {
         const newAttendance = new Attendance({
             user: targetUserId,
             companyId: req.companyId,
-            date: new Date(date),
+            date: parseDateAsIST(date),
             status: 'PRESENT',
             clockIn: clockIn ? new Date(clockIn) : null,
             clockOut: clockOut ? new Date(clockOut) : null,
@@ -454,12 +467,12 @@ exports.getTeamAttendanceReport = async (req, res) => {
 
         if (year && month) {
             const resolvedMonth = `${year}-${String(month).padStart(2, '0')}`;
-            const start = new Date(resolvedMonth + '-01');
+            const start = parseDateAsIST(resolvedMonth + '-01');
             const end = new Date(start);
             end.setMonth(end.getMonth() + 1);
             attendanceQuery.date = { $gte: start, $lt: end };
         } else if (date) {
-            const targetDate = new Date(date);
+            const targetDate = parseDateAsIST(date);
             attendanceQuery.date = { $gte: targetDate, $lt: new Date(targetDate.getTime() + 24 * 60 * 60 * 1000) };
         } else {
             const today = getStartOfDayIST();
@@ -544,7 +557,7 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
         const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation').lean();
         const userIds = teamMembers.map(m => m._id);
 
-        const startDate = startOfMonth(new Date(`${year}-${String(month).padStart(2, '0')}-01`));
+        const startDate = parseDateAsIST(`${year}-${String(month).padStart(2, '0')}-01`);
         const endDate = endOfMonth(startDate);
         const days = eachDayOfInterval({ start: startDate, end: endDate });
 
@@ -702,7 +715,7 @@ exports.requestRegularization = async (req, res) => {
         const { date, reason, type, requestedClockIn, requestedClockOut } = req.body;
         
         // 1. Restriction: Only allowed for last 4 working days
-        const normalizedTargetDate = startOfDay(new Date(date));
+        const normalizedTargetDate = parseDateAsIST(date);
         const today = getStartOfDayIST();
 
         // Fetch Company settings for weekly offs
@@ -774,6 +787,36 @@ exports.requestRegularization = async (req, res) => {
             manager
         });
         await request.save();
+
+        // Notify managers
+        try {
+            const io = req.app.get('io');
+            const reportingManagers = req.user.reportingManagers || [];
+            const notifyTargets = new Set();
+            
+            reportingManagers.forEach(m => {
+                const id = m && (m._id ? m._id.toString() : m.toString());
+                if (id) notifyTargets.add(id);
+            });
+            if (manager) notifyTargets.add(manager.toString());
+
+            const notifications = Array.from(notifyTargets).map(targetId => ({
+                user: targetId,
+                companyId: req.companyId,
+                title: 'New Regularization Request',
+                message: `${req.user.firstName} has requested attendance regularization for ${format(new Date(date), 'dd MMM yyyy')}.`,
+                type: 'Approval',
+                link: '/attendance?tab=regularize',
+                metadata: { regularizationId: request._id }
+            }));
+
+            if (notifications.length > 0) {
+                await NotificationService.createManyNotifications(io, notifications);
+            }
+        } catch (notifErr) {
+            console.error('Regularization request notification error:', notifErr);
+        }
+
         res.status(201).json(request);
     } catch (error) {
         console.error(error);
@@ -847,7 +890,7 @@ exports.processRegularizationRequest = async (req, res) => {
         if (status === 'APPROVED') {
             let attendance = await Attendance.findOne({ user: request.user, companyId: req.companyId, date: request.date });
             if (!attendance) {
-                attendance = new Attendance({ user: request.user, companyId: req.companyId, date: request.date, status: 'PRESENT' });
+                attendance = new Attendance({ user: request.user, companyId: req.companyId, date: parseDateAsIST(request.date), status: 'PRESENT' });
             }
             if (request.requestedClockIn) {
                 attendance.clockIn = request.requestedClockIn;
@@ -861,6 +904,23 @@ exports.processRegularizationRequest = async (req, res) => {
             await attendance.save();
         }
         await request.save();
+
+        // Notify Employee
+        try {
+            const io = req.app.get('io');
+            await NotificationService.createNotification(io, {
+                user: request.user,
+                companyId: req.companyId,
+                title: `Regularization ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
+                message: `Your regularization request for ${format(new Date(request.date), 'dd MMM yyyy')} has been ${status.toLowerCase()}.`,
+                type: 'Info',
+                link: '/attendance?tab=regularize',
+                metadata: { regularizationId: request._id, status }
+            });
+        } catch (notifErr) {
+            console.error('Regularization process notification error:', notifErr);
+        }
+
         res.json(request);
     } catch (error) {
         console.error(error);

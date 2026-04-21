@@ -311,7 +311,8 @@ exports.getAttendanceBootstrap = async (req, res) => {
 
 exports.getLeavesBootstrap = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Leave data must always be fresh — never serve from HTTP cache
+        res.set('Cache-Control', 'no-cache');
         const year = new Date().getFullYear();
         const page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 10;
@@ -669,7 +670,8 @@ exports.getProjectBootstrap = async (req, res) => {
 
 exports.getRoleBootstrap = async (req, res) => {
     try {
-        setPrivateCache(res, 45);
+        // Role data must always be fresh — never serve from HTTP cache
+        res.set('Cache-Control', 'no-cache');
         const [roles, permissions] = await Promise.all([
             Role.find({ companyId: req.companyId }).populate('permissions').lean(),
             Permission.find({}).lean()

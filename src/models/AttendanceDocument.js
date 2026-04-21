@@ -30,6 +30,14 @@ const attendanceDocumentSchema = new mongoose.Schema({
         uploadedAt: {
             type: Date,
             default: Date.now
+        },
+        status: {
+            type: String,
+            enum: ['Pending', 'Submitted', 'Approved', 'Rejected'],
+            default: 'Pending'
+        },
+        rejectionReason: {
+            type: String
         }
     }],
     remarks: String
