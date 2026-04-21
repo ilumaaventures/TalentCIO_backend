@@ -7,7 +7,7 @@ const User = require('../models/User');
 // @access  Private
 const getRoles = async (req, res) => {
     try {
-        res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=60');
+        res.set('Cache-Control', 'no-cache');
         const roles = await Role.find({ companyId: req.companyId }).populate('permissions');
         res.json(roles);
     } catch (error) {
@@ -62,7 +62,9 @@ const updateRole = async (req, res) => {
             { $inc: { tokenVersion: 1 } }
         );
 
-        res.json(updatedRole);
+        // Return populated role for the frontend
+        const populated = await Role.findById(updatedRole._id).populate('permissions').lean();
+        res.json(populated);
     } catch (error) {
         console.error('UPDATE ROLE ERROR:', error);
         res.status(500).json({ message: 'Server Error' });
@@ -74,7 +76,7 @@ const updateRole = async (req, res) => {
 // @access  Private
 const getPermissions = async (req, res) => {
     try {
-        res.set('Cache-Control', 'private, max-age=120, stale-while-revalidate=120');
+        res.set('Cache-Control', 'no-cache');
         let permissions = await Permission.find({});
         // Explicit filter
         permissions = permissions.filter(p => p.key !== '*');

@@ -5,9 +5,7 @@ const requestTiming = (req, res, next) => {
 
     res.on('finish', () => {
         const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-        if (durationMs >= SLOW_REQUEST_THRESHOLD_MS || res.statusCode >= 500) {
-            console.log(`[REQ] ${req.method} ${req.originalUrl} -> ${res.statusCode} in ${durationMs.toFixed(1)}ms`);
-        }
+        // Request logging removed per user request
     });
 
     next();

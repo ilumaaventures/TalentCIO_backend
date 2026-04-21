@@ -50,6 +50,7 @@ const getGlobalAnalytics = async (req, res) => {
             moduleUsageData,
         });
     } catch (err) {
+        console.error('getGlobalAnalytics error:', err);
         res.status(500).json({ message: err.message });
     }
 };
