@@ -13,6 +13,36 @@ const generateRequestId = async () => {
     return `HRR-${year}-${String(count + 1).padStart(3, '0')}`;
 };
 
+const setNoCache = (res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+};
+
+const buildHiringRequestDetailsQuery = (companyId, requestId) => (
+    HiringRequest.findOne({ _id: requestId, companyId })
+        .populate('ownership.hiringManager', 'firstName lastName email')
+        .populate('ownership.recruiter', 'firstName lastName email')
+        .populate('roleDetails.reportingManager', 'firstName lastName')
+        .populate('createdBy', 'firstName lastName')
+        .populate('workflowId', 'name description')
+        .populate({
+            path: 'approvalChain.role',
+            select: 'name'
+        })
+        .populate({
+            path: 'approvalChain.approvers',
+            select: 'firstName lastName email'
+        })
+        .populate({
+            path: 'approvalChain.approvedBy',
+            select: 'firstName lastName email'
+        })
+        .populate('approvals.l1.approver', 'firstName lastName')
+        .populate('approvals.final.approver', 'firstName lastName')
+        .populate('interviewWorkflowId', 'name description rounds')
+);
+
 // --- createHiringRequest ---
 exports.createHiringRequest = async (req, res) => {
     try {
@@ -115,6 +145,7 @@ exports.createHiringRequest = async (req, res) => {
 // --- getHiringRequests ---
 exports.getHiringRequests = async (req, res) => {
     try {
+        setNoCache(res);
         const { status, page = 1, limit = 10, client } = req.query;
         let query = { companyId: req.companyId };
 
@@ -173,31 +204,11 @@ exports.getHiringRequests = async (req, res) => {
 // --- getHiringRequestById ---
 exports.getHiringRequestById = async (req, res) => {
     try {
+        setNoCache(res);
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
         }
-        const request = await HiringRequest.findOne({ _id: req.params.id, companyId: req.companyId })
-            .populate('ownership.hiringManager', 'firstName lastName email')
-            .populate('ownership.recruiter', 'firstName lastName email')
-            .populate('roleDetails.reportingManager', 'firstName lastName')
-            .populate('createdBy', 'firstName lastName')
-            .populate('workflowId', 'name description') // Populate workflow details
-            .populate({
-                path: 'approvalChain.role',
-                select: 'name'
-            })
-            .populate({
-                path: 'approvalChain.approvers',
-                select: 'firstName lastName email'
-            })
-            .populate({
-                path: 'approvalChain.approvedBy',
-                select: 'firstName lastName email'
-            })
-            .populate('approvals.l1.approver', 'firstName lastName')
-            .populate('approvals.final.approver', 'firstName lastName')
-            .populate('interviewWorkflowId', 'name description rounds')
-            .lean();
+        const request = await buildHiringRequestDetailsQuery(req.companyId, req.params.id).lean();
 
         if (!request) return res.status(404).json({ message: 'Not found' });
 
@@ -323,7 +334,9 @@ exports.updateHiringRequest = async (req, res) => {
             details: { updates, workflowId: request.workflowId, workflowChanged }
         });
 
-        res.status(200).json(request);
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+
+        res.status(200).json(updatedRequest || request);
     } catch (error) {
         console.error('Error updating hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -467,7 +480,9 @@ exports.approveHiringRequest = async (req, res) => {
             details: { comments, previousLevel: currentLevelIndex !== undefined ? currentLevelIndex + 1 : level }
         });
 
-        res.status(200).json(request);
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+
+        res.status(200).json(updatedRequest || request);
 
     } catch (error) {
         console.error('Error approving hiring request:', error);
@@ -537,7 +552,9 @@ exports.rejectHiringRequest = async (req, res) => {
             details: { comments, level: request.currentApprovalLevel || level }
         });
 
-        res.status(200).json(request);
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+
+        res.status(200).json(updatedRequest || request);
     } catch (error) {
         console.error('Error rejecting hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -549,8 +566,8 @@ exports.closeHiringRequest = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const request = await HiringRequest.findByIdAndUpdate(
-            id,
+        const request = await HiringRequest.findOneAndUpdate(
+            { _id: id, companyId: req.companyId },
             { status: 'Closed', closedAt: new Date() },
             { new: true }
         );
@@ -578,7 +595,9 @@ exports.closeHiringRequest = async (req, res) => {
             details: {}
         });
 
-        res.status(200).json(request);
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+
+        res.status(200).json(updatedRequest || request);
 
     } catch (error) {
         console.error(error);
@@ -1251,7 +1270,7 @@ exports.uploadJDFile = async (req, res) => {
 // --- getTAClients ---
 exports.getTAClients = async (req, res) => {
     try {
-        res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=60');
+        setNoCache(res);
         const query = { companyId: req.companyId };
         
         // Find all unique client names that have hiring requests
