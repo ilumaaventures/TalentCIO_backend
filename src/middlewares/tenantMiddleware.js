@@ -26,7 +26,7 @@ const NON_TENANT_HOSTS = new Set([
 ]);
 
 // Root domains we own — subdomains of these ARE tenant slugs
-const OWN_ROOT_DOMAINS = ['talentcio.com', 'telentcio.com'];
+const OWN_ROOT_DOMAINS = ['talentcio.in', 'telentcio.in', 'talentcio.com', 'telentcio.com'];
 
 const tenantMiddleware = async (req, res, next) => {
     try {
