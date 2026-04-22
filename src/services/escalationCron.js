@@ -84,7 +84,7 @@ const startEscalationCron = (io) => {
             const pendingQueries = await HelpdeskQuery.find({
                 status: { $in: ['New', 'In Progress'] }
             })
-                .select('queryId subject queryType assignedTo raisedBy companyId createdAt originalAssignee')
+                .select('queryId subject queryType assignedTo raisedBy companyId createdAt originalAssignee comments')
                 .populate({
                     path: 'queryType',
                     select: 'enableEscalation escalationDays escalationPerson'
@@ -137,6 +137,10 @@ const startEscalationCron = (io) => {
                         commentText += ' It has been re-assigned to the designated escalation contact.';
                     } else {
                         commentText += ' Admins please review.';
+                    }
+
+                    if (!Array.isArray(query.comments)) {
+                        query.comments = [];
                     }
 
                     query.comments.push({

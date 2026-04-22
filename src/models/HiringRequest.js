@@ -70,6 +70,9 @@ const HiringRequestSchema = new mongoose.Schema({
         enum: ['Draft', 'Submitted', 'Pending_L1', 'Pending_Final', 'Approved', 'Rejected', 'On_Hold', 'Closed', 'Pending_Approval'],
         default: 'Draft'
     },
+    isPublic: { type: Boolean, default: false },
+    publicJobTitle: { type: String, trim: true },
+    publicJobDescription: { type: String, trim: true },
 
     approvals: {
         l1: {
@@ -117,6 +120,7 @@ const HiringRequestSchema = new mongoose.Schema({
 // Performance Indexes
 HiringRequestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ createdBy: 1, companyId: 1, createdAt: -1 });
+HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
 
 // Audit Logs for this specific request
 const HRRAuditLogSchema = new mongoose.Schema({

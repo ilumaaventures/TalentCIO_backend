@@ -23,6 +23,8 @@ const allowedOriginPatterns = [
     /^https?:\/\/localhost(?::\d+)?$/i,
     /^https?:\/\/([a-z0-9-]+\.)+localhost(?::\d+)?$/i,
     /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
+    /^https?:\/\/talentcio\.in$/i,
+    /^https?:\/\/www\.talentcio\.in$/i,
     /^https:\/\/([a-z0-9-]+\.)*talentcio\.in$/i,
     /^https:\/\/([a-z0-9-]+\.)*telentcio\.in$/i,
     /^https:\/\/telentcio\.com$/i,
@@ -160,6 +162,9 @@ require('./src/models/LeaveConfig');
 require('./src/models/LeaveBalance');
 require('./src/models/LeaveRequest');
 require('./src/models/Candidate');
+require('./src/models/Applicant');
+require('./src/models/PublicApplication');
+require('./src/models/HandoffToken');
 require('./src/models/InterviewWorkflow');
 require('./src/models/Notification');
 require('./src/models/Company');
@@ -192,6 +197,7 @@ const notificationRoutes = require('./src/routes/notificationRoutes');
 const discussionRoutes = require('./src/routes/discussionRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
+const publicRoutes = require('./src/routes/publicRoutes');
 
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
 const companyRoutes = require('./src/routes/companyRoutes');
@@ -218,6 +224,8 @@ app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/superadmin')) return next();
     globalLimiter(req, res, next);
 });
+
+app.use('/api/public', publicRoutes);
 
 app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/superadmin')) return next();

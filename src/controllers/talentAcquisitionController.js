@@ -605,6 +605,43 @@ exports.closeHiringRequest = async (req, res) => {
     }
 };
 
+exports.toggleJobVisibility = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (typeof req.body?.isPublic !== 'boolean') {
+            return res.status(400).json({ message: 'isPublic must be a boolean value' });
+        }
+
+        const request = await HiringRequest.findOneAndUpdate(
+            { _id: id, companyId: req.companyId },
+            { isPublic: req.body.isPublic },
+            { new: true }
+        );
+
+        if (!request) {
+            return res.status(404).json({ message: 'Job not found' });
+        }
+
+        await HRRAuditLog.create({
+            hiringRequestId: request._id,
+            action: req.body.isPublic ? 'PUBLISHED_TO_JOB_BOARD' : 'REMOVED_FROM_JOB_BOARD',
+            performedBy: req.user._id,
+            details: { isPublic: req.body.isPublic }
+        });
+
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+
+        res.status(200).json({
+            job: updatedRequest || request,
+            message: `Job is now ${req.body.isPublic ? 'public' : 'private'}`
+        });
+    } catch (error) {
+        console.error('Error toggling job visibility:', error);
+        res.status(500).json({ message: 'Failed to update job visibility', error: error.message });
+    }
+};
+
 // --- getPreviousCandidates ---
 // Returns candidates grouped by each previous opening, in newest-first order
 exports.getPreviousCandidates = async (req, res) => {
