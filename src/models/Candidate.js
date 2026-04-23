@@ -12,6 +12,20 @@ const candidateSchema = new mongoose.Schema({
         ref: 'Company',
         index: true
     },
+    applicantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Applicant',
+        index: true
+    },
+    publicApplicationId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PublicApplication',
+        index: true
+    },
+    profileSnapshot: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
 
     // Resume Information
     resumeUrl: {

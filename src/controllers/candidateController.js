@@ -9,7 +9,85 @@ const NotificationService = require('../services/notificationService');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const CandidateSource = require('../models/CandidateSource');
 const { parseCV } = require('../utils/cvParser');
+const PublicApplication = require('../models/PublicApplication');
 
+const APPLICANT_REVIEW_SELECT = [
+    'firstName',
+    'lastName',
+    'email',
+    'mobile',
+    'headline',
+    'summary',
+    'currentCity',
+    'currentState',
+    'currentCountry',
+    'willingToRelocate',
+    'preferredLocations',
+    'preferredJobTypes',
+    'preferredDepartments',
+    'jobSearchStatus',
+    'currentCTC',
+    'expectedCTC',
+    'noticePeriod',
+    'totalExperienceYears',
+    'workExperience',
+    'education',
+    'skills',
+    'certifications',
+    'languages',
+    'linkedinUrl',
+    'githubUrl',
+    'portfolioUrl',
+    'otherLinks',
+    'resumeUrl',
+    'resumeFileName',
+    'resumeUpdatedAt',
+    'profilePhotoUrl',
+    'profileCompletionScore',
+    'createdAt',
+    'updatedAt'
+].join(' ');
+
+const enrichCandidatesWithPublicProfiles = async (candidates, companyId) => {
+    const candidateList = Array.isArray(candidates) ? candidates : [candidates].filter(Boolean);
+    if (!candidateList.length) return candidates;
+
+    const missingPublicProfileIds = candidateList
+        .filter((candidate) => !candidate.publicApplicationId && !candidate.applicantId && !candidate.profileSnapshot)
+        .map((candidate) => candidate._id)
+        .filter(Boolean);
+
+    let applicationsByCandidate = new Map();
+    if (missingPublicProfileIds.length) {
+        const publicApplications = await PublicApplication.find({
+            companyId,
+            transferredCandidateId: { $in: missingPublicProfileIds }
+        })
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .lean();
+
+        applicationsByCandidate = new Map(
+            publicApplications.map((application) => [application.transferredCandidateId?.toString(), application])
+        );
+    }
+
+    const enriched = candidateList.map((candidate) => {
+        const publicApplication = applicationsByCandidate.get(candidate._id?.toString());
+        if (!publicApplication) return candidate;
+
+        return {
+            ...candidate,
+            applicantId: candidate.applicantId || publicApplication.applicantId,
+            publicApplicationId: candidate.publicApplicationId || publicApplication._id,
+            profileSnapshot: candidate.profileSnapshot || publicApplication.profileSnapshot,
+            publicApplicationReviewStatus: publicApplication.reviewStatus,
+            publicApplicationAppliedAt: publicApplication.createdAt,
+            coverNote: candidate.coverNote || publicApplication.coverNote
+        };
+    });
+
+    return Array.isArray(candidates) ? enriched : enriched[0];
+};
 
 // Upload resume to Cloudinary
 exports.uploadResume = async (req, res) => {
@@ -336,14 +414,17 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
         const candidates = await Candidate.find({ ...query, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails')
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
             .sort({ uploadedAt: -1 })
             .lean();
 
+        const enrichedCandidates = await enrichCandidatesWithPublicProfiles(candidates, req.companyId);
+
         res.status(200).json({
-            count: candidates.length,
-            candidates
+            count: enrichedCandidates.length,
+            candidates: enrichedCandidates
         });
 
     } catch (error) {
@@ -418,6 +499,7 @@ exports.getCandidateById = async (req, res) => {
         let candidateData = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails requirements')
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
             .populate('statusHistory.changedBy', 'firstName lastName')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
@@ -454,7 +536,7 @@ exports.getCandidateById = async (req, res) => {
             }
         }
 
-        const candidate = candidateData;
+        const candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
 
         // Verify if user has access to see this candidate
         const isAdmin = req.user.roles.some(r => r.name === 'Admin' || r.name === 'HR' || r.name === 'Super Admin');
