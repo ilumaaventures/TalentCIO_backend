@@ -6,6 +6,7 @@ const emailService = require('../services/emailService');
 const crypto = require('crypto');
 
 //adding comment to check the CI/CD pipeline
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 // Generate JWT Helper
 const generateToken = (id, tokenVersion) => {
@@ -21,17 +22,18 @@ const register = async (req, res) => {
 
 
     const { email, password, firstName, lastName } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     try {
         const company = await require('../models/Company').findById(req.companyId);
         if (company && company.allowedDomains && company.allowedDomains.length > 0) {
-            const userEmailDomain = email.split('@')[1];
+            const userEmailDomain = normalizedEmail.split('@')[1];
             if (!company.allowedDomains.includes(userEmailDomain)) {
                 return res.status(400).json({ message: `Registration Denied: Email domain '@${userEmailDomain}' is not allowed for this workspace. Allowed domains: ${company.allowedDomains.join(', ')}` });
             }
         }
 
-        const userExists = await User.findOne({ email, companyId: req.companyId });
+        const userExists = await User.findOne({ email: normalizedEmail, companyId: req.companyId });
         if (userExists) {
             return res.status(400).json({ message: 'User already exists in this workspace.' });
         }
@@ -40,7 +42,7 @@ const register = async (req, res) => {
             companyId: req.companyId,
             firstName,
             lastName,
-            email,
+            email: normalizedEmail,
             password
         });
 
@@ -67,13 +69,14 @@ const loginUser = async (req, res) => {
 
 
     const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     try {
         if (!req.companyId) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        const user = await User.findOne({ email, companyId: req.companyId }).populate({
+        const user = await User.findOne({ email: normalizedEmail, companyId: req.companyId }).populate({
             path: 'roles',
             populate: {
                 path: 'permissions'
@@ -236,10 +239,11 @@ const verifyOtpAndResetPassword = async (req, res) => {
     }
 
     const { email, otp, newPassword } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     try {
         const user = await User.findOne({
-            email,
+            email: normalizedEmail,
             companyId: req.companyId,
             otp,
             otpExpires: { $gt: Date.now() }
@@ -277,9 +281,10 @@ const resendOtp = async (req, res) => {
     }
 
     const { email } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     try {
-        const user = await User.findOne({ email, companyId: req.companyId });
+        const user = await User.findOne({ email: normalizedEmail, companyId: req.companyId });
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });

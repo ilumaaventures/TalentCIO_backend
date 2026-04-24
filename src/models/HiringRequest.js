@@ -72,7 +72,7 @@ const HiringRequestSchema = new mongoose.Schema({
     },
     isPublic: { type: Boolean, default: false },
     publicJobTitle: { type: String, trim: true },
-    publicJobDescription: { type: String, trim: true },
+    publicJobDescription: { type: String },
 
     approvals: {
         l1: {

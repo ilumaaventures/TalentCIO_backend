@@ -9,6 +9,43 @@ const PublicApplication = require('../models/PublicApplication');
 const Candidate = require('../models/Candidate');
 const { HiringRequest: HiringRequestModel } = require('../models/HiringRequest');
 
+const APPLICANT_REVIEW_SELECT = [
+    'firstName',
+    'lastName',
+    'email',
+    'mobile',
+    'headline',
+    'summary',
+    'currentCity',
+    'currentState',
+    'currentCountry',
+    'willingToRelocate',
+    'preferredLocations',
+    'preferredJobTypes',
+    'preferredDepartments',
+    'jobSearchStatus',
+    'currentCTC',
+    'expectedCTC',
+    'noticePeriod',
+    'totalExperienceYears',
+    'workExperience',
+    'education',
+    'skills',
+    'certifications',
+    'languages',
+    'linkedinUrl',
+    'githubUrl',
+    'portfolioUrl',
+    'otherLinks',
+    'resumeUrl',
+    'resumeFileName',
+    'resumeUpdatedAt',
+    'profilePhotoUrl',
+    'profileCompletionScore',
+    'createdAt',
+    'updatedAt'
+].join(' ');
+
 router.use(protect);
 router.use(requireModule('talentAcquisition'));
 
@@ -38,7 +75,9 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
         const apps = await PublicApplication.find({
             hiringRequestId: req.params.id,
             companyId: req.companyId
-        }).sort({ createdAt: -1 });
+        })
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .sort({ createdAt: -1 });
 
         res.json(apps);
     } catch (err) {
@@ -68,7 +107,7 @@ router.patch('/hiring-request/:id/public-applications/:appId/review', protect, a
                 reviewedAt: new Date()
             },
             { new: true }
-        );
+        ).populate('applicantId', APPLICANT_REVIEW_SELECT);
 
         if (!app) {
             return res.status(404).json({ message: 'Application not found' });
@@ -120,6 +159,9 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         const candidate = new Candidate({
             hiringRequestId: targetRequestId,
             companyId: req.companyId,
+            applicantId: app.applicantId || undefined,
+            publicApplicationId: app._id,
+            profileSnapshot: app.profileSnapshot || undefined,
             resumeUrl: app.resumeUrl,
             resumePublicId: app.resumePublicId,
             uploadedBy: req.user._id,

@@ -29,32 +29,7 @@ const publicApplicationSchema = new mongoose.Schema({
 
     resumeUrl: { type: String, required: true },
     resumePublicId: { type: String, required: true },
-    profileSnapshot: {
-        headline: String,
-        summary: String,
-        totalExperienceYears: Number,
-        skills: [String],
-        currentCity: String,
-        linkedinUrl: String,
-        githubUrl: String,
-        portfolioUrl: String,
-        workExperience: [{
-            jobTitle: String,
-            companyName: String,
-            startYear: Number,
-            endYear: Number,
-            isCurrent: Boolean
-        }],
-        education: [{
-            degree: String,
-            institution: String,
-            endYear: Number
-        }],
-        certifications: [{
-            name: String,
-            issuingOrganization: String
-        }]
-    },
+    profileSnapshot: { type: mongoose.Schema.Types.Mixed, default: null },
 
     reviewStatus: {
         type: String,

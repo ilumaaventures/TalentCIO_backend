@@ -144,29 +144,69 @@ const calculateTotalExperienceYears = (workExperience = []) => {
 };
 
 const buildProfileSnapshot = (applicant) => ({
+    firstName: applicant.firstName,
+    lastName: applicant.lastName,
+    email: applicant.email,
+    mobile: applicant.mobile,
     headline: applicant.headline,
     summary: applicant.summary,
-    totalExperienceYears: applicant.totalExperienceYears,
-    skills: (applicant.skills || []).map((skill) => skill.name),
     currentCity: applicant.currentCity,
+    currentState: applicant.currentState,
+    currentCountry: applicant.currentCountry,
+    willingToRelocate: applicant.willingToRelocate,
+    preferredLocations: applicant.preferredLocations || [],
+    preferredJobTypes: applicant.preferredJobTypes || [],
+    preferredDepartments: applicant.preferredDepartments || [],
+    jobSearchStatus: applicant.jobSearchStatus,
+    currentCTC: applicant.currentCTC,
+    expectedCTC: applicant.expectedCTC,
+    noticePeriod: applicant.noticePeriod,
+    totalExperienceYears: applicant.totalExperienceYears,
+    skills: applicant.skills || [],
+    languages: applicant.languages || [],
     linkedinUrl: applicant.linkedinUrl,
     githubUrl: applicant.githubUrl,
     portfolioUrl: applicant.portfolioUrl,
-    workExperience: (applicant.workExperience || []).slice(0, 5).map((item) => ({
+    otherLinks: applicant.otherLinks || [],
+    resumeUrl: applicant.resumeUrl,
+    resumeFileName: applicant.resumeFileName,
+    resumeUpdatedAt: applicant.resumeUpdatedAt,
+    profilePhotoUrl: applicant.profilePhotoUrl,
+    profileCompletionScore: applicant.profileCompletionScore,
+    workExperience: (applicant.workExperience || []).map((item) => ({
         jobTitle: item.jobTitle,
         companyName: item.companyName,
+        employmentType: item.employmentType,
+        location: item.location,
+        locationType: item.locationType,
+        startMonth: item.startMonth,
+        startYear: item.startYear,
+        endMonth: item.endMonth,
+        endYear: item.endYear,
+        isCurrent: item.isCurrent,
+        description: item.description,
+        skills: item.skills || []
+    })),
+    education: (applicant.education || []).map((item) => ({
+        degree: item.degree,
+        fieldOfStudy: item.fieldOfStudy,
+        institution: item.institution,
+        grade: item.grade,
         startYear: item.startYear,
         endYear: item.endYear,
-        isCurrent: item.isCurrent
+        isCurrent: item.isCurrent,
+        description: item.description
     })),
-    education: (applicant.education || []).slice(0, 3).map((item) => ({
-        degree: item.degree,
-        institution: item.institution,
-        endYear: item.endYear
-    })),
-    certifications: (applicant.certifications || []).slice(0, 5).map((item) => ({
+    certifications: (applicant.certifications || []).map((item) => ({
         name: item.name,
-        issuingOrganization: item.issuingOrganization
+        issuingOrganization: item.issuingOrganization,
+        issueMonth: item.issueMonth,
+        issueYear: item.issueYear,
+        expiryMonth: item.expiryMonth,
+        expiryYear: item.expiryYear,
+        doesNotExpire: item.doesNotExpire,
+        credentialId: item.credentialId,
+        credentialUrl: item.credentialUrl
     }))
 });
 
