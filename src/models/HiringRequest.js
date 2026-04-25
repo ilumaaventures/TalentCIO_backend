@@ -71,6 +71,7 @@ const HiringRequestSchema = new mongoose.Schema({
         default: 'Draft'
     },
     isPublic: { type: Boolean, default: false },
+    isResourceGatewayPublic: { type: Boolean, default: false },
     publicJobTitle: { type: String, trim: true },
     publicJobDescription: { type: String },
 
@@ -121,6 +122,7 @@ const HiringRequestSchema = new mongoose.Schema({
 HiringRequestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ createdBy: 1, companyId: 1, createdAt: -1 });
 HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
+HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1 });
 
 // Audit Logs for this specific request
 const HRRAuditLogSchema = new mongoose.Schema({

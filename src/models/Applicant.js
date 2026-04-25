@@ -6,7 +6,13 @@ const applicantSchema = new mongoose.Schema({
     lastName: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     mobile: { type: String, trim: true },
-    password: { type: String, required: true },
+    password: { type: String },
+    authProvider: {
+        type: String,
+        enum: ['local', 'google'],
+        default: 'local'
+    },
+    googleId: { type: String, unique: true, sparse: true },
 
     isEmailVerified: { type: Boolean, default: false },
     emailOtp: { type: String, default: null },
@@ -129,7 +135,7 @@ const applicantSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 applicantSchema.pre('save', async function savePassword() {
-    if (!this.isModified('password')) {
+    if (!this.isModified('password') || !this.password) {
         return;
     }
 
@@ -138,6 +144,10 @@ applicantSchema.pre('save', async function savePassword() {
 });
 
 applicantSchema.methods.matchPassword = async function matchPassword(enteredPassword) {
+    if (!this.password || !enteredPassword) {
+        return false;
+    }
+
     return bcrypt.compare(enteredPassword, this.password);
 };
 

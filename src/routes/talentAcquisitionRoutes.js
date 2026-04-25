@@ -205,31 +205,6 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
     }
 });
 
-router.patch('/hiring-request/:id/visibility', protect, authorize('ta.edit'), async (req, res) => {
-    try {
-        const { isPublic, publicJobTitle, publicJobDescription } = req.body;
-
-        const job = await HiringRequestModel.findOneAndUpdate(
-            { _id: req.params.id, companyId: req.companyId },
-            {
-                isPublic: Boolean(isPublic),
-                ...(publicJobTitle !== undefined && { publicJobTitle }),
-                ...(publicJobDescription !== undefined && { publicJobDescription })
-            },
-            { new: true }
-        );
-
-        if (!job) {
-            return res.status(404).json({ message: 'Hiring request not found' });
-        }
-
-        res.json({
-            job,
-            message: `Job is now ${isPublic ? 'public on talentcio.in/jobs' : 'private (unlisted)'}`
-        });
-    } catch (err) {
-        res.status(500).json({ message: 'Failed to update job visibility' });
-    }
-});
+router.patch('/hiring-request/:id/visibility', protect, authorize('ta.edit'), taController.toggleJobVisibility);
 
 module.exports = router;

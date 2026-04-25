@@ -27,6 +27,9 @@ const companySchema = new mongoose.Schema({
         overtimeRules: { type: String, default: '' },
 
         // Module Specific Configurations
+        careers: {
+            enableResourceGatewayPublishing: { type: Boolean, default: false }
+        },
         onboarding: {
             offerLetterTemplateUrl: { type: String, default: '' },
             declarationTemplateUrl: { type: String, default: '' },

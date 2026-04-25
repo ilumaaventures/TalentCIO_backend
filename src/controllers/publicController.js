@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const Plan = require('../models/Plan');
 const Applicant = require('../models/Applicant');
@@ -11,11 +12,84 @@ const { sendEmail } = require('../services/emailService');
 const { computeProfileCompletion } = require('../utils/profileCompletion');
 
 const DEMO_REQUEST_RECIPIENT = process.env.DEMO_REQUEST_EMAIL || 'ilumaaventures@gmail.com';
+const GOOGLE_OAUTH_CLIENT_ID_FALLBACK = '485252065297-kuf4ijabspu0manp3jvkdvlmsjjqa5th.apps.googleusercontent.com';
+const GOOGLE_OAUTH_CLIENT_IDS = Array.from(new Set([
+    process.env.GOOGLE_OAUTH_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_OAUTH_CLIENT_ID_FALLBACK
+].filter(Boolean)));
 const generateApplicantToken = (id, tokenVersion = 0) =>
     jwt.sign({ id, tokenVersion, type: 'applicant' }, process.env.JWT_SECRET, { expiresIn: '30d' });
 const APPLICANT_SAFE_SELECT = '-password -emailOtp -emailOtpExpires -resetOtp -resetOtpExpires -tokenVersion';
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const splitFullName = (fullName = '') => {
+    const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+
+    if (!parts.length) {
+        return { firstName: 'Google', lastName: 'Applicant' };
+    }
+
+    if (parts.length === 1) {
+        return { firstName: parts[0], lastName: 'Applicant' };
+    }
+
+    return {
+        firstName: parts[0],
+        lastName: parts.slice(1).join(' ')
+    };
+};
+
+const buildApplicantAuthPayload = (applicant) => ({
+    _id: applicant._id,
+    firstName: applicant.firstName,
+    lastName: applicant.lastName,
+    email: applicant.email,
+    mobile: applicant.mobile,
+    currentCTC: applicant.currentCTC,
+    expectedCTC: applicant.expectedCTC,
+    noticePeriod: applicant.noticePeriod,
+    resumeUrl: applicant.resumeUrl,
+    resumePublicId: applicant.resumePublicId,
+    profilePhotoUrl: applicant.profilePhotoUrl,
+    authProvider: applicant.authProvider || 'local',
+    isEmailVerified: applicant.isEmailVerified
+});
+
+const verifyGoogleCredential = async (idToken) => {
+    const token = String(idToken || '').trim();
+
+    if (!token) {
+        throw new Error('Google credential is required.');
+    }
+
+    const { data } = await axios.get('https://oauth2.googleapis.com/tokeninfo', {
+        params: { id_token: token },
+        timeout: 10000
+    });
+
+    if (!data?.sub || !data?.email) {
+        throw new Error('Google account details are incomplete.');
+    }
+
+    if (String(data.email_verified).toLowerCase() !== 'true') {
+        throw new Error('Google email is not verified.');
+    }
+
+    if (GOOGLE_OAUTH_CLIENT_IDS.length && !GOOGLE_OAUTH_CLIENT_IDS.includes(data.aud)) {
+        throw new Error('Google client ID does not match this application.');
+    }
+
+    return {
+        googleId: data.sub,
+        email: String(data.email).trim().toLowerCase(),
+        fullName: data.name || '',
+        givenName: data.given_name || '',
+        familyName: data.family_name || '',
+        picture: data.picture || ''
+    };
+};
 
 const buildPublicJobsQuery = ({ location, type, department, search }) => {
     const query = {
@@ -49,6 +123,10 @@ const buildPublicJobsQuery = ({ location, type, department, search }) => {
 
     return query;
 };
+
+const isResourceGatewayEnabledForCompany = (company) => (
+    Boolean(company?.settings?.careers?.enableResourceGatewayPublishing)
+);
 
 const normalizeStringList = (values = [], maxItems = null) => {
     const normalized = Array.isArray(values)
@@ -348,6 +426,37 @@ exports.getPublicJobs = async (req, res) => {
     }
 };
 
+exports.getResourceGatewayJobs = async (req, res) => {
+    try {
+        const pageNumber = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limitNumber = Math.max(parseInt(req.query.limit, 10) || 12, 1);
+        const query = {
+            ...buildPublicJobsQuery(req.query),
+            isResourceGatewayPublic: true
+        };
+
+        const allEligibleJobs = await HiringRequest.find(query)
+            .select('requestId roleDetails requirements hiringDetails client companyId createdAt publicJobTitle publicJobDescription isResourceGatewayPublic')
+            .populate('companyId', 'name settings.logo subdomain industry country settings.careers')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const jobs = allEligibleJobs.filter((job) => isResourceGatewayEnabledForCompany(job.companyId));
+        const total = jobs.length;
+        const paginatedJobs = jobs.slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber);
+
+        res.json({
+            jobs: paginatedJobs,
+            total,
+            page: pageNumber,
+            totalPages: Math.ceil(total / limitNumber)
+        });
+    } catch (error) {
+        console.error('Failed to fetch Resource Gateway jobs:', error);
+        res.status(500).json({ message: 'Failed to fetch Resource Gateway jobs' });
+    }
+};
+
 exports.getPublicJobById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -372,6 +481,34 @@ exports.getPublicJobById = async (req, res) => {
     } catch (error) {
         console.error('Failed to fetch public job:', error);
         res.status(500).json({ message: 'Failed to fetch job' });
+    }
+};
+
+exports.getResourceGatewayJobById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ message: 'Invalid job ID' });
+        }
+
+        const job = await HiringRequest.findOne({
+            _id: id,
+            isPublic: true,
+            isResourceGatewayPublic: true,
+            status: 'Approved'
+        })
+            .populate('companyId', 'name settings.logo subdomain industry country settings.careers')
+            .lean();
+
+        if (!job || !isResourceGatewayEnabledForCompany(job.companyId)) {
+            return res.status(404).json({ message: 'Job not found or no longer available on Resource Gateway' });
+        }
+
+        res.json({ job });
+    } catch (error) {
+        console.error('Failed to fetch Resource Gateway job:', error);
+        res.status(500).json({ message: 'Failed to fetch Resource Gateway job' });
     }
 };
 
@@ -653,6 +790,12 @@ exports.applicantLogin = async (req, res) => {
         }
 
         const applicant = await Applicant.findOne({ email: email.trim().toLowerCase() });
+        if (applicant?.authProvider === 'google' && !applicant.password) {
+            return res.status(400).json({
+                message: 'This account uses Google sign-in. Continue with Google or reset your password.'
+            });
+        }
+
         if (!applicant || !(await applicant.matchPassword(password))) {
             return res.status(401).json({ message: 'Invalid email or password.' });
         }
@@ -668,23 +811,92 @@ exports.applicantLogin = async (req, res) => {
         const token = generateApplicantToken(applicant._id, applicant.tokenVersion);
         res.json({
             token,
-            applicant: {
-                _id: applicant._id,
-                firstName: applicant.firstName,
-                lastName: applicant.lastName,
-                email: applicant.email,
-                mobile: applicant.mobile,
-                currentCTC: applicant.currentCTC,
-                expectedCTC: applicant.expectedCTC,
-                noticePeriod: applicant.noticePeriod,
-                resumeUrl: applicant.resumeUrl,
-                resumePublicId: applicant.resumePublicId,
-                isEmailVerified: applicant.isEmailVerified
-            }
+            applicant: buildApplicantAuthPayload(applicant)
         });
     } catch (error) {
         console.error('[APPLICANT LOGIN]', error);
         res.status(500).json({ message: 'Login failed.' });
+    }
+};
+
+exports.applicantGoogleLogin = async (req, res) => {
+    try {
+        const googleProfile = await verifyGoogleCredential(req.body.credential);
+
+        let applicant = await Applicant.findOne({
+            $or: [
+                { email: googleProfile.email },
+                { googleId: googleProfile.googleId }
+            ]
+        });
+
+        const resolvedName = splitFullName(googleProfile.fullName);
+        const firstName = googleProfile.givenName || resolvedName.firstName;
+        const lastName = googleProfile.familyName || resolvedName.lastName;
+        let created = false;
+
+        if (applicant && applicant.googleId && applicant.googleId !== googleProfile.googleId) {
+            return res.status(409).json({
+                message: 'A different Google account is already linked to this applicant profile.'
+            });
+        }
+
+        if (!applicant) {
+            applicant = new Applicant({
+                firstName,
+                lastName,
+                email: googleProfile.email,
+                authProvider: 'google',
+                googleId: googleProfile.googleId,
+                isEmailVerified: true,
+                profilePhotoUrl: googleProfile.picture || undefined
+            });
+            created = true;
+        } else {
+            if (!applicant.firstName && firstName) {
+                applicant.firstName = firstName;
+            }
+
+            if (!applicant.lastName && lastName) {
+                applicant.lastName = lastName;
+            }
+
+            if (!applicant.googleId) {
+                applicant.googleId = googleProfile.googleId;
+            }
+
+            if (!applicant.profilePhotoUrl && googleProfile.picture) {
+                applicant.profilePhotoUrl = googleProfile.picture;
+            }
+
+            if (!applicant.isEmailVerified) {
+                applicant.isEmailVerified = true;
+            }
+
+            if (!applicant.authProvider) {
+                applicant.authProvider = 'local';
+            }
+
+            applicant.emailOtp = null;
+            applicant.emailOtpExpires = null;
+        }
+
+        await applicant.save();
+
+        const token = generateApplicantToken(applicant._id, applicant.tokenVersion);
+        res.json({
+            message: created ? 'Account created successfully with Google.' : 'Signed in with Google.',
+            token,
+            applicant: buildApplicantAuthPayload(applicant)
+        });
+    } catch (error) {
+        if (axios.isAxiosError(error)) {
+            console.error('[APPLICANT GOOGLE LOGIN] Google verification failed:', error.response?.data || error.message);
+            return res.status(401).json({ message: 'Google sign-in could not be verified.' });
+        }
+
+        console.error('[APPLICANT GOOGLE LOGIN]', error);
+        res.status(400).json({ message: error.message || 'Google sign-in failed.' });
     }
 };
 

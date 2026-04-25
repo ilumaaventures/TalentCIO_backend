@@ -27,6 +27,9 @@ const allowedOriginPatterns = [
     /^https?:\/\/www\.talentcio\.in$/i,
     /^https:\/\/([a-z0-9-]+\.)*talentcio\.in$/i,
     /^https:\/\/([a-z0-9-]+\.)*telentcio\.in$/i,
+    /^https?:\/\/resourcegateway\.in$/i,
+    /^https?:\/\/www\.resourcegateway\.in$/i,
+    /^https:\/\/([a-z0-9-]+\.)*resourcegateway\.in$/i,
     /^https:\/\/telentcio\.com$/i,
     /^https:\/\/([a-z0-9-]+\.)*onrender\.(?:com|in)$/i
 ];
