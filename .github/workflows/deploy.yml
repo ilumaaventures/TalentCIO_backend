@@ -1,5 +1,4 @@
 name: Deploy Backend to VPS
-
 on:
   push:
     branches: [ "master" ]
@@ -19,5 +18,13 @@ jobs:
             cd /var/www/talentcio/backend
             git pull origin master
             npm install --production
+            
+            # Update .env file with Google OAuth Client ID
+            if grep -q "GOOGLE_OAUTH_CLIENT_ID" .env; then
+              sed -i "s/^GOOGLE_OAUTH_CLIENT_ID=.*/GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}/" .env
+            else
+              echo "GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}" >> .env
+            fi
+            
             pm2 restart talentcio-backend
             pm2 save
