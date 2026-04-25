@@ -20,6 +20,8 @@ router.post('/company-login', companyLoginLimiter, publicController.companyLogin
 router.post('/company-login/exchange', publicController.exchangeHandoffToken);
 router.get('/jobs', publicController.getPublicJobs);
 router.get('/jobs/:id', publicController.getPublicJobById);
+router.get('/resource-gateway/jobs', publicController.getResourceGatewayJobs);
+router.get('/resource-gateway/jobs/:id', publicController.getResourceGatewayJobById);
 router.post('/jobs/:id/apply', protectApplicant, upload.single('resume'), publicController.applyToJob);
 router.use('/applicant', applicantAuthRoutes);
 

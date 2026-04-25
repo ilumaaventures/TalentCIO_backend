@@ -18,6 +18,7 @@ router.post('/register', applicantLimiter, publicController.applicantRegister);
 router.post('/verify-email', applicantLimiter, publicController.applicantVerifyEmail);
 router.post('/resend-verification', applicantLimiter, publicController.applicantResendVerification);
 router.post('/login', applicantLimiter, publicController.applicantLogin);
+router.post('/google', applicantLimiter, publicController.applicantGoogleLogin);
 router.post('/forgot-password', applicantLimiter, publicController.applicantForgotPassword);
 router.post('/reset-password', applicantLimiter, publicController.applicantResetPassword);
 

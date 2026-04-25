@@ -2,6 +2,7 @@ const { HiringRequest, HRRAuditLog } = require('../models/HiringRequest');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const User = require('../models/User');
 const Candidate = require('../models/Candidate');
+const Company = require('../models/Company');
 const mongoose = require('mongoose');
 const NotificationService = require('../services/notificationService');
 
@@ -608,33 +609,102 @@ exports.closeHiringRequest = async (req, res) => {
 exports.toggleJobVisibility = async (req, res) => {
     try {
         const { id } = req.params;
+        const hasJobBoardToggle = typeof req.body?.isPublic === 'boolean';
+        const hasResourceGatewayToggle = typeof req.body?.isResourceGatewayPublic === 'boolean';
 
-        if (typeof req.body?.isPublic !== 'boolean') {
-            return res.status(400).json({ message: 'isPublic must be a boolean value' });
+        if (!hasJobBoardToggle && !hasResourceGatewayToggle) {
+            return res.status(400).json({ message: 'Provide isPublic or isResourceGatewayPublic as a boolean value' });
         }
 
-        const request = await HiringRequest.findOneAndUpdate(
-            { _id: id, companyId: req.companyId },
-            { isPublic: req.body.isPublic },
-            { new: true }
-        );
+        const request = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
 
         if (!request) {
             return res.status(404).json({ message: 'Job not found' });
         }
 
-        await HRRAuditLog.create({
-            hiringRequestId: request._id,
-            action: req.body.isPublic ? 'PUBLISHED_TO_JOB_BOARD' : 'REMOVED_FROM_JOB_BOARD',
-            performedBy: req.user._id,
-            details: { isPublic: req.body.isPublic }
-        });
+        if (request.status !== 'Approved') {
+            return res.status(400).json({ message: 'Only approved jobs can be published to external job boards.' });
+        }
+
+        const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
+        const resourceGatewayEnabledForCompany = Boolean(company?.settings?.careers?.enableResourceGatewayPublishing);
+        const auditEvents = [];
+
+        if (hasJobBoardToggle) {
+            request.isPublic = req.body.isPublic;
+            auditEvents.push({
+                action: req.body.isPublic ? 'PUBLISHED_TO_JOB_BOARD' : 'REMOVED_FROM_JOB_BOARD',
+                details: { isPublic: req.body.isPublic }
+            });
+
+            if (!req.body.isPublic && request.isResourceGatewayPublic) {
+                request.isResourceGatewayPublic = false;
+                auditEvents.push({
+                    action: 'REMOVED_FROM_RESOURCE_GATEWAY',
+                    details: { isResourceGatewayPublic: false, reason: 'JOB_BOARD_UNPUBLISHED' }
+                });
+            }
+        }
+
+        if (hasResourceGatewayToggle) {
+            if (!resourceGatewayEnabledForCompany) {
+                return res.status(403).json({
+                    message: 'This company is not enabled for publishing on Resource Gateway. Ask Super Admin to enable it in Company Settings.'
+                });
+            }
+
+            const targetJobBoardVisibility = hasJobBoardToggle ? req.body.isPublic : request.isPublic;
+            if (req.body.isResourceGatewayPublic && !targetJobBoardVisibility) {
+                return res.status(400).json({
+                    message: 'Publish this job to the main job board first before publishing it to Resource Gateway.'
+                });
+            }
+
+            request.isResourceGatewayPublic = req.body.isResourceGatewayPublic;
+            auditEvents.push({
+                action: req.body.isResourceGatewayPublic ? 'PUBLISHED_TO_RESOURCE_GATEWAY' : 'REMOVED_FROM_RESOURCE_GATEWAY',
+                details: { isResourceGatewayPublic: req.body.isResourceGatewayPublic }
+            });
+        }
+
+        if (req.body.publicJobTitle !== undefined) {
+            request.publicJobTitle = req.body.publicJobTitle;
+        }
+
+        if (req.body.publicJobDescription !== undefined) {
+            request.publicJobDescription = req.body.publicJobDescription;
+        }
+
+        await request.save();
+
+        if (auditEvents.length) {
+            await HRRAuditLog.insertMany(auditEvents.map((event) => ({
+                hiringRequestId: request._id,
+                action: event.action,
+                performedBy: req.user._id,
+                details: event.details
+            })));
+        }
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+        const messageParts = [];
+
+        if (hasJobBoardToggle) {
+            messageParts.push(`job board ${req.body.isPublic ? 'enabled' : 'disabled'}`);
+        }
+
+        if (hasResourceGatewayToggle) {
+            messageParts.push(`Resource Gateway ${req.body.isResourceGatewayPublic ? 'enabled' : 'disabled'}`);
+        }
 
         res.status(200).json({
             job: updatedRequest || request,
-            message: `Job is now ${req.body.isPublic ? 'public' : 'private'}`
+            capabilities: {
+                resourceGatewayEnabledForCompany
+            },
+            message: messageParts.length
+                ? `Updated ${messageParts.join(' and ')}.`
+                : 'Job visibility updated.'
         });
     } catch (error) {
         console.error('Error toggling job visibility:', error);
