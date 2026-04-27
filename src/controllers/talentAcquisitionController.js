@@ -8,8 +8,8 @@ const NotificationService = require('../services/notificationService');
 
 
 // Helper to generate Request ID (e.g., HRR-2023-001)
-const generateRequestId = async () => {
-    const count = await HiringRequest.countDocuments();
+const generateRequestId = async (companyId) => {
+    const count = await HiringRequest.countDocuments({ companyId });
     const year = new Date().getFullYear();
     return `HRR-${year}-${String(count + 1).padStart(3, '0')}`;
 };
@@ -47,12 +47,12 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
 // --- createHiringRequest ---
 exports.createHiringRequest = async (req, res) => {
     try {
-        const { client, roleDetails, purpose, requirements, hiringDetails, ownership, replacementDetails, interviewWorkflowId, previousRequestId, jobDescription, jobDescriptionFile } = req.body;
+        const { client, clientConfidential, roleDetails, purpose, requirements, hiringDetails, ownership, replacementDetails, interviewWorkflowId, previousRequestId, jobDescription, jobDescriptionFile } = req.body;
         const submitNow = req.query.submit === 'true';
 
         // validations...
 
-        const requestId = await generateRequestId();
+        const requestId = await generateRequestId(req.companyId);
 
         let workflow;
         if (req.body.workflowId) {
@@ -75,6 +75,7 @@ exports.createHiringRequest = async (req, res) => {
         const newRequest = new HiringRequest({
             requestId,
             client,
+            clientConfidential: Boolean(clientConfidential),
             roleDetails,
             purpose,
             requirements,
@@ -256,7 +257,7 @@ exports.updateHiringRequest = async (req, res) => {
 
         // Apply updates to request securely (prevent mass assignment)
         const allowedUpdates = [
-            'client', 'roleDetails', 'purpose', 'requirements',
+            'client', 'clientConfidential', 'roleDetails', 'purpose', 'requirements',
             'hiringDetails', 'replacementDetails', 'ownership', 'interviewWorkflowId',
             'jobDescription', 'jobDescriptionFile'
         ];

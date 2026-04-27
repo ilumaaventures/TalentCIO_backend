@@ -1,5 +1,16 @@
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 
+const handleWorkflowWriteError = (error, res) => {
+    if (error?.code === 11000) {
+        return res.status(409).json({
+            message: 'A workflow with this name already exists for this company.'
+        });
+    }
+
+    console.error(error);
+    return res.status(500).json({ message: 'Server Error', error: error.message });
+};
+
 // --- Create Workflow ---
 exports.createWorkflow = async (req, res) => {
     try {
@@ -22,8 +33,7 @@ exports.createWorkflow = async (req, res) => {
 
         res.status(201).json(workflow);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error', error: error.message });
+        handleWorkflowWriteError(error, res);
     }
 };
 
@@ -69,8 +79,7 @@ exports.updateWorkflow = async (req, res) => {
         if (!workflow) return res.status(404).json({ message: 'Workflow not found' });
         res.status(200).json(workflow);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error', error: error.message });
+        handleWorkflowWriteError(error, res);
     }
 };
 

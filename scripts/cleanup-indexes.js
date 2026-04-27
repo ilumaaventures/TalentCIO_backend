@@ -17,7 +17,9 @@ async function cleanupIndexes() {
         const targetCollections = [
             'roles', 'timesheets', 'hiringrequests', 'worklogs', 'attendance', 
             'querytypes', 'leavebalances', 'leaveconfigs', 'holidays', 
-            'projects', 'modules', 'tasks', 'helpdeskqueries', 'candidates'
+            'projects', 'modules', 'tasks', 'helpdeskqueries', 'candidates',
+            'approvalworkflows', 'interviewworkflows', 'candidatesources',
+            'escalationrules', 'attendancedocuments'
         ];
 
         for (const collName of targetCollections) {
