@@ -124,6 +124,21 @@ const buildPublicJobsQuery = ({ location, type, department, search }) => {
     return query;
 };
 
+const maskConfidentialClient = (job) => {
+    if (!job) {
+        return job;
+    }
+
+    if (!job.clientConfidential) {
+        return job;
+    }
+
+    return {
+        ...job,
+        client: 'Confidential Client'
+    };
+};
+
 const isResourceGatewayEnabledForCompany = (company) => (
     Boolean(company?.settings?.careers?.enableResourceGatewayPublishing)
 );
@@ -407,7 +422,7 @@ exports.getPublicJobs = async (req, res) => {
 
         const total = await HiringRequest.countDocuments(query);
         const jobs = await HiringRequest.find(query)
-            .select('requestId roleDetails requirements hiringDetails client companyId createdAt publicJobTitle publicJobDescription')
+            .select('requestId roleDetails requirements hiringDetails client clientConfidential companyId createdAt publicJobTitle publicJobDescription')
             .populate('companyId', 'name settings.logo subdomain industry country')
             .sort({ createdAt: -1 })
             .skip((pageNumber - 1) * limitNumber)
@@ -415,7 +430,7 @@ exports.getPublicJobs = async (req, res) => {
             .lean();
 
         res.json({
-            jobs,
+            jobs: jobs.map(maskConfidentialClient),
             total,
             page: pageNumber,
             totalPages: Math.ceil(total / limitNumber)
@@ -436,14 +451,16 @@ exports.getResourceGatewayJobs = async (req, res) => {
         };
 
         const allEligibleJobs = await HiringRequest.find(query)
-            .select('requestId roleDetails requirements hiringDetails client companyId createdAt publicJobTitle publicJobDescription isResourceGatewayPublic')
+            .select('requestId roleDetails requirements hiringDetails client clientConfidential companyId createdAt publicJobTitle publicJobDescription isResourceGatewayPublic')
             .populate('companyId', 'name settings.logo subdomain industry country settings.careers')
             .sort({ createdAt: -1 })
             .lean();
 
         const jobs = allEligibleJobs.filter((job) => isResourceGatewayEnabledForCompany(job.companyId));
         const total = jobs.length;
-        const paginatedJobs = jobs.slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber);
+        const paginatedJobs = jobs
+            .slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber)
+            .map(maskConfidentialClient);
 
         res.json({
             jobs: paginatedJobs,
@@ -477,7 +494,7 @@ exports.getPublicJobById = async (req, res) => {
             return res.status(404).json({ message: 'Job not found or no longer available' });
         }
 
-        res.json({ job });
+        res.json({ job: maskConfidentialClient(job) });
     } catch (error) {
         console.error('Failed to fetch public job:', error);
         res.status(500).json({ message: 'Failed to fetch job' });
@@ -505,7 +522,7 @@ exports.getResourceGatewayJobById = async (req, res) => {
             return res.status(404).json({ message: 'Job not found or no longer available on Resource Gateway' });
         }
 
-        res.json({ job });
+        res.json({ job: maskConfidentialClient(job) });
     } catch (error) {
         console.error('Failed to fetch Resource Gateway job:', error);
         res.status(500).json({ message: 'Failed to fetch Resource Gateway job' });

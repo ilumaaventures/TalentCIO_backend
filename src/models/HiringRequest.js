@@ -1,10 +1,11 @@
 const mongoose = require('mongoose');
 
 const HiringRequestSchema = new mongoose.Schema({
-    requestId: { type: String, unique: true, required: true },
+    requestId: { type: String, required: true },
 
     // 0. Client Details
     client: { type: String, required: true },
+    clientConfidential: { type: Boolean, default: false },
 
     // 1. Role Information
     roleDetails: {
@@ -50,7 +51,8 @@ const HiringRequestSchema = new mongoose.Schema({
         budgetRange: {
             min: Number,
             max: Number,
-            currency: { type: String, default: 'INR' }
+            currency: { type: String, default: 'INR' },
+            isOpen: { type: Boolean, default: false }
         },
         priority: { type: String, enum: ['High', 'Medium', 'Low'], default: 'Medium' }
     },
@@ -119,6 +121,7 @@ const HiringRequestSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Performance Indexes
+HiringRequestSchema.index({ companyId: 1, requestId: 1 }, { unique: true });
 HiringRequestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ createdBy: 1, companyId: 1, createdAt: -1 });
 HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
