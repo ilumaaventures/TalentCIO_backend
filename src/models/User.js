@@ -60,6 +60,17 @@ const userSchema = new mongoose.Schema({
         ref: 'Company',
         index: true
     },
+    attendanceMode: {
+        type: String,
+        enum: ['clock_in_out', 'present_only'],
+        default: 'clock_in_out'
+    },
+    attendanceShiftCode: {
+        type: String,
+        default: 'general',
+        trim: true,
+        lowercase: true
+    },
     isPasswordResetRequired: {
         type: Boolean,
         default: true

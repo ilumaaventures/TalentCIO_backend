@@ -1,79 +1,85 @@
 const cron = require('node-cron');
 const Attendance = require('../models/Attendance');
+const Company = require('../models/Company');
+const User = require('../models/User');
+const {
+    IST_TIMEZONE,
+    buildAttendancePolicy,
+    buildEndOfDayIST,
+    getISTTime
+} = require('../utils/attendancePolicy');
 
-const CRON_TIMEZONE = process.env.CRON_TIMEZONE || 'Asia/Kolkata';
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE || IST_TIMEZONE;
 const AUTO_CHECKOUT_NOTE = '[Auto-checked out by system]';
 let autoCheckoutJobRunning = false;
 
-const getIstDateParts = (dateInput) => {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-        timeZone: CRON_TIMEZONE,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-    });
-    const formatted = formatter.format(new Date(dateInput));
-    const [year, month, day] = formatted.split('-');
-    return { year, month, day };
-};
-
-const buildIstEndOfDayDate = (dateInput) => {
-    const { year, month, day } = getIstDateParts(dateInput);
-    return new Date(`${year}-${month}-${day}T23:59:59+05:30`);
-};
-
-const getTodayBoundsInCronTimezone = (dateInput = new Date()) => {
-    const zonedNow = new Date(dateInput.toLocaleString('en-US', { timeZone: CRON_TIMEZONE }));
-    const start = new Date(zonedNow);
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    return { start, end };
-};
-
 const startAutoCheckoutCron = () => {
-    // Run at 23:59:59 every day (Daily Checkout)
-    // node-cron format with seconds: second minute hour dayOfMonth month dayOfWeek
-    // '59 59 23 * * *' runs at 11:59:59 PM
-    cron.schedule('59 59 23 * * *', async () => {
+    // Run every minute and close open sessions that crossed shift end,
+    // max working hours, or the end of day in IST.
+    cron.schedule('0 * * * * *', async () => {
         if (autoCheckoutJobRunning) {
             console.warn('[CRON] Skipping auto-checkout because the previous cycle is still active.');
             return;
         }
 
         autoCheckoutJobRunning = true;
-        console.log('[CRON] Running daily auto-checkout for forgotten sessions...');
+        console.log('[CRON] Running shift-aware auto-checkout scan...');
         try {
-            const { start, end } = getTodayBoundsInCronTimezone();
-
-            // Find all records from today that have a clockIn but no clockOut
-            const forgottenSessions = await Attendance.find({
-                date: { $gte: start, $lt: end },
-                clockIn: { $exists: true },
+            const openSessions = await Attendance.find({
+                clockIn: { $exists: true, $ne: null },
+                attendanceMode: { $ne: 'present_only' },
                 $or: [
                     { clockOut: { $exists: false } },
                     { clockOut: null }
                 ]
             })
-                .select('_id user date notes')
+                .select('_id user companyId date clockIn notes autoCheckoutAt shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours')
                 .lean();
 
-            console.log(`[CRON] Found ${forgottenSessions.length} forgotten sessions.`);
+            console.log(`[CRON] Found ${openSessions.length} open attendance sessions.`);
 
-            if (forgottenSessions.length === 0) {
+            if (openSessions.length === 0) {
                 return;
             }
 
-            const bulkUpdates = forgottenSessions.map(record => {
-                // Set clockOut to 11:59:59 PM IST for the attendance date.
-                const checkoutTime = buildIstEndOfDayDate(record.date);
+            const userIds = [...new Set(openSessions.map((record) => String(record.user)).filter(Boolean))];
+            const companyIds = [...new Set(openSessions.map((record) => String(record.companyId)).filter(Boolean))];
+
+            const [users, companies] = await Promise.all([
+                User.find({ _id: { $in: userIds } })
+                    .select('_id attendanceMode attendanceShiftCode')
+                    .lean(),
+                Company.find({ _id: { $in: companyIds } })
+                    .select('_id settings.attendance')
+                    .lean()
+            ]);
+
+            const usersById = new Map(users.map((user) => [String(user._id), user]));
+            const companiesById = new Map(companies.map((company) => [String(company._id), company]));
+            const now = new Date();
+
+            const bulkUpdates = openSessions.flatMap((record) => {
+                const company = companiesById.get(String(record.companyId));
+                const user = usersById.get(String(record.user));
+                const policy = buildAttendancePolicy({
+                    company,
+                    user,
+                    attendanceDate: record.date,
+                    clockInTime: record.clockIn
+                });
+                const checkoutTime = record.autoCheckoutAt
+                    ? new Date(record.autoCheckoutAt)
+                    : (policy.autoCheckoutAt || buildEndOfDayIST(record.date));
+
+                if (checkoutTime > now) {
+                    return [];
+                }
+
                 const nextNotes = record.notes?.includes(AUTO_CHECKOUT_NOTE)
                     ? record.notes
                     : (record.notes ? `${record.notes} ${AUTO_CHECKOUT_NOTE}` : AUTO_CHECKOUT_NOTE);
 
-                return {
+                return [{
                     updateOne: {
                         filter: {
                             _id: record._id,
@@ -85,18 +91,31 @@ const startAutoCheckoutCron = () => {
                         update: {
                             $set: {
                                 clockOut: checkoutTime,
-                                clockOutIST: checkoutTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+                                clockOutIST: getISTTime(checkoutTime),
                                 status: 'PRESENT',
-                                notes: nextNotes
+                                notes: nextNotes,
+                                autoCheckoutAt: checkoutTime,
+                                autoCheckoutReason: AUTO_CHECKOUT_NOTE,
+                                attendanceMode: policy.mode,
+                                shiftCode: policy.shift?.code || record.shiftCode || null,
+                                shiftName: policy.shift?.name || record.shiftName || null,
+                                shiftType: policy.shift?.shiftType || record.shiftType || null,
+                                shiftStartTime: policy.shift?.startTime || record.shiftStartTime || null,
+                                shiftEndTime: policy.shift?.endTime || record.shiftEndTime || null,
+                                maxWorkingHours: policy.maxWorkingHours || record.maxWorkingHours || null
                             }
                         }
                     }
-                };
+                }];
             });
+
+            if (bulkUpdates.length === 0) {
+                return;
+            }
 
             await Attendance.bulkWrite(bulkUpdates, { ordered: false });
 
-            console.log('[CRON] Daily auto-checkout completed.');
+            console.log(`[CRON] Auto-checkout completed for ${bulkUpdates.length} session(s).`);
         } catch (error) {
             console.error('[CRON] Error during auto-checkout:', error);
         } finally {

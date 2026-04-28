@@ -20,6 +20,7 @@ const Task = require('../models/Task');
 const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
+const { getStartOfDayIST } = require('../utils/attendancePolicy');
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
@@ -298,6 +299,7 @@ exports.getAttendanceBootstrap = async (req, res) => {
         const month = parseInt(req.query.month, 10) || (new Date().getMonth() + 1);
         const { start, end } = getMonthRange(year, month);
         const viewingSelf = String(targetUserId) === String(req.user._id);
+        const today = getStartOfDayIST();
 
         if (!viewingSelf) {
             const targetUser = await User.findOne({ _id: targetUserId, companyId: req.companyId })
@@ -314,13 +316,13 @@ exports.getAttendanceBootstrap = async (req, res) => {
             }
         }
 
-        const companyPromise = Company.findById(req.companyId).select('settings.attendance.weeklyOff').lean();
+        const companyPromise = Company.findById(req.companyId).select('settings.attendance').lean();
         const historyPromise = Attendance.find({
             companyId: req.companyId,
             user: targetUserId,
             date: { $gte: start, $lt: end }
         })
-            .select('date clockIn clockInIST clockOut clockOutIST duration status user')
+            .select('date clockIn clockInIST clockOut clockOutIST duration status user attendanceMode shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours autoCheckoutAt autoCheckoutReason')
             .populate('user', 'firstName lastName')
             .sort({ date: -1 })
             .lean();
@@ -344,11 +346,11 @@ exports.getAttendanceBootstrap = async (req, res) => {
                 user: req.user._id,
                 companyId: req.companyId,
                 date: {
-                    $gte: startOfDay(new Date()),
-                    $lt: new Date(startOfDay(new Date()).getTime() + 24 * 60 * 60 * 1000)
+                    $gte: today,
+                    $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
                 }
             })
-                .select('user clockIn clockInIST clockOut clockOutIST status')
+                .select('user clockIn clockInIST clockOut clockOutIST status attendanceMode shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours autoCheckoutAt autoCheckoutReason')
                 .lean()
             : Promise.resolve(null);
         const recentLogsPromise = viewingSelf
@@ -374,7 +376,8 @@ exports.getAttendanceBootstrap = async (req, res) => {
             holidays,
             approvedLeaves,
             recentLogs,
-            weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday']
+            weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'],
+            attendanceSettings: company?.settings?.attendance || {}
         });
     } catch (error) {
         console.error('getAttendanceBootstrap error:', error);

@@ -49,6 +49,53 @@ const companySchema = new mongoose.Schema({
         attendance: {
             weeklyOff: { type: [String], default: ['Saturday', 'Sunday'] },
             workingHours: { type: Number, default: 8 },
+            selfService: {
+                weeklyOff: { type: Boolean, default: true },
+                workingHours: { type: Boolean, default: true },
+                defaultAttendanceMode: { type: Boolean, default: true },
+                attendanceShifts: { type: Boolean, default: true },
+                exportFormat: { type: Boolean, default: true },
+                locationRules: { type: Boolean, default: true },
+                ipRules: { type: Boolean, default: true }
+            },
+            defaultShiftCode: { type: String, default: 'general' },
+            defaultAttendanceMode: {
+                type: String,
+                enum: ['clock_in_out', 'present_only'],
+                default: 'clock_in_out'
+            },
+            attendanceShifts: {
+                type: [{
+                    code: { type: String, required: true, trim: true, lowercase: true },
+                    name: { type: String, required: true, trim: true },
+                    shiftType: {
+                        type: String,
+                        enum: ['general', 'any'],
+                        default: 'general'
+                    },
+                    startTime: { type: String, default: '09:00' },
+                    endTime: { type: String, default: '18:00' },
+                    maxWorkingHours: { type: Number, default: 8 }
+                }],
+                default: [
+                    {
+                        code: 'general',
+                        name: 'General',
+                        shiftType: 'general',
+                        startTime: '09:00',
+                        endTime: '18:00',
+                        maxWorkingHours: 9
+                    },
+                    {
+                        code: 'any',
+                        name: 'Any Time',
+                        shiftType: 'any',
+                        startTime: '00:00',
+                        endTime: '23:59',
+                        maxWorkingHours: 8
+                    }
+                ]
+            },
             exportFormat: { type: String, default: 'Standard' }, // Standard, Detailed, Compact
             halfDayAllowed: { type: Boolean, default: true },
             requireLocationCheckIn: { type: Boolean, default: false },
