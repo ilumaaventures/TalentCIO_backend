@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, admin } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
 const {
     getUsers,
@@ -19,6 +19,10 @@ const {
 } = require('../controllers/roleController');
 const { backfillTimesheets } = require('../controllers/migrationController');
 const { getRoleBootstrap } = require('../controllers/pageBootstrapController');
+const {
+    getOwnAttendanceSettings,
+    updateOwnAttendanceSettings
+} = require('../controllers/companyController');
 
 router.use(protect);
 
@@ -41,5 +45,9 @@ router.get('/permissions', getPermissions); // Assuming basic auth is enough to 
 
 // Migration Routes (Temporary)
 router.post('/migrate-timesheets', authorize('user.update'), backfillTimesheets);
+
+// Company Attendance Settings
+router.get('/company-settings/attendance', admin, getOwnAttendanceSettings);
+router.put('/company-settings/attendance', admin, updateOwnAttendanceSettings);
 
 module.exports = router;

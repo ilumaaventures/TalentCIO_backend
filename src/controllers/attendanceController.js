@@ -9,6 +9,14 @@ const { startOfDay, endOfDay, format, differenceInCalendarDays, subDays, startOf
 const LeaveRequest = require('../models/LeaveRequest');
 const LeaveConfig = require('../models/LeaveConfig');
 const NotificationService = require('../services/notificationService');
+const {
+    getISTTime,
+    getStartOfDayIST,
+    parseDateAsIST,
+    buildAttendancePolicy,
+    isWithinShiftWindow,
+    buildEndOfDayIST
+} = require('../utils/attendancePolicy');
 
 const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
     const date = new Date(dateValue);
@@ -30,31 +38,6 @@ const ensureTimesheetPeriodEditable = async ({ company, companyId, userId, dateV
     }
 
     return { ok: true };
-};
-
-// Helper to get time in IST
-const getISTTime = () => {
-    return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-};
-
-// Helper to get Start of Day in IST (returned as a Date object at midnight server time)
-const getStartOfDayIST = (dateInput = new Date()) => {
-    const d = new Date(dateInput);
-    const istString = d.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
-    return new Date(istString);
-};
-
-const parseDateAsIST = (dateInput) => {
-    if (!dateInput) return null;
-    const d = new Date(dateInput);
-    if (isNaN(d.getTime())) return startOfDay(new Date());
-
-    // Extract YYYY-MM-DD components according to IST
-    const istString = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // Format: YYYY-MM-DD
-    const [year, month, day] = istString.split('-').map(Number);
-    
-    // Return a date at midnight in the server's local time for consistent comparison
-    return new Date(year, month - 1, day);
 };
 
 // Helper to extract clean IP address, handling proxies
@@ -83,6 +66,46 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
     return R * c;
 };
 
+const getAttendanceSettings = (company) => company?.settings?.attendance || {};
+
+const applyPolicyMetadata = (attendance, policy) => {
+    attendance.attendanceMode = policy.mode;
+    attendance.shiftCode = policy.shift?.code || null;
+    attendance.shiftName = policy.shift?.name || null;
+    attendance.shiftType = policy.shift?.shiftType || null;
+    attendance.shiftStartTime = policy.shift?.startTime || null;
+    attendance.shiftEndTime = policy.shift?.endTime || null;
+    attendance.maxWorkingHours = policy.maxWorkingHours || null;
+    attendance.autoCheckoutAt = policy.autoCheckoutAt || null;
+};
+
+const applyPresentOnlyRecord = (attendance, note = '[Marked present]') => {
+    attendance.clockIn = null;
+    attendance.clockInIST = null;
+    attendance.clockOut = null;
+    attendance.clockOutIST = null;
+    attendance.autoCheckoutAt = null;
+    attendance.autoCheckoutReason = null;
+
+    if (note) {
+        attendance.notes = attendance.notes?.includes(note)
+            ? attendance.notes
+            : (attendance.notes ? `${attendance.notes} ${note}` : note);
+    }
+};
+
+const finalizeCheckout = async (attendance, checkoutTime, reason = '') => {
+    attendance.clockOut = checkoutTime;
+    attendance.clockOutIST = getISTTime(checkoutTime);
+    attendance.status = 'PRESENT';
+    if (reason) {
+        attendance.autoCheckoutReason = reason;
+        attendance.notes = attendance.notes ? `${attendance.notes} ${reason}` : reason;
+    }
+    await attendance.save();
+    return attendance;
+};
+
 // @desc    Get today's attendance status
 exports.getTodayStatus = async (req, res) => {
     try {
@@ -95,7 +118,7 @@ exports.getTodayStatus = async (req, res) => {
                 $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
             }
         })
-        .select('user clockIn clockInIST clockOut clockOutIST status')
+        .select('user clockIn clockInIST clockOut clockOutIST status attendanceMode shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours autoCheckoutAt autoCheckoutReason')
         .lean();
         res.json(attendance || { status: 'Not Clocked In' });
     } catch (error) {
@@ -109,8 +132,14 @@ exports.clockIn = async (req, res) => {
     console.log('[DEBUG] Clock-In Request:', { body: req.body, user: req.user?._id, companyId: req.companyId });
     try {
         const company = req.company || await require('../models/Company').findById(req.companyId);
-        const attSettings = company?.settings?.attendance || {};
+        const attSettings = getAttendanceSettings(company);
         const today = getStartOfDayIST();
+        const now = new Date();
+        const basePolicy = buildAttendancePolicy({
+            company,
+            user: req.user,
+            attendanceDate: now
+        });
 
         if (req.user.joiningDate && today < new Date(req.user.joiningDate)) {
             return res.status(400).json({ message: 'Cannot clock in before joining date.' });
@@ -127,6 +156,10 @@ exports.clockIn = async (req, res) => {
 
         if (attendance && attendance.clockIn) {
             return res.status(400).json({ message: 'Already clocked in for today' });
+        }
+
+        if (attendance && attendance.attendanceMode === 'present_only' && attendance.status === 'PRESENT') {
+            return res.status(400).json({ message: 'Already marked present for today' });
         }
 
         if (!attendance) {
@@ -160,13 +193,32 @@ exports.clockIn = async (req, res) => {
             }
         }
 
+        if (basePolicy.mode === 'clock_in_out' && !isWithinShiftWindow({ policy: basePolicy, currentTime: now })) {
+            return res.status(400).json({
+                message: `Attendance is allowed only during your shift window (${basePolicy.shift?.startTime || '--'} - ${basePolicy.shift?.endTime || '--'}).`
+            });
+        }
+
         attendance.clockIn = new Date();
-        attendance.clockInIST = getISTTime();
+        attendance.clockInIST = getISTTime(now);
         attendance.ipAddress = getClientIp(req);
         if (location && typeof location.lat === 'number') {
             attendance.location = { lat: location.lat, lng: location.lng, accuracy: location.accuracy };
         }
         attendance.userAgent = req.headers['user-agent'] || 'Unknown';
+        attendance.status = 'PRESENT';
+
+        const resolvedPolicy = buildAttendancePolicy({
+            company,
+            user: req.user,
+            attendanceDate: now,
+            clockInTime: now
+        });
+        applyPolicyMetadata(attendance, resolvedPolicy);
+
+        if (resolvedPolicy.mode === 'present_only') {
+            applyPresentOnlyRecord(attendance);
+        }
 
         await attendance.save();
         res.json(attendance);
@@ -180,8 +232,9 @@ exports.clockIn = async (req, res) => {
 exports.clockOut = async (req, res) => {
     try {
         const company = req.company || await require('../models/Company').findById(req.companyId);
-        const attSettings = company?.settings?.attendance || {};
+        const attSettings = getAttendanceSettings(company);
         const today = getStartOfDayIST();
+        const now = new Date();
 
         let attendance = await Attendance.findOne({
             user: req.user._id,
@@ -200,13 +253,31 @@ exports.clockOut = async (req, res) => {
             return res.status(400).json({ message: 'Already clocked out for today' });
         }
 
+        if (attendance.attendanceMode === 'present_only') {
+            return res.status(400).json({ message: 'This user only needs to mark present. Check-out is not required.' });
+        }
+
         const location = req.body?.location;
-        attendance.clockOut = new Date();
-        attendance.clockOutIST = getISTTime();
+        const policy = buildAttendancePolicy({
+            company,
+            user: req.user,
+            attendanceDate: attendance.date,
+            clockInTime: attendance.clockIn
+        });
+        applyPolicyMetadata(attendance, policy);
+
+        if (attendance.autoCheckoutAt && now > new Date(attendance.autoCheckoutAt)) {
+            await finalizeCheckout(attendance, new Date(attendance.autoCheckoutAt), '[Auto-checked out by shift policy]');
+            return res.json(attendance);
+        }
+
+        attendance.clockOut = now;
+        attendance.clockOutIST = getISTTime(now);
         attendance.clockOutIpAddress = getClientIp(req);
         if (location && typeof location.lat === 'number') {
             attendance.clockOutLocation = { lat: location.lat, lng: location.lng, accuracy: location.accuracy };
         }
+        attendance.status = 'PRESENT';
         
         await attendance.save();
         res.json(attendance);
@@ -306,7 +377,7 @@ exports.updateAttendance = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to update this attendance record' });
         }
 
-        const company = req.company || await Company.findById(req.companyId).select('settings.timesheet').lean();
+        const company = req.company || await Company.findById(req.companyId).select('settings.timesheet settings.attendance').lean();
         const editability = await ensureTimesheetPeriodEditable({
             company,
             companyId: req.companyId,
@@ -325,6 +396,19 @@ exports.updateAttendance = async (req, res) => {
             attendance.clockOut = new Date(clockOut);
             attendance.clockOutIST = new Date(clockOut).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
         }
+
+        const policy = buildAttendancePolicy({
+            company,
+            user: attendance.user,
+            attendanceDate: attendance.date,
+            clockInTime: attendance.clockIn
+        });
+        applyPolicyMetadata(attendance, policy);
+
+        if (policy.mode === 'present_only') {
+            applyPresentOnlyRecord(attendance, '[Marked present by admin]');
+        }
+
         await attendance.save();
         res.json(attendance);
     } catch (error) {
@@ -355,7 +439,19 @@ exports.createAttendance = async (req, res) => {
             }
         }
 
-        const company = req.company || await Company.findById(req.companyId).select('settings.timesheet').lean();
+        const [company, targetUser] = await Promise.all([
+            req.company
+                ? Promise.resolve(req.company)
+                : Company.findById(req.companyId).select('settings.timesheet settings.attendance').lean(),
+            User.findOne({ _id: targetUserId, companyId: req.companyId })
+                .select('attendanceMode attendanceShiftCode')
+                .lean()
+        ]);
+
+        if (!targetUser) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
         const editability = await ensureTimesheetPeriodEditable({
             company,
             companyId: req.companyId,
@@ -366,16 +462,30 @@ exports.createAttendance = async (req, res) => {
             return res.status(400).json({ message: editability.message });
         }
 
+        const attendanceDate = parseDateAsIST(date);
         const newAttendance = new Attendance({
             user: targetUserId,
             companyId: req.companyId,
-            date: parseDateAsIST(date),
+            date: attendanceDate,
             status: 'PRESENT',
             clockIn: clockIn ? new Date(clockIn) : null,
             clockOut: clockOut ? new Date(clockOut) : null,
             clockInIST: clockIn ? new Date(clockIn).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : null,
             clockOutIST: clockOut ? new Date(clockOut).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : null,
         });
+
+        const policy = buildAttendancePolicy({
+            company,
+            user: targetUser,
+            attendanceDate,
+            clockInTime: newAttendance.clockIn
+        });
+        applyPolicyMetadata(newAttendance, policy);
+
+        if (policy.mode === 'present_only') {
+            applyPresentOnlyRecord(newAttendance, '[Marked present by admin]');
+        }
+
         await newAttendance.save();
         res.status(201).json(newAttendance);
     } catch (error) {
@@ -901,6 +1011,20 @@ exports.processRegularizationRequest = async (req, res) => {
                 attendance.clockOutIST = new Date(request.requestedClockOut).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
             }
             attendance.approvalStatus = 'APPROVED';
+
+            const company = req.company || await Company.findById(req.companyId).select('settings.attendance').lean();
+            const policy = buildAttendancePolicy({
+                company,
+                user: requestUser,
+                attendanceDate: attendance.date,
+                clockInTime: attendance.clockIn
+            });
+            applyPolicyMetadata(attendance, policy);
+
+            if (policy.mode === 'present_only') {
+                applyPresentOnlyRecord(attendance, '[Marked present by regularization]');
+            }
+
             await attendance.save();
         }
         await request.save();

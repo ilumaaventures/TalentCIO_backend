@@ -11,7 +11,7 @@ const Permission = require('../models/Permission');
 const getUsers = async (req, res) => {
     try {
         const users = await User.find({ companyId: req.companyId })
-            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt')
+            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
             .populate({
                 path: 'roles',
                 select: 'name permissions',
@@ -31,7 +31,7 @@ const getUsers = async (req, res) => {
 // @route   POST /api/users
 // @access  Private (Admin)
 const createUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, reportingManagers } = req.body;
+    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, reportingManagers, attendanceMode, attendanceShiftCode } = req.body;
     console.log('Create User Body:', req.body); // DEBUG LOG
 
     try {
@@ -83,7 +83,9 @@ const createUser = async (req, res) => {
             employmentType,
             employeeCode,
             joiningDate,
-            reportingManagers: reportingManagers || []
+            reportingManagers: reportingManagers || [],
+            attendanceMode: attendanceMode || 'clock_in_out',
+            attendanceShiftCode: attendanceShiftCode || 'general'
         });
 
         // Handle Direct Reports
@@ -136,7 +138,7 @@ const updateUserRole = async (req, res) => {
 // @route   PUT /api/users/:id
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports } = req.body;
+    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, attendanceMode, attendanceShiftCode } = req.body;
     console.log('Update User Body:', req.body); // DEBUG LOG
     try {
         const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
@@ -164,6 +166,8 @@ const updateUser = async (req, res) => {
         user.workLocation = workLocation || user.workLocation;
         user.employmentType = employmentType || user.employmentType;
         user.employeeCode = employeeCode || user.employeeCode;
+        user.attendanceMode = attendanceMode || user.attendanceMode;
+        user.attendanceShiftCode = attendanceShiftCode || user.attendanceShiftCode;
         if (joiningDate) user.joiningDate = joiningDate;
 
         if (roleId) {
@@ -204,7 +208,7 @@ const updateUser = async (req, res) => {
 const getMyTeam = async (req, res) => {
     try {
         const team = await User.find({ reportingManagers: req.user._id, companyId: req.companyId })
-            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt')
+            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
             .populate('roles', 'name')
             .populate('reportingManagers', 'firstName lastName email')
             .populate('employeeProfile', 'hris')
@@ -282,6 +286,8 @@ const getMyself = async (req, res) => {
             department: req.user.department,
             workLocation: req.user.workLocation,
             employmentType: req.user.employmentType,
+            attendanceMode: req.user.attendanceMode || 'clock_in_out',
+            attendanceShiftCode: req.user.attendanceShiftCode || 'general',
             joiningDate: req.user.joiningDate,
             isActive: req.user.isActive,
             createdAt: req.user.createdAt,
@@ -306,7 +312,7 @@ const getMyself = async (req, res) => {
 const getUserById = async (req, res) => {
     try {
         const user = await User.findOne({ _id: req.params.id, companyId: req.companyId })
-            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt')
+            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
             .populate('roles', 'name')
             .populate('reportingManagers', 'firstName lastName email')
             .lean();

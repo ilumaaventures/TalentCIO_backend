@@ -40,7 +40,7 @@ const protect = async (req, res, next) => {
             } else {
                 // Keep auth hydration minimal because every protected API pays this cost.
                 req.user = await User.findById(decoded.id)
-                    .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt')
+                    .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
                     .populate({
                         path: 'roles',
                         select: 'name isSystem permissions',

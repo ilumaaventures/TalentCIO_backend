@@ -5,6 +5,11 @@ const Permission = require('../models/Permission');
 const ActivityLog = require('../models/ActivityLog');
 const Attendance = require('../models/Attendance');
 const LeaveRequest = require('../models/LeaveRequest');
+const {
+    normalizeShiftList,
+    DEFAULT_SHIFT_CODE,
+    DEFAULT_ATTENDANCE_MODE
+} = require('../utils/attendancePolicy');
 
 const logActivity = async (action, entity, entityId, admin, companyId = null, details = {}) => {
     try {
@@ -147,6 +152,130 @@ const flattenObject = (obj, prefix = '') => {
     }, {});
 };
 
+const normalizeStringArray = (value) => (
+    Array.isArray(value)
+        ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))]
+        : []
+);
+
+const toBoolean = (value, fallback = false) => {
+    if (value === undefined) return fallback;
+    return value === true || value === 'true' || value === 'True' || value === 1 || value === '1';
+};
+
+const sanitizeAttendanceSelfService = (incoming = {}, current = {}) => ({
+    weeklyOff: toBoolean(incoming?.weeklyOff, current?.weeklyOff ?? true),
+    workingHours: toBoolean(incoming?.workingHours, current?.workingHours ?? true),
+    defaultAttendanceMode: toBoolean(incoming?.defaultAttendanceMode, current?.defaultAttendanceMode ?? true),
+    attendanceShifts: toBoolean(incoming?.attendanceShifts, current?.attendanceShifts ?? true),
+    exportFormat: toBoolean(incoming?.exportFormat, current?.exportFormat ?? true),
+    locationRules: toBoolean(incoming?.locationRules, current?.locationRules ?? true),
+    ipRules: toBoolean(incoming?.ipRules, current?.ipRules ?? true)
+});
+
+const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
+    const base = {
+        ...(current || {}),
+        ...(incoming || {})
+    };
+
+    const workingHours = Math.max(Number(base.workingHours) || Number(current?.workingHours) || 8, 1);
+    const attendanceShifts = normalizeShiftList({
+        attendanceShifts: incoming.attendanceShifts !== undefined
+            ? incoming.attendanceShifts
+            : current?.attendanceShifts,
+        workingHours
+    });
+    const requestedShiftCode = String(
+        base.defaultShiftCode || current?.defaultShiftCode || DEFAULT_SHIFT_CODE
+    ).trim().toLowerCase();
+    const defaultShiftCode = attendanceShifts.some((shift) => shift.code === requestedShiftCode)
+        ? requestedShiftCode
+        : (attendanceShifts[0]?.code || DEFAULT_SHIFT_CODE);
+    const latitude = base.coordinates?.lat !== undefined && base.coordinates?.lat !== ''
+        ? Number(base.coordinates.lat)
+        : undefined;
+    const longitude = base.coordinates?.lng !== undefined && base.coordinates?.lng !== ''
+        ? Number(base.coordinates.lng)
+        : undefined;
+
+    return {
+        ...(current || {}),
+        ...(incoming || {}),
+        weeklyOff: normalizeStringArray(base.weeklyOff).length > 0
+            ? normalizeStringArray(base.weeklyOff)
+            : ['Saturday', 'Sunday'],
+        workingHours,
+        selfService: sanitizeAttendanceSelfService(base.selfService, current?.selfService),
+        defaultShiftCode,
+        defaultAttendanceMode: base.defaultAttendanceMode === 'present_only'
+            ? 'present_only'
+            : DEFAULT_ATTENDANCE_MODE,
+        attendanceShifts,
+        exportFormat: String(base.exportFormat || current?.exportFormat || 'Standard'),
+        halfDayAllowed: toBoolean(base.halfDayAllowed, current?.halfDayAllowed ?? true),
+        requireLocationCheckIn: toBoolean(base.requireLocationCheckIn, current?.requireLocationCheckIn ?? false),
+        requireLocationCheckOut: toBoolean(base.requireLocationCheckOut, current?.requireLocationCheckOut ?? false),
+        locationCheck: toBoolean(base.locationCheck, current?.locationCheck ?? false),
+        ipCheck: toBoolean(base.ipCheck, current?.ipCheck ?? false),
+        allowedRadius: Math.max(Number(base.allowedRadius) || Number(current?.allowedRadius) || 200, 1),
+        coordinates: {
+            ...(current?.coordinates || {}),
+            ...(Number.isFinite(latitude) ? { lat: latitude } : {}),
+            ...(Number.isFinite(longitude) ? { lng: longitude } : {})
+        },
+        allowedIps: normalizeStringArray(base.allowedIps)
+    };
+};
+
+const buildCompanyEditableAttendanceInput = (incoming = {}, current = {}) => {
+    const controls = sanitizeAttendanceSelfService(current?.selfService, current?.selfService);
+    const editable = {};
+
+    if (controls.weeklyOff && incoming.weeklyOff !== undefined) {
+        editable.weeklyOff = incoming.weeklyOff;
+    }
+    if (controls.workingHours && incoming.workingHours !== undefined) {
+        editable.workingHours = incoming.workingHours;
+    }
+    if (controls.defaultAttendanceMode) {
+        if (incoming.defaultAttendanceMode !== undefined) {
+            editable.defaultAttendanceMode = incoming.defaultAttendanceMode;
+        }
+        if (incoming.defaultShiftCode !== undefined) {
+            editable.defaultShiftCode = incoming.defaultShiftCode;
+        }
+    }
+    if (controls.attendanceShifts) {
+        if (incoming.attendanceShifts !== undefined) {
+            editable.attendanceShifts = incoming.attendanceShifts;
+        }
+        if (incoming.defaultShiftCode !== undefined) {
+            editable.defaultShiftCode = incoming.defaultShiftCode;
+        }
+    }
+    if (controls.exportFormat && incoming.exportFormat !== undefined) {
+        editable.exportFormat = incoming.exportFormat;
+    }
+    if (controls.locationRules) {
+        ['requireLocationCheckIn', 'requireLocationCheckOut', 'locationCheck', 'allowedRadius', 'coordinates']
+            .forEach((key) => {
+                if (incoming[key] !== undefined) {
+                    editable[key] = incoming[key];
+                }
+            });
+    }
+    if (controls.ipRules) {
+        ['ipCheck', 'allowedIps'].forEach((key) => {
+            if (incoming[key] !== undefined) {
+                editable[key] = incoming[key];
+            }
+        });
+    }
+
+    return editable;
+};
+
 // PUT /api/superadmin/companies/:id
 const updateCompany = async (req, res) => {
     try {
@@ -222,9 +351,17 @@ const updateCompany = async (req, res) => {
 
         // --- Handle all other settings via flattening ---
         if (req.body.settings) {
-            const { timesheet, ...otherSettings } = req.body.settings;
+            const { timesheet, attendance, ...otherSettings } = req.body.settings;
 
-            // Flatten and apply the rest (attendance, themeColor, etc.)
+            if (attendance) {
+                const currentAttendance = company.settings?.attendance?.toObject
+                    ? company.settings.attendance.toObject()
+                    : (company.settings?.attendance || {});
+                company.settings.attendance = sanitizeAttendanceSettings(attendance, currentAttendance);
+                company.markModified('settings.attendance');
+            }
+
+            // Flatten and apply the rest (themeColor, etc.)
             const flattened = flattenObject(otherSettings, 'settings');
             console.log('[updateCompany] Flattened non-timesheet settings', flattened);
             Object.entries(flattened).forEach(([path, value]) => {
@@ -281,6 +418,78 @@ const updateCompany = async (req, res) => {
         res.json(company);
     } catch (err) {
         console.error('[updateCompany] ERROR:', err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// GET /api/admin/company-settings/attendance
+const getOwnAttendanceSettings = async (req, res) => {
+    try {
+        const company = req.company || await Company.findById(req.companyId).select('name settings.attendance').lean();
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        const attendance = sanitizeAttendanceSettings(
+            company?.settings?.attendance || {},
+            company?.settings?.attendance || {}
+        );
+
+        res.json({
+            companyId: req.companyId,
+            companyName: company.name,
+            attendance
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// PUT /api/admin/company-settings/attendance
+const updateOwnAttendanceSettings = async (req, res) => {
+    try {
+        const company = await Company.findById(req.companyId);
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        const incomingAttendance =
+            req.body?.attendance ||
+            req.body?.settings?.attendance ||
+            req.body ||
+            {};
+
+        if (!company.settings) {
+            company.settings = {};
+        }
+
+        const currentAttendance = company.settings.attendance?.toObject
+            ? company.settings.attendance.toObject()
+            : (company.settings.attendance || {});
+        const editableAttendanceInput = buildCompanyEditableAttendanceInput(incomingAttendance, currentAttendance);
+        company.settings.attendance = sanitizeAttendanceSettings(editableAttendanceInput, currentAttendance);
+        company.markModified('settings.attendance');
+        await company.save();
+
+        const actor = {
+            _id: req.user?._id,
+            name: `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || req.user?.email || 'Company Admin',
+            email: req.user?.email
+        };
+        await logActivity(
+            'COMPANY_ATTENDANCE_SETTINGS_UPDATED',
+            'Company',
+            company._id,
+            actor,
+            company._id,
+            { updatedKeys: Object.keys(editableAttendanceInput || {}) }
+        );
+
+        res.json({
+            message: 'Attendance settings updated successfully',
+            attendance: company.settings.attendance
+        });
+    } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
@@ -347,4 +556,14 @@ const getCompanyAnalytics = async (req, res) => {
     }
 };
 
-module.exports = { getAllCompanies, getCompanyById, createCompany, updateCompany, toggleCompanyStatus, deleteCompany, getCompanyAnalytics };
+module.exports = {
+    getAllCompanies,
+    getCompanyById,
+    createCompany,
+    updateCompany,
+    toggleCompanyStatus,
+    deleteCompany,
+    getCompanyAnalytics,
+    getOwnAttendanceSettings,
+    updateOwnAttendanceSettings
+};

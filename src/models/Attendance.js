@@ -23,6 +23,22 @@ const attendanceSchema = new mongoose.Schema({
     },
     clockInIST: String, // Explicit IST time string
     clockOutIST: String, // Explicit IST time string
+    attendanceMode: {
+        type: String,
+        enum: ['clock_in_out', 'present_only'],
+        default: 'clock_in_out'
+    },
+    shiftCode: String,
+    shiftName: String,
+    shiftType: {
+        type: String,
+        enum: ['general', 'any']
+    },
+    shiftStartTime: String,
+    shiftEndTime: String,
+    maxWorkingHours: Number,
+    autoCheckoutAt: Date,
+    autoCheckoutReason: String,
     status: {
         type: String,
         enum: ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE'],
