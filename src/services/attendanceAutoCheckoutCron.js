@@ -5,6 +5,23 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE || 'Asia/Kolkata';
 const AUTO_CHECKOUT_NOTE = '[Auto-checked out by system]';
 let autoCheckoutJobRunning = false;
 
+const getIstDateParts = (dateInput) => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: CRON_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    });
+    const formatted = formatter.format(new Date(dateInput));
+    const [year, month, day] = formatted.split('-');
+    return { year, month, day };
+};
+
+const buildIstEndOfDayDate = (dateInput) => {
+    const { year, month, day } = getIstDateParts(dateInput);
+    return new Date(`${year}-${month}-${day}T23:59:59+05:30`);
+};
+
 const getTodayBoundsInCronTimezone = (dateInput = new Date()) => {
     const zonedNow = new Date(dateInput.toLocaleString('en-US', { timeZone: CRON_TIMEZONE }));
     const start = new Date(zonedNow);
@@ -50,9 +67,8 @@ const startAutoCheckoutCron = () => {
             }
 
             const bulkUpdates = forgottenSessions.map(record => {
-                // Set clockOut to 23:59:59 of that day
-                const checkoutTime = new Date(record.date);
-                checkoutTime.setHours(23, 59, 59, 0);
+                // Set clockOut to 11:59:59 PM IST for the attendance date.
+                const checkoutTime = buildIstEndOfDayDate(record.date);
                 const nextNotes = record.notes?.includes(AUTO_CHECKOUT_NOTE)
                     ? record.notes
                     : (record.notes ? `${record.notes} ${AUTO_CHECKOUT_NOTE}` : AUTO_CHECKOUT_NOTE);
