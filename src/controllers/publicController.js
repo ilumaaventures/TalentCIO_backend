@@ -8,7 +8,7 @@ const Company = require('../models/Company');
 const HandoffToken = require('../models/HandoffToken');
 const { HiringRequest } = require('../models/HiringRequest');
 const PublicApplication = require('../models/PublicApplication');
-const { sendEmail } = require('../services/emailService');
+const { sendEmail, sendOTPEmail } = require('../services/emailService');
 const { computeProfileCompletion } = require('../utils/profileCompletion');
 
 const DEMO_REQUEST_RECIPIENT = process.env.DEMO_REQUEST_EMAIL || 'ilumaaventures@gmail.com';
@@ -316,6 +316,17 @@ const getApplicantWithCompletion = async (applicantId) => {
     }
 
     return { applicant, completion };
+};
+
+const issueFirstLoginOtp = async (user) => {
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otp = otpCode;
+    user.otpExpires = Date.now() + 10 * 60 * 1000;
+    await user.save();
+
+    sendOTPEmail(user.email, otpCode, user.firstName).catch((error) => {
+        console.error('[COMPANY LOGIN] Failed to send first-login OTP:', error.message);
+    });
 };
 
 exports.getPublicPlans = async (req, res) => {
@@ -1539,6 +1550,17 @@ exports.companyLogin = async (req, res) => {
             return res.status(401).json({ message: 'Invalid company, email, or password.' });
         }
 
+        if (user.isPasswordResetRequired) {
+            await issueFirstLoginOtp(user);
+            return res.json({
+                subdomain: company.subdomain,
+                companyName: company.name,
+                email: user.email,
+                passwordResetRequired: true,
+                message: 'Password reset required on first login. An OTP has been sent to your email.'
+            });
+        }
+
         const handoff = await HandoffToken.create({
             userId: user._id,
             companyId: company._id,
@@ -1592,10 +1614,20 @@ exports.exchangeHandoffToken = async (req, res) => {
         }
 
         const user = await User.findById(handoff.userId)
-            .select('_id email firstName lastName roles companyId tokenVersion isActive');
+            .select('_id email firstName lastName roles companyId tokenVersion isActive isPasswordResetRequired');
 
         if (!user || user.isActive === false) {
             return res.status(401).json({ message: 'Account not found or deactivated.' });
+        }
+
+        if (user.isPasswordResetRequired) {
+            await issueFirstLoginOtp(user);
+            return res.status(403).json({
+                message: 'Password reset required on first login. An OTP has been sent to your email.',
+                passwordResetRequired: true,
+                email: user.email,
+                subdomain: normalizedSubdomain
+            });
         }
 
         const jwtToken = jwt.sign(
