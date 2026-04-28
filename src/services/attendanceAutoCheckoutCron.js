@@ -12,18 +12,24 @@ const {
 const CRON_TIMEZONE = process.env.CRON_TIMEZONE || IST_TIMEZONE;
 const AUTO_CHECKOUT_NOTE = '[Auto-checked out by system]';
 let autoCheckoutJobRunning = false;
+let autoCheckoutTask = null;
+const isVerboseLoggingEnabled = process.env.ATTENDANCE_CRON_VERBOSE === 'true';
 
 const startAutoCheckoutCron = () => {
+    if (autoCheckoutTask) {
+        console.log('[CRON] Attendance auto-checkout is already scheduled. Skipping duplicate registration.');
+        return autoCheckoutTask;
+    }
+
     // Run every minute and close open sessions that crossed shift end,
     // max working hours, or the end of day in IST.
-    cron.schedule('0 * * * * *', async () => {
+    autoCheckoutTask = cron.schedule('0 * * * * *', async () => {
         if (autoCheckoutJobRunning) {
             console.warn('[CRON] Skipping auto-checkout because the previous cycle is still active.');
             return;
         }
 
         autoCheckoutJobRunning = true;
-        console.log('[CRON] Running shift-aware auto-checkout scan...');
         try {
             const openSessions = await Attendance.find({
                 clockIn: { $exists: true, $ne: null },
@@ -36,9 +42,10 @@ const startAutoCheckoutCron = () => {
                 .select('_id user companyId date clockIn notes autoCheckoutAt shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours')
                 .lean();
 
-            console.log(`[CRON] Found ${openSessions.length} open attendance sessions.`);
-
             if (openSessions.length === 0) {
+                if (isVerboseLoggingEnabled) {
+                    console.log('[CRON] Auto-checkout scan complete. No open attendance sessions found.');
+                }
                 return;
             }
 
@@ -110,6 +117,9 @@ const startAutoCheckoutCron = () => {
             });
 
             if (bulkUpdates.length === 0) {
+                if (isVerboseLoggingEnabled) {
+                    console.log(`[CRON] Auto-checkout scan found ${openSessions.length} open session(s), but none are due yet.`);
+                }
                 return;
             }
 
@@ -124,6 +134,9 @@ const startAutoCheckoutCron = () => {
     }, {
         timezone: CRON_TIMEZONE
     });
+
+    console.log(`[CRON] Attendance auto-checkout scheduled with timezone ${CRON_TIMEZONE}.`);
+    return autoCheckoutTask;
 };
 
 module.exports = startAutoCheckoutCron;
