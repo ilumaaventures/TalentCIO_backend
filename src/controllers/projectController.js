@@ -14,6 +14,17 @@ const isAdminUser = (req) => (req.user.roles || []).some(r => r.name === 'Admin'
 // --- Employees (Helper for Dropdowns) ---
 const getEmployees = async (req, res) => {
     try {
+        const canManageProjectDirectory = isAdminUser(req) || hasAnyPermission(req, [
+            'project.create',
+            'project.update',
+            'task.create',
+            'task.update'
+        ]);
+
+        if (!canManageProjectDirectory) {
+            return res.status(403).json({ message: 'Not authorized to view employee directory for projects' });
+        }
+
         res.set('Cache-Control', 'private, max-age=45, stale-while-revalidate=45');
         const users = await User.find({ companyId: req.companyId })
             .select('firstName lastName email')

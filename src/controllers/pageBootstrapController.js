@@ -25,6 +25,9 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
 };
 
+const hasPermission = (user, permission) => (user?.permissions || []).includes(permission);
+const hasAnyPermission = (user, permissions) => permissions.some((permission) => hasPermission(user, permission));
+
 const isAdminUser = (user) =>
     (user?.roles || []).some(r =>
         (typeof r === 'string' && r === 'Admin') ||
@@ -52,6 +55,76 @@ const canLoadUserList = (user) =>
     user?.permissions?.includes('timesheet.view') ||
     user?.permissions?.includes('*') ||
     (user?.directReports && user.directReports.length > 0);
+
+const canManageProjectDirectory = (user) =>
+    isAdminUser(user) ||
+    hasAnyPermission(user, ['project.create', 'project.update', 'task.create', 'task.update']);
+
+const buildProjectVisibilityFilter = async ({ requestUser, companyId }) => {
+    const filter = { companyId };
+    const canViewAll = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
+    const canViewAssigned = hasPermission(requestUser, 'project.view_assigned');
+    const canViewTeam = hasPermission(requestUser, 'project.view_team');
+
+    if (canViewAll) {
+        return filter;
+    }
+
+    if (!canViewAssigned && !canViewTeam) {
+        return { ...filter, _id: null };
+    }
+
+    const orConditions = [];
+    const assignedModuleIds = await Task.distinct('module', {
+        assignees: requestUser._id,
+        companyId
+    });
+    const taskProjectIds = assignedModuleIds.length > 0
+        ? await Module.distinct('project', {
+            _id: { $in: assignedModuleIds },
+            companyId
+        })
+        : [];
+
+    orConditions.push({ manager: requestUser._id });
+    orConditions.push({ members: requestUser._id });
+
+    if (taskProjectIds.length > 0) {
+        orConditions.push({ _id: { $in: taskProjectIds } });
+    }
+
+    if (canViewTeam) {
+        const directReports = await User.find({
+            reportingManagers: requestUser._id,
+            companyId
+        }).select('_id').lean();
+        const reportIds = directReports.map((user) => user._id);
+
+        if (reportIds.length > 0) {
+            orConditions.push({ manager: { $in: reportIds } });
+            orConditions.push({ members: { $in: reportIds } });
+
+            const teamAssignedModuleIds = await Task.distinct('module', {
+                assignees: { $in: reportIds },
+                companyId
+            });
+            const teamTaskProjectIds = teamAssignedModuleIds.length > 0
+                ? await Module.distinct('project', {
+                    _id: { $in: teamAssignedModuleIds },
+                    companyId
+                })
+                : [];
+
+            if (teamTaskProjectIds.length > 0) {
+                orConditions.push({ _id: { $in: teamTaskProjectIds } });
+            }
+        }
+    }
+
+    return orConditions.length > 0
+        ? { ...filter, $or: orConditions }
+        : { ...filter, _id: null };
+};
 
 const getInitialAccruedBalance = (policy) => {
     if (policy.accrualType === 'Yearly') {
@@ -635,24 +708,30 @@ exports.getHelpdeskBootstrap = async (req, res) => {
 exports.getProjectBootstrap = async (req, res) => {
     try {
         setPrivateCache(res, 30);
-        const canManageProjects = isAdminUser(req.user) ||
-            req.user?.permissions?.includes('project.create') ||
-            req.user?.permissions?.includes('project.update');
+        const canManageProjects = canManageProjectDirectory(req.user);
+        const projectFilter = await buildProjectVisibilityFilter({
+            requestUser: req.user,
+            companyId: req.companyId
+        });
 
         const [projects, clients, businessUnits, employees] = await Promise.all([
-            Project.find({ companyId: req.companyId })
+            Project.find(projectFilter)
                 .populate('client', 'name')
                 .populate('members', '_id')
                 .sort({ createdAt: -1 })
                 .lean(),
-            Client.find({ companyId: req.companyId })
-                .populate('businessUnit', 'name')
-                .sort({ name: 1 })
-                .lean(),
-            BusinessUnit.find({ companyId: req.companyId })
-                .populate('headOfUnit', 'firstName lastName')
-                .sort({ createdAt: -1 })
-                .lean(),
+            canManageProjects
+                ? Client.find({ companyId: req.companyId })
+                    .populate('businessUnit', 'name')
+                    .sort({ name: 1 })
+                    .lean()
+                : Promise.resolve([]),
+            canManageProjects
+                ? BusinessUnit.find({ companyId: req.companyId })
+                    .populate('headOfUnit', 'firstName lastName')
+                    .sort({ createdAt: -1 })
+                    .lean()
+                : Promise.resolve([]),
             canManageProjects
                 ? User.find({ companyId: req.companyId })
                     .select('firstName lastName email')
