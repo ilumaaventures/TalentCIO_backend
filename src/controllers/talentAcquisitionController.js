@@ -3,8 +3,12 @@ const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const User = require('../models/User');
 const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
+const EmailTemplate = require('../models/EmailTemplate');
+const PublicApplication = require('../models/PublicApplication');
 const mongoose = require('mongoose');
 const NotificationService = require('../services/notificationService');
+const { sendEmail } = require('../services/emailService');
+const { resolveTemplate } = require('../utils/templateResolver');
 
 
 // Helper to generate Request ID (e.g., HRR-2023-001)
@@ -43,6 +47,280 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
         .populate('approvals.final.approver', 'firstName lastName')
         .populate('interviewWorkflowId', 'name description rounds')
 );
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const buildCandidateFilterQuery = (filters = {}) => {
+    const query = {};
+    ['status', 'decision', 'phase2Decision', 'phase3Decision'].forEach((field) => {
+        const value = filters?.[field];
+        if (Array.isArray(value) && value.length) {
+            query[field] = { $in: value };
+        } else if (typeof value === 'string' && value.trim()) {
+            query[field] = value.trim();
+        }
+    });
+    return query;
+};
+
+const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyName, extras = {}) => ({
+    candidateName: candidate.candidateName || '',
+    email: candidate.email || '',
+    mobile: candidate.mobile || '',
+    jobTitle: hiringRequest?.roleDetails?.title || '',
+    client: hiringRequest?.client || '',
+    department: hiringRequest?.roleDetails?.department || '',
+    recruiterName: recruiterUser
+        ? `${recruiterUser.firstName || ''} ${recruiterUser.lastName || ''}`.trim()
+        : (candidate.profilePulledBy || ''),
+    companyName: companyName || '',
+    requestId: hiringRequest?.requestId || '',
+    currentStatus: candidate.status || '',
+    interviewDate: extras.interviewDate || '',
+    interviewLink: extras.interviewLink || '',
+    customNote: extras.customNote || ''
+});
+
+const createTransferredCandidateClone = async ({ candidate, targetHiringRequestId, performedBy, resetRemark }) => {
+    const newCandidateData = candidate.toObject ? candidate.toObject() : { ...candidate };
+    delete newCandidateData._id;
+    delete newCandidateData.createdAt;
+    delete newCandidateData.updatedAt;
+    delete newCandidateData.__v;
+
+    newCandidateData.hiringRequestId = targetHiringRequestId;
+    newCandidateData.isTransferred = true;
+    newCandidateData.transferredFrom = candidate.hiringRequestId;
+    newCandidateData.status = 'Interested';
+    newCandidateData.statusHistory = [{
+        status: 'Interested',
+        changedBy: performedBy,
+        changedAt: new Date(),
+        remark: resetRemark || 'Transferred from previous requisition'
+    }];
+    newCandidateData.decision = 'None';
+    newCandidateData.phase2Decision = 'None';
+    newCandidateData.phase3Decision = 'None';
+    newCandidateData.interviewRounds = [];
+
+    const clonedCandidate = new Candidate(newCandidateData);
+    await clonedCandidate.save();
+    return clonedCandidate;
+};
+
+const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisitionId, companyId, userId }) => {
+    if (!mongoose.Types.ObjectId.isValid(candidateId) || !mongoose.Types.ObjectId.isValid(targetRequisitionId)) {
+        const error = new Error('Invalid candidate or target requisition ID.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const candidate = await Candidate.findOne({ _id: candidateId, companyId });
+    if (!candidate) {
+        const error = new Error('Candidate not found.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const sourceRequestId = candidate.hiringRequestId?.toString();
+    if (sourceRequestId === String(targetRequisitionId)) {
+        const error = new Error('Candidate is already in the selected requisition.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const targetRequest = await HiringRequest.findOne({
+        _id: targetRequisitionId,
+        companyId,
+        status: 'Approved'
+    });
+
+    if (!targetRequest) {
+        const error = new Error('Target requisition not found or not active.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const existingTransfer = await Candidate.findOne({
+        companyId,
+        hiringRequestId: targetRequisitionId,
+        email: normalizeEmailAddress(candidate.email)
+    });
+
+    if (existingTransfer) {
+        const error = new Error('Candidate exists in the target requisition.');
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const newCandidate = await createTransferredCandidateClone({
+        candidate,
+        targetHiringRequestId: targetRequest._id,
+        performedBy: userId,
+        resetRemark: 'Transferred from another requisition'
+    });
+
+    await HRRAuditLog.create({
+        hiringRequestId: targetRequest._id,
+        action: 'CANDIDATE_TRANSFERRED',
+        performedBy: userId,
+        details: {
+            candidateId: candidate._id,
+            candidateEmail: candidate.email,
+            from: candidate.hiringRequestId,
+            to: targetRequest._id
+        }
+    });
+
+    return { candidate, newCandidate, targetRequest };
+};
+
+const resolveMassMailTemplate = async ({ companyId, templateId, customSubject, customHtmlBody }) => {
+    if (templateId) {
+        const template = await EmailTemplate.findOne({
+            _id: templateId,
+            companyId,
+            isActive: true
+        }).lean();
+
+        if (!template) {
+            const error = new Error('Email template not found.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        return {
+            template,
+            subject: template.subject,
+            htmlBody: template.htmlBody
+        };
+    }
+
+    if (!String(customSubject || '').trim() || !String(customHtmlBody || '').trim()) {
+        const error = new Error('Provide a template or custom subject and HTML body.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    return {
+        template: null,
+        subject: customSubject,
+        htmlBody: customHtmlBody
+    };
+};
+
+const sendMassMailForHiringRequest = async ({
+    companyId,
+    user,
+    hiringRequestId,
+    templateId,
+    customSubject,
+    customHtmlBody,
+    candidateIds = [],
+    filters = {},
+    customNote = ''
+}) => {
+    if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+        const error = new Error('Invalid hiring request ID.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId })
+        .populate('ownership.recruiter', 'firstName lastName email')
+        .lean();
+
+    if (!hiringRequest) {
+        const error = new Error('Hiring request not found.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const query = {
+        companyId,
+        hiringRequestId,
+        ...buildCandidateFilterQuery(filters)
+    };
+
+    if (Array.isArray(candidateIds) && candidateIds.length) {
+        query._id = {
+            $in: candidateIds.filter((id) => mongoose.Types.ObjectId.isValid(id))
+        };
+    }
+
+    const candidates = await Candidate.find(query).lean();
+    const company = await Company.findById(companyId).select('name').lean();
+    const { template, subject, htmlBody } = await resolveMassMailTemplate({
+        companyId,
+        templateId,
+        customSubject,
+        customHtmlBody
+    });
+
+    let sent = 0;
+    let failed = 0;
+    const failedEmails = [];
+
+    for (const [index, candidate] of candidates.entries()) {
+        const dataMap = buildCandidateDataMap(
+            candidate,
+            hiringRequest,
+            hiringRequest.ownership?.recruiter,
+            company?.name,
+            { customNote }
+        );
+
+        const resolvedSubject = resolveTemplate(subject, dataMap);
+        const resolvedHtml = resolveTemplate(htmlBody, dataMap);
+        const resolvedText = stripHtml(resolvedHtml);
+
+        const delivered = await sendEmail({
+            to: candidate.email,
+            subject: resolvedSubject,
+            html: resolvedHtml,
+            text: resolvedText
+        });
+
+        if (delivered) {
+            sent += 1;
+        } else {
+            failed += 1;
+            failedEmails.push({
+                candidateId: candidate._id,
+                email: candidate.email
+            });
+        }
+
+        if (candidates.length > 20 && index < candidates.length - 1) {
+            await wait(150);
+        }
+    }
+
+    await HRRAuditLog.create({
+        hiringRequestId: hiringRequest._id,
+        action: 'MASS_MAIL_SENT',
+        performedBy: user._id,
+        details: {
+            templateId: template?._id || templateId || null,
+            recipientCount: sent,
+            failedCount: failed,
+            filters,
+            candidateIds: Array.isArray(candidateIds) ? candidateIds : []
+        }
+    });
+
+    return {
+        hiringRequestId: hiringRequest._id,
+        requestId: hiringRequest.requestId,
+        sent,
+        failed,
+        failedEmails
+    };
+};
 
 // --- createHiringRequest ---
 exports.createHiringRequest = async (req, res) => {
@@ -847,6 +1125,146 @@ exports.transferCandidate = async (req, res) => {
     }
 };
 
+exports.transferCandidateToRequisition = async (req, res) => {
+    try {
+        const result = await transferCandidateToTargetRequisition({
+            candidateId: req.params.candidateId,
+            targetRequisitionId: req.params.targetRequisitionId,
+            companyId: req.companyId,
+            userId: req.user._id
+        });
+
+        res.status(201).json({
+            message: 'Candidate transferred successfully',
+            candidate: result.newCandidate,
+            from: result.candidate.hiringRequestId,
+            to: result.targetRequest._id
+        });
+    } catch (error) {
+        console.error('transferCandidateToRequisition error:', error);
+        res.status(error.statusCode || 500).json({ message: error.message || 'Failed to transfer candidate' });
+    }
+};
+
+exports.transferCandidatesBulk = async (req, res) => {
+    try {
+        const transfers = Array.isArray(req.body?.transfers) ? req.body.transfers : [];
+        if (!transfers.length) {
+            return res.status(400).json({ message: 'At least one transfer item is required.' });
+        }
+
+        let transferred = 0;
+        let skipped = 0;
+        const errors = [];
+
+        for (const item of transfers) {
+            try {
+                const candidate = await Candidate.findOne({ _id: item.candidateId, companyId: req.companyId }).lean();
+                if (!candidate) {
+                    throw Object.assign(new Error('Candidate not found.'), { statusCode: 404 });
+                }
+
+                if (item.fromRequisitionId && candidate.hiringRequestId?.toString() !== String(item.fromRequisitionId)) {
+                    throw Object.assign(new Error('Candidate does not belong to the provided source requisition.'), { statusCode: 400 });
+                }
+
+                await transferCandidateToTargetRequisition({
+                    candidateId: item.candidateId,
+                    targetRequisitionId: item.toRequisitionId,
+                    companyId: req.companyId,
+                    userId: req.user._id
+                });
+                transferred += 1;
+            } catch (error) {
+                skipped += 1;
+                errors.push({
+                    candidateId: item.candidateId,
+                    reason: error.message || 'Transfer failed'
+                });
+            }
+        }
+
+        res.status(200).json({ transferred, skipped, errors });
+    } catch (error) {
+        console.error('transferCandidatesBulk error:', error);
+        res.status(500).json({ message: 'Failed to bulk transfer candidates', error: error.message });
+    }
+};
+
+exports.sendMassMail = async (req, res) => {
+    try {
+        const result = await sendMassMailForHiringRequest({
+            companyId: req.companyId,
+            user: req.user,
+            hiringRequestId: req.params.id,
+            templateId: req.body?.templateId,
+            customSubject: req.body?.customSubject,
+            customHtmlBody: req.body?.customHtmlBody,
+            candidateIds: req.body?.candidateIds,
+            filters: req.body?.filters,
+            customNote: req.body?.customNote
+        });
+
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('sendMassMail error:', error);
+        res.status(error.statusCode || 500).json({ message: error.message || 'Failed to send mass mail' });
+    }
+};
+
+exports.sendMassMailBulk = async (req, res) => {
+    try {
+        const hiringRequestIds = Array.isArray(req.body?.hiringRequestIds) ? req.body.hiringRequestIds : [];
+        if (!hiringRequestIds.length) {
+            return res.status(400).json({ message: 'At least one hiring request is required.' });
+        }
+
+        const selectionMap = new Map(
+            (Array.isArray(req.body?.candidateSelections) ? req.body.candidateSelections : [])
+                .map((item) => [String(item.hiringRequestId), Array.isArray(item.candidateIds) ? item.candidateIds : []])
+        );
+
+        const results = [];
+        let sent = 0;
+        let failed = 0;
+        const failedEmails = [];
+
+        for (const hiringRequestId of hiringRequestIds) {
+            try {
+                const result = await sendMassMailForHiringRequest({
+                    companyId: req.companyId,
+                    user: req.user,
+                    hiringRequestId,
+                    templateId: req.body?.templateId,
+                    customSubject: req.body?.customSubject,
+                    customHtmlBody: req.body?.customHtmlBody,
+                    candidateIds: selectionMap.get(String(hiringRequestId)) || [],
+                    filters: req.body?.filters,
+                    customNote: req.body?.customNote
+                });
+
+                results.push(result);
+                sent += result.sent;
+                failed += result.failed;
+                failedEmails.push(...result.failedEmails);
+            } catch (error) {
+                results.push({
+                    hiringRequestId,
+                    sent: 0,
+                    failed: 0,
+                    failedEmails: [],
+                    error: error.message || 'Failed to send mail for this requisition'
+                });
+            }
+        }
+
+        res.status(200).json({ sent, failed, failedEmails, results });
+    } catch (error) {
+        console.error('sendMassMailBulk error:', error);
+        res.status(500).json({ message: 'Failed to send bulk mass mail', error: error.message });
+    }
+};
+
 // --- Analytics ---
 exports.getClientAnalytics = async (req, res) => {
     try {
@@ -1064,6 +1482,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             : allHiringRequests;
 
         const hrIds = hiringRequests.map(hr => hr._id);
+        const hiringRequestMap = new Map(hiringRequests.map((hr) => [hr._id.toString(), hr]));
 
         let candidateQuery = { hiringRequestId: { $in: hrIds } };
         if (startDate || endDate) {
@@ -1079,6 +1498,24 @@ exports.getGlobalAnalytics = async (req, res) => {
             .populate('hiringRequestId', 'client roleDetails.title roleDetails.department status createdAt closedAt hiringDetails')
             .populate('uploadedBy', 'firstName lastName')
             .lean();
+
+        const publicApplications = recruiter ? [] : await (async () => {
+            const publicApplicationQuery = {
+                companyId: req.companyId,
+                hiringRequestId: { $in: hrIds },
+                reviewStatus: { $ne: 'Transferred' }
+            };
+
+            if (startDate || endDate) {
+                publicApplicationQuery.createdAt = {};
+                if (startDate) publicApplicationQuery.createdAt.$gte = new Date(startDate);
+                if (endDate) publicApplicationQuery.createdAt.$lte = new Date(endDate);
+            }
+
+            return PublicApplication.find(publicApplicationQuery)
+                .select('hiringRequestId createdAt source')
+                .lean();
+        })();
 
         // Process Recruiter names correctly for filtering and display
         const getCandidateRecruiterName = (c) => {
@@ -1100,7 +1537,10 @@ exports.getGlobalAnalytics = async (req, res) => {
 
         // Identify active hiring requests after filtering candidates
         // This ensures stats like "Total Requisitions" match the filtered candidate activity
-        const activeHrIds = [...new Set(activeCandidates.map(c => c.hiringRequestId?._id?.toString()).filter(Boolean))];
+        const activeHrIds = [...new Set([
+            ...activeCandidates.map(c => c.hiringRequestId?._id?.toString()).filter(Boolean),
+            ...publicApplications.map(app => app.hiringRequestId?.toString()).filter(Boolean)
+        ])];
         const activeHrSet = new Set(activeHrIds);
 
         const filteredHiringRequests = (startDate || endDate || recruiter)
@@ -1246,6 +1686,39 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
         });
 
+        publicApplications.forEach((application) => {
+            const hrInfo = hiringRequestMap.get(application.hiringRequestId?.toString()) || {};
+            const dept = hrInfo.roleDetails?.department || 'General';
+            const clientName = hrInfo.client || 'General';
+            const reqId = hrInfo._id?.toString() || 'Unknown';
+            const src = application.source || 'Public Applications';
+
+            const monthObj = new Date(application.createdAt || new Date());
+            const month = `${monthObj.getFullYear()}-${String(monthObj.getMonth() + 1).padStart(2, '0')}`;
+
+            if (!monthlyTrend[month]) monthlyTrend[month] = { sourced: 0, interviews: 0, offers: 0, joined: 0 };
+            if (!deptAnalysis[dept]) deptAnalysis[dept] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
+            if (!clientAnalysis[clientName]) clientAnalysis[clientName] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
+            if (!sourceAnalysis[src]) sourceAnalysis[src] = { sourced: 0, joined: 0 };
+            if (!positionPerf[reqId]) {
+                positionPerf[reqId] = {
+                    title: hrInfo.roleDetails?.title || 'Unknown',
+                    client: clientName,
+                    open: hrInfo.hiringDetails?.openPositions || 1,
+                    sourced: 0,
+                    interviewed: 0,
+                    offered: 0,
+                    joined: 0
+                };
+            }
+
+            monthlyTrend[month].sourced++;
+            deptAnalysis[dept].sourced++;
+            clientAnalysis[clientName].sourced++;
+            sourceAnalysis[src].sourced++;
+            positionPerf[reqId].sourced++;
+        });
+
         // Time to fill (req based)
         filteredHiringRequests.forEach(hr => {
             if (hr.status === 'Closed' && hr.closedAt && hr.createdAt) {
@@ -1258,12 +1731,12 @@ exports.getGlobalAnalytics = async (req, res) => {
         let displayMetrics = {
             totalReqs: filteredHiringRequests.length,
             totalOpenPositions,
-            totalSourced: activeCandidates.length,
+            totalSourced: activeCandidates.length + publicApplications.length,
             interviewsScheduled,
             offersReleased,
             totalJoined,
             offerAcceptanceRate: offersReleased > 0 ? ((totalJoined / offersReleased) * 100).toFixed(1) : 0,
-            joiningConversionRate: activeCandidates.length > 0 ? ((totalJoined / activeCandidates.length) * 100).toFixed(1) : 0,
+            joiningConversionRate: (activeCandidates.length + publicApplications.length) > 0 ? ((totalJoined / (activeCandidates.length + publicApplications.length)) * 100).toFixed(1) : 0,
             avgTimeToHire: hiresWithTime > 0 ? Math.round(sumTimeToHireDays / hiresWithTime) : 0,
             avgTimeToFill: closedReqsCount > 0 ? Math.round(totalTimeToFill / closedReqsCount) : 0
         };
@@ -1272,10 +1745,10 @@ exports.getGlobalAnalytics = async (req, res) => {
             const ph1Shortlisted = activeCandidates.filter(c => c.decision === 'Shortlisted').length;
             displayMetrics = {
                 ...displayMetrics,
-                totalSourced: activeCandidates.length,
+                totalSourced: activeCandidates.length + publicApplications.length,
                 interviewsScheduled: activeCandidates.filter(c => c.interviewRounds?.some(r => r.phase === 1 && ['Scheduled', 'Passed', 'Failed'].includes(r.status))).length,
                 ph1Shortlisted,
-                conversionRate: activeCandidates.length > 0 ? ((ph1Shortlisted / activeCandidates.length) * 100).toFixed(1) : 0
+                conversionRate: (activeCandidates.length + publicApplications.length) > 0 ? ((ph1Shortlisted / (activeCandidates.length + publicApplications.length)) * 100).toFixed(1) : 0
             };
         } else if (phase === '2') {
             const ph1Selected = activeCandidates.filter(c => c.decision === 'Shortlisted').length;

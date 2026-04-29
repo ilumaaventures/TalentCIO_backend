@@ -59,6 +59,10 @@ router.patch('/hiring-request/:id/reject', protect, authorize(['ta.hiring_reques
 router.patch('/hiring-request/:id/close', protect, authorize('ta.hiring_request.manage'), taController.closeHiringRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorize('ta.edit'), taController.transferCandidate);
+router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorize('ta.edit'), taController.transferCandidateToRequisition);
+router.post('/transfer-candidates-bulk', protect, authorize(['ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
+router.post('/hiring-request/:id/send-mass-mail', protect, authorize(['ta.mass_mail', 'ta.edit']), taController.sendMassMail);
+router.post('/send-mass-mail-bulk', protect, authorize(['ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
 
 // Analytics
 router.get('/analytics/global', protect, taController.getGlobalAnalytics);

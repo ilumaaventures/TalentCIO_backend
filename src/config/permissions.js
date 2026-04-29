@@ -264,6 +264,21 @@ module.exports = [
         module: "TA",
         description: "Force approve or reject any hiring request regardless of workflow assignment"
     },
+    {
+        key: "ta.email_template.manage",
+        module: "TA",
+        description: "Create, edit, and archive TA email templates"
+    },
+    {
+        key: "ta.mass_mail",
+        module: "TA",
+        description: "Send mass email to TA candidates"
+    },
+    {
+        key: "ta.bulk_transfer",
+        module: "TA",
+        description: "Bulk transfer candidates across requisitions"
+    },
 
     // DISCUSSIONS
     {
