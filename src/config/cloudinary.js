@@ -47,4 +47,36 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({ storage: storage });
 
-module.exports = { upload, cloudinary };
+const profilePictureStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => ({
+        folder: 'profile_pictures',
+        resource_type: 'image',
+        public_id: `profile-${req.user?._id || 'user'}-${Date.now()}`,
+        transformation: [
+            {
+                width: 256,
+                height: 256,
+                crop: 'fill',
+                gravity: 'face',
+                quality: 'auto:eco',
+                fetch_format: 'auto'
+            }
+        ]
+    })
+});
+
+const uploadProfilePicture = multer({
+    storage: profilePictureStorage,
+    limits: {
+        fileSize: 2 * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+        if (!file.mimetype?.startsWith('image/')) {
+            return cb(new Error('Only image files are allowed for profile pictures.'));
+        }
+        cb(null, true);
+    }
+});
+
+module.exports = { upload, uploadProfilePicture, cloudinary };

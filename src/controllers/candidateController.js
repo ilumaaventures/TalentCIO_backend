@@ -1101,14 +1101,16 @@ exports.getMyScheduledInterviews = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        // Find all candidates that have an interview round assigned to the current user
-        // and its status is 'Scheduled' or 'Pending'
+        // Only return rounds that are actually scheduled for the interviewer.
+        // Some rounds are created in a "Pending" state before a date is set, and those
+        // should not appear in the "Upcoming Interviews" widgets.
         const candidates = await Candidate.find({
             companyId: req.companyId,
             'interviewRounds': {
                 $elemMatch: {
                     assignedTo: userId,
-                    status: { $in: ['Pending', 'Scheduled'] }
+                    status: { $in: ['Pending', 'Scheduled'] },
+                    scheduledDate: { $type: 'date' }
                 }
             }
         })
@@ -1120,9 +1122,9 @@ exports.getMyScheduledInterviews = async (req, res) => {
 
         candidates.forEach(candidate => {
             candidate.interviewRounds.forEach(round => {
-                // Check if this specific round is assigned to the requested user and is pending
+                const hasScheduledDate = Boolean(round.scheduledDate);
                 const isAssigned = round.assignedTo.some(id => id.toString() === userId.toString());
-                if (isAssigned && ['Pending', 'Scheduled'].includes(round.status)) {
+                if (isAssigned && hasScheduledDate && ['Pending', 'Scheduled'].includes(round.status)) {
                     scheduledInterviews.push({
                         candidateId: candidate._id,
                         candidateName: candidate.candidateName,
@@ -1133,7 +1135,8 @@ exports.getMyScheduledInterviews = async (req, res) => {
                         roundId: round._id,
                         levelName: round.levelName,
                         scheduledDate: round.scheduledDate,
-                        status: round.status
+                        status: 'Scheduled',
+                        rawStatus: round.status
                     });
                 }
             });

@@ -5,13 +5,13 @@ const { authLimiter } = require('../middlewares/rateLimitMiddleware');
 const { getMyself } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 
-const { upload } = require('../config/cloudinary');
+const { uploadProfilePicture: uploadProfilePictureMiddleware } = require('../config/cloudinary');
 
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, loginUser);
 router.post('/verify-otp-reset', authLimiter, verifyOtpAndResetPassword);
 router.post('/resend-otp', authLimiter, resendOtp);
-router.post('/upload-profile-picture', protect, upload.single('image'), uploadProfilePicture);
+router.post('/upload-profile-picture', protect, uploadProfilePictureMiddleware.single('image'), uploadProfilePicture);
 router.get('/profile', protect, getMyself);
 router.get('/verify-workspace', (req, res) => {
     // If req.company exists, it's a valid tenant.
