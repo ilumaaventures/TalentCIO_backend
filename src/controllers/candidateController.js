@@ -1133,6 +1133,7 @@ exports.getMyScheduledInterviews = async (req, res) => {
                         role: candidate.hiringRequestId?.roleDetails?.title || 'Unknown Role',
                         hiringRequestId: candidate.hiringRequestId?._id,
                         roundId: round._id,
+                        phase: round.phase || 1,
                         levelName: round.levelName,
                         scheduledDate: round.scheduledDate,
                         status: 'Scheduled',
