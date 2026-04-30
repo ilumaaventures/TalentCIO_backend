@@ -7,11 +7,23 @@ const { protect } = require('../middlewares/authMiddleware');
 
 const { uploadProfilePicture: uploadProfilePictureMiddleware } = require('../config/cloudinary');
 
+const handleProfilePictureUpload = (req, res, next) => {
+    uploadProfilePictureMiddleware.single('image')(req, res, (err) => {
+        if (!err) return next();
+
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({ message: 'Profile picture must be 2 MB or smaller.' });
+        }
+
+        return res.status(400).json({ message: err.message || 'Invalid profile picture upload.' });
+    });
+};
+
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, loginUser);
 router.post('/verify-otp-reset', authLimiter, verifyOtpAndResetPassword);
 router.post('/resend-otp', authLimiter, resendOtp);
-router.post('/upload-profile-picture', protect, uploadProfilePictureMiddleware.single('image'), uploadProfilePicture);
+router.post('/upload-profile-picture', protect, handleProfilePictureUpload, uploadProfilePicture);
 router.get('/profile', protect, getMyself);
 router.get('/verify-workspace', (req, res) => {
     // If req.company exists, it's a valid tenant.
