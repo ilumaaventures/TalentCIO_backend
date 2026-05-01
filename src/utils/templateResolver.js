@@ -14,6 +14,8 @@ const TEMPLATE_PLACEHOLDERS = [
     'customNote'
 ];
 
+const getSupportedPlaceholderTokens = (placeholders = TEMPLATE_PLACEHOLDERS) => placeholders.map((placeholder) => `{{${placeholder}}}`);
+
 const PLACEHOLDER_REGEX = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 const HTML_TAG_REGEX = /<\/?[a-z][\s\S]*>/i;
 const COMMON_PLACEHOLDER_BOUNDARY_REGEX = /\}(\s*)\{\{/g;
@@ -69,7 +71,7 @@ const validateTemplateSyntax = (template, allowedPlaceholders = TEMPLATE_PLACEHO
                 const { line, column } = getLineAndColumn(content, index);
                 return {
                     valid: false,
-                    message: `Unknown placeholder '${token}' at line ${line}:${column}.`
+                    message: `Unknown placeholder '${token}' at line ${line}:${column}. Supported placeholders: ${getSupportedPlaceholderTokens(allowedPlaceholders).join(', ')}.`
                 };
             }
 
@@ -118,6 +120,7 @@ module.exports = {
     PLACEHOLDER_REGEX,
     TEMPLATE_PLACEHOLDERS,
     formatTemplateBodyAsHtml,
+    getSupportedPlaceholderTokens,
     hasHtmlMarkup,
     normalizeTemplatePlaceholders,
     renderTemplateBody,
