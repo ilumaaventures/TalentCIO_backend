@@ -14,11 +14,19 @@ const TEMPLATE_PLACEHOLDERS = [
     'customNote'
 ];
 
+const getSupportedPlaceholderTokens = (placeholders = TEMPLATE_PLACEHOLDERS) => placeholders.map((placeholder) => `{{${placeholder}}}`);
+
 const PLACEHOLDER_REGEX = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 const HTML_TAG_REGEX = /<\/?[a-z][\s\S]*>/i;
+const COMMON_PLACEHOLDER_BOUNDARY_REGEX = /\}(\s*)\{\{/g;
+
+const normalizeTemplatePlaceholders = (template) => String(template || '').replace(
+    COMMON_PLACEHOLDER_BOUNDARY_REGEX,
+    '}}$1{{'
+);
 
 const getLineAndColumn = (input, index) => {
-    const content = String(input || '');
+    const content = normalizeTemplatePlaceholders(input);
     const lines = content.slice(0, index).split('\n');
     return {
         line: lines.length,
@@ -27,7 +35,7 @@ const getLineAndColumn = (input, index) => {
 };
 
 const validateTemplateSyntax = (template, allowedPlaceholders = TEMPLATE_PLACEHOLDERS) => {
-    const content = String(template || '');
+    const content = normalizeTemplatePlaceholders(template);
 
     for (let index = 0; index < content.length - 1; index += 1) {
         const currentPair = content.slice(index, index + 2);
@@ -63,7 +71,7 @@ const validateTemplateSyntax = (template, allowedPlaceholders = TEMPLATE_PLACEHO
                 const { line, column } = getLineAndColumn(content, index);
                 return {
                     valid: false,
-                    message: `Unknown placeholder '${token}' at line ${line}:${column}.`
+                    message: `Unknown placeholder '${token}' at line ${line}:${column}. Supported placeholders: ${getSupportedPlaceholderTokens(allowedPlaceholders).join(', ')}.`
                 };
             }
 
@@ -84,7 +92,7 @@ const validateTemplateSyntax = (template, allowedPlaceholders = TEMPLATE_PLACEHO
 };
 
 function resolveTemplate(template, data) {
-    return String(template || '').replace(PLACEHOLDER_REGEX, (_, key) => data[key] ?? '');
+    return normalizeTemplatePlaceholders(template).replace(PLACEHOLDER_REGEX, (_, key) => data[key] ?? '');
 }
 
 const hasHtmlMarkup = (content) => HTML_TAG_REGEX.test(String(content || ''));
@@ -108,10 +116,13 @@ const renderTemplateBody = (template, data) => formatTemplateBodyAsHtml(resolveT
 
 module.exports = {
     HTML_TAG_REGEX,
+    COMMON_PLACEHOLDER_BOUNDARY_REGEX,
     PLACEHOLDER_REGEX,
     TEMPLATE_PLACEHOLDERS,
     formatTemplateBodyAsHtml,
+    getSupportedPlaceholderTokens,
     hasHtmlMarkup,
+    normalizeTemplatePlaceholders,
     renderTemplateBody,
     resolveTemplate,
     validateTemplateSyntax
