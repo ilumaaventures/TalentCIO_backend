@@ -199,6 +199,11 @@ exports.createCandidate = async (req, res) => {
             interviewRounds
         } = req.body;
 
+        const normalizedSource = String(source || '').trim();
+        const normalizedReferralName = normalizedSource === 'Referral'
+            ? String(referralName || '').trim()
+            : '';
+
         // Verify hiring request exists
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
         if (!hiringRequest) {
@@ -229,7 +234,11 @@ exports.createCandidate = async (req, res) => {
 
             compareAndUpdate('candidateName', candidateName, 'Name');
             compareAndUpdate('mobile', mobile, 'Mobile');
-            compareAndUpdate('source', source, 'Source');
+            compareAndUpdate('source', normalizedSource, 'Source');
+            if (candidate.referralName !== normalizedReferralName) {
+                candidate.referralName = normalizedReferralName;
+                updatedFields.push('Referral Name');
+            }
             compareAndUpdate('profilePulledBy', profilePulledBy, 'Pulled By');
             compareAndUpdate('calledBy', calledBy, 'Called By');
             compareAndUpdate('rate', rate, 'Rate');
@@ -322,8 +331,8 @@ exports.createCandidate = async (req, res) => {
             candidateName,
             email,
             mobile,
-            source,
-            referralName,
+            source: normalizedSource,
+            referralName: normalizedReferralName,
             profilePulledBy,
             calledBy,
             rate,
@@ -609,6 +618,16 @@ exports.updateCandidate = async (req, res) => {
             'status', 'remark', 'decision', 'phase2Decision', 'phase3Decision', 'lastWorkingDay', 'resumeUrl', 'resumePublicId',
             'mustHaveSkills', 'niceToHaveSkills'
         ];
+
+        if (updateData.source !== undefined) {
+            updateData.source = String(updateData.source || '').trim();
+        }
+
+        if (updateData.referralName !== undefined || updateData.source === 'Referral') {
+            updateData.referralName = updateData.source === 'Referral'
+                ? String(updateData.referralName || '').trim()
+                : '';
+        }
 
         allowedUpdates.forEach(field => {
             if (updateData[field] !== undefined) {
