@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const EmailTemplate = require('../models/EmailTemplate');
+const { TEMPLATE_PLACEHOLDERS, validateTemplateSyntax } = require('../utils/templateResolver');
 
 const normalizeTemplatePayload = (body = {}) => ({
     name: String(body.name || '').trim(),
@@ -15,6 +16,16 @@ exports.createEmailTemplate = async (req, res) => {
 
         if (!payload.name || !payload.subject || !payload.htmlBody) {
             return res.status(400).json({ message: 'Name, subject, and HTML body are required.' });
+        }
+
+        const subjectValidation = validateTemplateSyntax(payload.subject, TEMPLATE_PLACEHOLDERS);
+        if (!subjectValidation.valid) {
+            return res.status(400).json({ message: `Subject error: ${subjectValidation.message}` });
+        }
+
+        const bodyValidation = validateTemplateSyntax(payload.htmlBody, TEMPLATE_PLACEHOLDERS);
+        if (!bodyValidation.valid) {
+            return res.status(400).json({ message: `HTML body error: ${bodyValidation.message}` });
         }
 
         const template = await EmailTemplate.create({
@@ -85,6 +96,16 @@ exports.updateEmailTemplate = async (req, res) => {
 
         if (!payload.name || !payload.subject || !payload.htmlBody) {
             return res.status(400).json({ message: 'Name, subject, and HTML body are required.' });
+        }
+
+        const subjectValidation = validateTemplateSyntax(payload.subject, TEMPLATE_PLACEHOLDERS);
+        if (!subjectValidation.valid) {
+            return res.status(400).json({ message: `Subject error: ${subjectValidation.message}` });
+        }
+
+        const bodyValidation = validateTemplateSyntax(payload.htmlBody, TEMPLATE_PLACEHOLDERS);
+        if (!bodyValidation.valid) {
+            return res.status(400).json({ message: `HTML body error: ${bodyValidation.message}` });
         }
 
         const template = await EmailTemplate.findOneAndUpdate(

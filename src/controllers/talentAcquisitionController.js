@@ -8,7 +8,13 @@ const PublicApplication = require('../models/PublicApplication');
 const mongoose = require('mongoose');
 const NotificationService = require('../services/notificationService');
 const { sendEmail } = require('../services/emailService');
-const { resolveTemplate } = require('../utils/templateResolver');
+const {
+    TEMPLATE_PLACEHOLDERS,
+    hasHtmlMarkup,
+    renderTemplateBody,
+    resolveTemplate,
+    validateTemplateSyntax
+} = require('../utils/templateResolver');
 
 
 // Helper to generate Request ID (e.g., HRR-2023-001)
@@ -193,15 +199,46 @@ const resolveMassMailTemplate = async ({ companyId, templateId, customSubject, c
             throw error;
         }
 
+        const subjectToUse = String(customSubject || '').trim() ? customSubject : template.subject;
+        const bodyToUse = String(customHtmlBody || '').trim() ? customHtmlBody : template.htmlBody;
+
+        const subjectValidation = validateTemplateSyntax(subjectToUse, TEMPLATE_PLACEHOLDERS);
+        if (!subjectValidation.valid) {
+            const error = new Error(`Saved template subject is invalid. ${subjectValidation.message}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const bodyValidation = validateTemplateSyntax(bodyToUse, TEMPLATE_PLACEHOLDERS);
+        if (!bodyValidation.valid) {
+            const error = new Error(`Saved template HTML body is invalid. ${bodyValidation.message}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
         return {
             template,
-            subject: template.subject,
-            htmlBody: template.htmlBody
+            subject: subjectToUse,
+            htmlBody: bodyToUse
         };
     }
 
     if (!String(customSubject || '').trim() || !String(customHtmlBody || '').trim()) {
         const error = new Error('Provide a template or custom subject and HTML body.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const subjectValidation = validateTemplateSyntax(customSubject, TEMPLATE_PLACEHOLDERS);
+    if (!subjectValidation.valid) {
+        const error = new Error(`Custom subject is invalid. ${subjectValidation.message}`);
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const bodyValidation = validateTemplateSyntax(customHtmlBody, TEMPLATE_PLACEHOLDERS);
+    if (!bodyValidation.valid) {
+        const error = new Error(`Custom HTML body is invalid. ${bodyValidation.message}`);
         error.statusCode = 400;
         throw error;
     }
@@ -275,8 +312,9 @@ const sendMassMailForHiringRequest = async ({
         );
 
         const resolvedSubject = resolveTemplate(subject, dataMap);
-        const resolvedHtml = resolveTemplate(htmlBody, dataMap);
-        const resolvedText = stripHtml(resolvedHtml);
+        const resolvedBody = resolveTemplate(htmlBody, dataMap);
+        const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+        const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
 
         const delivered = await sendEmail({
             to: candidate.email,
