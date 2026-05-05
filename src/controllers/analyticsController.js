@@ -13,6 +13,8 @@ const getGlobalAnalytics = async (req, res) => {
         const totalHiring = await HiringRequest.countDocuments();
         const totalTickets = await HelpdeskQuery.countDocuments();
 
+
+        
         // Company growth last 12 months
         const now = new Date();
         const companyGrowth = [];
