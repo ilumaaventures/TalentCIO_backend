@@ -129,7 +129,7 @@ const loginUser = async (req, res) => {
         // Wildcard Expansion: If user has '*', provide ALL permissions
         let hasAllPermissions = false;
         const Permission = require('../models/Permission');
-        let totalPerms = 0, directReportsCount = 0, taCount = 0;
+        let totalPerms = 0, directReportsCount = 0, taCount = 0, analyticsViewerCount = 0;
 
         if (permissions.includes('*')) {
             hasAllPermissions = true;
@@ -140,27 +140,37 @@ const loginUser = async (req, res) => {
             permissions = [...new Set([...permissions, ...allKeys])];
 
             // Run auth queries in parallel
-            [directReportsCount, taCount] = await Promise.all([
+            [directReportsCount, taCount, analyticsViewerCount] = await Promise.all([
                 User.countDocuments({ reportingManagers: user._id }),
                 HiringRequest.countDocuments({
+                    companyId: user.companyId,
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
                         { 'ownership.recruiter': user._id }
                     ]
+                }),
+                HiringRequest.countDocuments({
+                    companyId: user.companyId,
+                    analyticsViewers: user._id
                 })
             ]);
         } else {
             // Run auth queries in parallel
-            [totalPerms, directReportsCount, taCount] = await Promise.all([
+            [totalPerms, directReportsCount, taCount, analyticsViewerCount] = await Promise.all([
                 Permission.countDocuments({ key: { $ne: '*' } }),
                 User.countDocuments({ reportingManagers: user._id }),
                 HiringRequest.countDocuments({
+                    companyId: user.companyId,
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
                         { 'ownership.recruiter': user._id }
                     ]
+                }),
+                HiringRequest.countDocuments({
+                    companyId: user.companyId,
+                    analyticsViewers: user._id
                 })
             ]);
 
@@ -192,6 +202,7 @@ const loginUser = async (req, res) => {
             hasAllPermissions: hasAllPermissions,
             directReportsCount: directReportsCount,
             isTAParticipant: taCount > 0 || isInterviewer,
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
             company: company, // Full configuration for the frontend
             token: generateToken(user._id, user.tokenVersion)
         });

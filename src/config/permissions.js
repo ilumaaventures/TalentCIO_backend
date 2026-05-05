@@ -279,6 +279,11 @@ module.exports = [
         module: "TA",
         description: "Bulk transfer candidates across requisitions"
     },
+    {
+        key: "ta.analytics.global",
+        module: "TA",
+        description: "View performance analytics for the entire TA module"
+    },
 
     // DISCUSSIONS
     {

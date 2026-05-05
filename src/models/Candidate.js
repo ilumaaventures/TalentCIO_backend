@@ -1,4 +1,49 @@
 const mongoose = require('mongoose');
+const { buildInitialDynamicPhaseState } = require('../utils/phaseTemplateUtils');
+
+const phaseHistorySchema = new mongoose.Schema({
+    phaseId: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: true
+    },
+    phaseName: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    phaseOrder: {
+        type: Number,
+        required: true
+    },
+    status: {
+        type: String,
+        default: ''
+    },
+    decision: {
+        type: String,
+        default: 'None'
+    },
+    enteredAt: {
+        type: Date,
+        default: Date.now
+    },
+    exitedAt: {
+        type: Date,
+        default: null
+    },
+    assignedTo: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
+    notes: {
+        type: String,
+        default: ''
+    },
+    metadata: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    }
+});
 
 const candidateSchema = new mongoose.Schema({
     hiringRequestId: {
@@ -237,13 +282,23 @@ const candidateSchema = new mongoose.Schema({
     // Hiring Decision
     decision: {
         type: String,
-        enum: ['Shortlisted', 'Rejected', 'On Hold', 'None', '']
+        enum: ['Shortlisted', 'Profile Shared', 'Rejected', 'On Hold', 'None', '']
+    },
+
+    profileShared: {
+        type: Boolean,
+        default: false
     },
 
     // Phase 2 Client Decision
     phase2Decision: {
         type: String,
         enum: ['Shortlisted', 'Selected', 'Rejected', 'On Hold', 'None', '']
+    },
+
+    phase2InterviewerFeedback: {
+        type: String,
+        trim: true
     },
 
     // Phase 3 Offer & Onboarding Decision
@@ -273,7 +328,28 @@ const candidateSchema = new mongoose.Schema({
         skill: { type: String, required: true },
         rating: { type: Number, min: 0, max: 10, default: 0 },
         category: { type: String, enum: ['Must-Have', 'Nice-To-Have', 'Additional'], default: 'Additional' }
-    }]
+    }],
+
+    phaseHistory: {
+        type: [phaseHistorySchema],
+        default: []
+    },
+    currentPhaseId: {
+        type: mongoose.Schema.Types.ObjectId,
+        index: true
+    },
+    currentPhaseOrder: {
+        type: Number,
+        index: true
+    },
+    currentPhaseStatus: {
+        type: String,
+        default: ''
+    },
+    currentPhaseName: {
+        type: String,
+        default: ''
+    }
 }, {
     timestamps: true
 });
@@ -284,11 +360,48 @@ candidateSchema.index({ hiringRequestId: 1, email: 1 }, { unique: true });
 // Performance Indexes
 candidateSchema.index({ hiringRequestId: 1, status: 1 });
 candidateSchema.index({ hiringRequestId: 1, decision: 1 });
+candidateSchema.index({ hiringRequestId: 1, profileShared: 1 });
 candidateSchema.index({ hiringRequestId: 1, phase2Decision: 1 });
 candidateSchema.index({ hiringRequestId: 1, phase3Decision: 1 });
 candidateSchema.index({ companyId: 1, createdAt: -1 });
+candidateSchema.index({ companyId: 1, uploadedBy: 1, createdAt: -1 });
 candidateSchema.index({ companyId: 1, 'interviewRounds.assignedTo': 1 });
+candidateSchema.index({ currentPhaseId: 1, hiringRequestId: 1 });
+candidateSchema.index({ currentPhaseOrder: 1, hiringRequestId: 1 });
+candidateSchema.index({ companyId: 1, currentPhaseId: 1 });
 
+candidateSchema.methods.getCurrentPhaseEntry = function getCurrentPhaseEntry() {
+    return this.phaseHistory.find((phase) => !phase.exitedAt);
+};
+
+candidateSchema.pre('save', async function candidatePreSave() {
+    if (!this.isNew || (Array.isArray(this.phaseHistory) && this.phaseHistory.length > 0)) {
+        return;
+    }
+
+    const { HiringRequest } = require('./HiringRequest');
+    const hiringRequest = await HiringRequest.findOne({
+        _id: this.hiringRequestId,
+        companyId: this.companyId
+    }).select('useDynamicPhases phases ownership');
+
+    if (!hiringRequest) {
+        return;
+    }
+
+    const initialDynamicState = buildInitialDynamicPhaseState(
+        hiringRequest,
+        hiringRequest.ownership?.recruiter ? [hiringRequest.ownership.recruiter] : []
+    );
+
+    if (initialDynamicState.phaseHistory?.length) {
+        this.phaseHistory = initialDynamicState.phaseHistory;
+        this.currentPhaseId = initialDynamicState.currentPhaseId;
+        this.currentPhaseOrder = initialDynamicState.currentPhaseOrder;
+        this.currentPhaseStatus = initialDynamicState.currentPhaseStatus;
+        this.currentPhaseName = initialDynamicState.currentPhaseName;
+    }
+});
 
 
 module.exports = mongoose.model('Candidate', candidateSchema);

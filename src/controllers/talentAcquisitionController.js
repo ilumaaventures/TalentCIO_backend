@@ -5,6 +5,7 @@ const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const EmailTemplate = require('../models/EmailTemplate');
 const PublicApplication = require('../models/PublicApplication');
+const PhaseTemplate = require('../models/PhaseTemplate');
 const mongoose = require('mongoose');
 const NotificationService = require('../services/notificationService');
 const { sendEmail } = require('../services/emailService');
@@ -15,6 +16,20 @@ const {
     resolveTemplate,
     validateTemplateSyntax
 } = require('../utils/templateResolver');
+const { copyTemplatePhasesForHiringRequest } = require('../utils/phaseTemplateUtils');
+const {
+    buildAccessibleHiringRequestQuery,
+    canAccessHiringRequest,
+    isHiringRequestAdmin
+} = require('../utils/hiringRequestAccess');
+const {
+    buildAccessibleCandidateQuery,
+    canAccessCandidate
+} = require('../utils/candidateAccess');
+const {
+    buildAnalyticsHiringRequestQuery,
+    hasGlobalTAAnalyticsAccess
+} = require('../utils/taAnalyticsAccess');
 
 
 // Helper to generate Request ID (e.g., HRR-2023-001)
@@ -34,6 +49,8 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
     HiringRequest.findOne({ _id: requestId, companyId })
         .populate('ownership.hiringManager', 'firstName lastName email')
         .populate('ownership.recruiter', 'firstName lastName email')
+        .populate('assignedUsers', 'firstName lastName email employeeCode')
+        .populate('analyticsViewers', 'firstName lastName email employeeCode')
         .populate('roleDetails.reportingManager', 'firstName lastName')
         .populate('createdBy', 'firstName lastName')
         .populate('workflowId', 'name description')
@@ -52,6 +69,7 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
         .populate('approvals.l1.approver', 'firstName lastName')
         .populate('approvals.final.approver', 'firstName lastName')
         .populate('interviewWorkflowId', 'name description rounds')
+        .populate('phaseTemplateId', 'name description isDefault')
 );
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,7 +136,7 @@ const createTransferredCandidateClone = async ({ candidate, targetHiringRequestI
     return clonedCandidate;
 };
 
-const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisitionId, companyId, userId }) => {
+const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisitionId, companyId, user }) => {
     if (!mongoose.Types.ObjectId.isValid(candidateId) || !mongoose.Types.ObjectId.isValid(targetRequisitionId)) {
         const error = new Error('Invalid candidate or target requisition ID.');
         error.statusCode = 400;
@@ -129,6 +147,12 @@ const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisi
     if (!candidate) {
         const error = new Error('Candidate not found.');
         error.statusCode = 404;
+        throw error;
+    }
+
+    if (!canAccessCandidate(candidate, user)) {
+        const error = new Error('Forbidden: You do not have permission to transfer this candidate.');
+        error.statusCode = 403;
         throw error;
     }
 
@@ -166,14 +190,14 @@ const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisi
     const newCandidate = await createTransferredCandidateClone({
         candidate,
         targetHiringRequestId: targetRequest._id,
-        performedBy: userId,
+        performedBy: user._id,
         resetRemark: 'Transferred from another requisition'
     });
 
     await HRRAuditLog.create({
         hiringRequestId: targetRequest._id,
         action: 'CANDIDATE_TRANSFERRED',
-        performedBy: userId,
+        performedBy: user._id,
         details: {
             candidateId: candidate._id,
             candidateEmail: candidate.email,
@@ -277,11 +301,10 @@ const sendMassMailForHiringRequest = async ({
         throw error;
     }
 
-    const query = {
-        companyId,
+    const query = buildAccessibleCandidateQuery(companyId, user, {
         hiringRequestId,
         ...buildCandidateFilterQuery(filters)
-    };
+    });
 
     if (Array.isArray(candidateIds) && candidateIds.length) {
         query._id = {
@@ -363,7 +386,23 @@ const sendMassMailForHiringRequest = async ({
 // --- createHiringRequest ---
 exports.createHiringRequest = async (req, res) => {
     try {
-        const { client, clientConfidential, roleDetails, purpose, requirements, hiringDetails, ownership, replacementDetails, interviewWorkflowId, previousRequestId, jobDescription, jobDescriptionFile } = req.body;
+        const {
+            client,
+            clientConfidential,
+            roleDetails,
+            purpose,
+            requirements,
+            hiringDetails,
+            ownership,
+            replacementDetails,
+            interviewWorkflowId,
+            previousRequestId,
+            jobDescription,
+            jobDescriptionFile,
+            phaseTemplateId,
+            assignedUsers,
+            analyticsViewers
+        } = req.body;
         const submitNow = req.query.submit === 'true';
 
         // validations...
@@ -388,6 +427,23 @@ exports.createHiringRequest = async (req, res) => {
             approvers: l.approvers || []
         })).sort((a, b) => a.level - b.level) : [];
 
+        let templateReference;
+        let copiedPhases = [];
+
+        if (phaseTemplateId) {
+            templateReference = await PhaseTemplate.findOne({
+                _id: phaseTemplateId,
+                companyId: req.companyId,
+                isActive: true
+            }).lean();
+
+            if (!templateReference) {
+                return res.status(404).json({ message: 'Selected phase template not found' });
+            }
+
+            copiedPhases = copyTemplatePhasesForHiringRequest(templateReference.phases || []);
+        }
+
         const newRequest = new HiringRequest({
             requestId,
             client,
@@ -401,6 +457,12 @@ exports.createHiringRequest = async (req, res) => {
                 ...ownership,
                 hiringManager: req.user._id // Assumption: The logged in user is the HM or creating on behalf.
             },
+            assignedUsers: Array.isArray(assignedUsers)
+                ? [...new Set(assignedUsers.map((userId) => String(userId)).filter(Boolean))]
+                : [],
+            analyticsViewers: Array.isArray(analyticsViewers)
+                ? [...new Set(analyticsViewers.map((userId) => String(userId)).filter(Boolean))]
+                : [],
             approvalChain: approvals,
             workflowId: workflow?._id, // Save the workflow ID
             interviewWorkflowId: interviewWorkflowId || undefined,
@@ -410,7 +472,10 @@ exports.createHiringRequest = async (req, res) => {
             companyId: req.companyId,
             previousRequestId: previousRequestId || undefined,
             jobDescription,
-            jobDescriptionFile
+            jobDescriptionFile,
+            phaseTemplateId: templateReference?._id,
+            phases: copiedPhases,
+            useDynamicPhases: copiedPhases.length > 0
         });
 
         if (submitNow) {
@@ -460,37 +525,47 @@ exports.createHiringRequest = async (req, res) => {
     }
 };
 
+exports.getHiringRequestPhases = async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        }).select('phases useDynamicPhases phaseTemplateId requestId roleDetails.title createdBy ownership approvalChain assignedUsers');
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
+        }
+
+        res.status(200).json({
+            success: true,
+            useDynamicPhases: Boolean(hiringRequest.useDynamicPhases && hiringRequest.phases?.length),
+            phaseTemplateId: hiringRequest.phaseTemplateId || null,
+            phases: hiringRequest.phases || []
+        });
+    } catch (error) {
+        console.error('getHiringRequestPhases error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch hiring request phases', error: error.message });
+    }
+};
+
 // --- getHiringRequests ---
 exports.getHiringRequests = async (req, res) => {
     try {
         setNoCache(res);
         const { status, page = 1, limit = 10, client } = req.query;
-        let query = { companyId: req.companyId };
+        const query = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
 
         if (status) query.status = status;
         if (client) query.client = client;
-
-        // Use permissions to filter what they see
-        // Admin/HR sees all. ta.view sees all. Manager sees own.
-        const isAdmin = req.user.roles.some(r => r.name === 'Admin' || r.name === 'HR' || r.name === 'Super Admin');
-        const userPermissions = req.user.roles.flatMap(role => (role.permissions || []).map(p => p.key));
-        const hasTaView = userPermissions.includes('ta.view') || userPermissions.includes('*');
-
-        if (!isAdmin && !hasTaView) {
-            // Find HRRs where the user is assigned to a candidate's interview round (granular)
-            const candidatesWithUserAsInterviewer = await Candidate.find({
-                'interviewRounds.assignedTo': req.user._id
-            }).select('hiringRequestId').lean();
-
-            const interviewHiringRequestIds = candidatesWithUserAsInterviewer.map(c => c.hiringRequestId);
-
-            query['$or'] = [
-                { createdBy: req.user._id },
-                { 'ownership.hiringManager': req.user._id },
-                { 'ownership.recruiter': req.user._id },
-                { _id: { $in: interviewHiringRequestIds } } // Only HRRs where they have a specific candidate interview assignment
-            ];
-        }
 
         const pageNumber = parseInt(page);
         const limitNumber = parseInt(limit);
@@ -502,6 +577,8 @@ exports.getHiringRequests = async (req, res) => {
         const requests = await HiringRequest.find(query)
             .populate('ownership.hiringManager', 'firstName lastName')
             .populate('ownership.recruiter', 'firstName lastName')
+            .populate('assignedUsers', 'firstName lastName email employeeCode')
+            .populate('analyticsViewers', 'firstName lastName email employeeCode')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNumber)
@@ -530,25 +607,9 @@ exports.getHiringRequestById = async (req, res) => {
 
         if (!request) return res.status(404).json({ message: 'Not found' });
 
-        // Authorization check
-        const isAdmin = req.user.roles.some(r => r.name === 'Admin' || r.name === 'HR' || r.name === 'Super Admin');
-        const userPermissions = req.user.roles.flatMap(role => (role.permissions || []).map(p => p.key));
-        const hasTaView = userPermissions.includes('ta.view') || userPermissions.includes('*');
-
-        if (!isAdmin && !hasTaView) {
-            const isCreator = request.createdBy?._id?.toString() === req.user._id.toString();
-            const isHiringManager = request.ownership?.hiringManager?._id?.toString() === req.user._id.toString();
-            const isRecruiter = request.ownership?.recruiter?._id?.toString() === req.user._id.toString();
-
-            // Check if user is an assigned interviewer for any candidate in this request (granular check)
-            const isInterviewer = await Candidate.exists({
-                hiringRequestId: request._id,
-                'interviewRounds.assignedTo': req.user._id
-            });
-
-            if (!isCreator && !isHiringManager && !isRecruiter && !isInterviewer) {
-                return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
-            }
+        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
         res.status(200).json(request);
@@ -567,6 +628,11 @@ exports.updateHiringRequest = async (req, res) => {
         const request = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
         if (!request) return res.status(404).json({ message: 'Not found' });
 
+        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to edit this request' });
+        }
+
         if (request.status === 'Closed') {
             return res.status(400).json({ message: 'Cannot edit a closed request' });
         }
@@ -575,12 +641,19 @@ exports.updateHiringRequest = async (req, res) => {
         const allowedUpdates = [
             'client', 'clientConfidential', 'roleDetails', 'purpose', 'requirements',
             'hiringDetails', 'replacementDetails', 'ownership', 'interviewWorkflowId',
-            'jobDescription', 'jobDescriptionFile'
+            'jobDescription', 'jobDescriptionFile', 'candidateCardVisibility', 'candidateDropdownVisibility',
+            'assignedUsers', 'analyticsViewers'
         ];
 
         allowedUpdates.forEach(field => {
             if (updates[field] !== undefined) {
-                request[field] = updates[field];
+                if (field === 'assignedUsers' || field === 'analyticsViewers') {
+                    request[field] = Array.isArray(updates[field])
+                        ? [...new Set(updates[field].map((userId) => String(userId)).filter(Boolean))]
+                        : [];
+                } else {
+                    request[field] = updates[field];
+                }
             }
         });
 
@@ -884,6 +957,14 @@ exports.closeHiringRequest = async (req, res) => {
     try {
         const { id } = req.params;
 
+        const existingRequest = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
+        if (!existingRequest) return res.status(404).json({ message: 'Not found' });
+
+        const hasAccess = await canAccessHiringRequest(existingRequest, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to close this request' });
+        }
+
         const request = await HiringRequest.findOneAndUpdate(
             { _id: id, companyId: req.companyId },
             { status: 'Closed', closedAt: new Date() },
@@ -937,6 +1018,11 @@ exports.toggleJobVisibility = async (req, res) => {
 
         if (!request) {
             return res.status(404).json({ message: 'Job not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
         }
 
         if (request.status !== 'Approved') {
@@ -1034,8 +1120,18 @@ exports.toggleJobVisibility = async (req, res) => {
 exports.getPreviousCandidates = async (req, res) => {
     try {
         const { id } = req.params;
-        const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId }).select('previousRequestId');
-        if (!currentReq || !currentReq.previousRequestId) {
+        const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId })
+            .select('previousRequestId createdBy ownership approvalChain assignedUsers');
+        if (!currentReq) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(currentReq, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
+        }
+
+        if (!currentReq.previousRequestId) {
             return res.status(200).json([]);
         }
 
@@ -1054,16 +1150,18 @@ exports.getPreviousCandidates = async (req, res) => {
 
         // Fetch candidates for each requisition and group them
         const groups = await Promise.all(
-            legacyRequisitions.map(async (req) => {
-                const candidates = await Candidate.find({ hiringRequestId: req._id }).lean();
+            legacyRequisitions.map(async (legacyRequisition) => {
+                const candidates = await Candidate.find(buildAccessibleCandidateQuery(req.companyId, req.user, {
+                    hiringRequestId: legacyRequisition._id
+                })).lean();
                 return {
                     requisition: {
-                        _id: req._id,
-                        requestId: req.requestId,
-                        status: req.status,
-                        createdAt: req.createdAt,
-                        closedAt: req.closedAt,
-                        title: req.roleDetails?.title
+                        _id: legacyRequisition._id,
+                        requestId: legacyRequisition.requestId,
+                        status: legacyRequisition.status,
+                        createdAt: legacyRequisition.createdAt,
+                        closedAt: legacyRequisition.closedAt,
+                        title: legacyRequisition.roleDetails?.title
                     },
                     candidates
                 };
@@ -1105,6 +1203,10 @@ exports.transferCandidate = async (req, res) => {
         const candidate = await Candidate.findById(candidateId);
 
         if (!candidate) return res.status(404).json({ message: 'Candidate not found' });
+
+        if (!canAccessCandidate(candidate, req.user)) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to transfer this candidate' });
+        }
 
         // Find the most recent requisition in the chain
         let currentReq = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId: req.companyId }).select('reopenedToId');
@@ -1169,7 +1271,7 @@ exports.transferCandidateToRequisition = async (req, res) => {
             candidateId: req.params.candidateId,
             targetRequisitionId: req.params.targetRequisitionId,
             companyId: req.companyId,
-            userId: req.user._id
+            user: req.user
         });
 
         res.status(201).json({
@@ -1210,7 +1312,7 @@ exports.transferCandidatesBulk = async (req, res) => {
                     candidateId: item.candidateId,
                     targetRequisitionId: item.toRequisitionId,
                     companyId: req.companyId,
-                    userId: req.user._id
+                    user: req.user
                 });
                 transferred += 1;
             } catch (error) {
@@ -1315,10 +1417,18 @@ exports.getClientAnalytics = async (req, res) => {
 
         clientName = decodeURIComponent(clientName);
 
-        // Fetch all hiring requests for this client mainly to build the dropdown list
-        const allClientReqs = await HiringRequest.find({ client: clientName, companyId: req.companyId }).select('_id roleDetails.title status').lean();
+        const accessibleHiringRequestQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
 
-        let hrQuery = { client: clientName, companyId: req.companyId };
+        // Fetch all hiring requests for this client mainly to build the dropdown list
+        const allClientReqs = await HiringRequest.find({
+            ...accessibleHiringRequestQuery,
+            client: clientName
+        }).select('_id roleDetails.title status createdAt closedAt client').lean();
+
+        const hrQuery = {
+            ...accessibleHiringRequestQuery,
+            client: clientName
+        };
         if (hiringRequestId) {
             hrQuery._id = hiringRequestId;
         }
@@ -1371,7 +1481,10 @@ exports.getClientAnalytics = async (req, res) => {
         });
 
         // Track candidate pipeline
-        const candidates = await Candidate.find({ hiringRequestId: { $in: hrIds } }).lean();
+        const candidates = await Candidate.find({
+            companyId: req.companyId,
+            hiringRequestId: { $in: hrIds }
+        }).lean();
 
         const pipelineStages = {
             'Sourced': 0,
@@ -1393,6 +1506,7 @@ exports.getClientAnalytics = async (req, res) => {
         let totalHired = 0;
 
         activeCandidates.forEach(c => {
+            const isProfileShared = c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted');
             // Drop-offs first
             if (
                 c.decision === 'Rejected' ||
@@ -1432,6 +1546,11 @@ exports.getClientAnalytics = async (req, res) => {
             }
 
             if (c.phase2Decision === 'Shortlisted') {
+                pipelineStages['Phase 2 Shortlisted']++;
+                return;
+            }
+
+            if (isProfileShared) {
                 pipelineStages['Phase 2 Shortlisted']++;
                 return;
             }
@@ -1479,26 +1598,7 @@ exports.getGlobalAnalytics = async (req, res) => {
     try {
         const { client, department, position, recruiter, startDate, endDate, phase, requisitionId } = req.query;
 
-        // Visibility permissions
-        const isAdmin = req.user.roles.some(r => r.name === 'Admin' || r.name === 'HR' || r.name === 'Super Admin');
-        const userPermissions = req.user.roles.flatMap(role => (role.permissions || []).map(p => p.key));
-        const hasTaView = userPermissions.includes('ta.view') || userPermissions.includes('*');
-
-        let hrQuery = { companyId: req.companyId };
-        if (!isAdmin && !hasTaView) {
-            const candidatesWithUserAsInterviewer = await Candidate.find({
-                'interviewRounds.assignedTo': req.user._id
-            }).select('hiringRequestId').lean();
-
-            const interviewHiringRequestIds = candidatesWithUserAsInterviewer.map(c => c.hiringRequestId);
-
-            hrQuery['$or'] = [
-                { createdBy: req.user._id },
-                { 'ownership.hiringManager': req.user._id },
-                { 'ownership.recruiter': req.user._id },
-                { _id: { $in: interviewHiringRequestIds } }
-            ];
-        }
+        const hrQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
 
         if (client) hrQuery.client = new RegExp(client, 'i');
         if (department) hrQuery['roleDetails.department'] = new RegExp(department, 'i');
@@ -1522,7 +1622,10 @@ exports.getGlobalAnalytics = async (req, res) => {
         const hrIds = hiringRequests.map(hr => hr._id);
         const hiringRequestMap = new Map(hiringRequests.map((hr) => [hr._id.toString(), hr]));
 
-        let candidateQuery = { hiringRequestId: { $in: hrIds } };
+        let candidateQuery = {
+            companyId: req.companyId,
+            hiringRequestId: { $in: hrIds }
+        };
         if (startDate || endDate) {
             candidateQuery.createdAt = {};
             if (startDate) candidateQuery.createdAt.$gte = new Date(startDate);
@@ -1537,7 +1640,9 @@ exports.getGlobalAnalytics = async (req, res) => {
             .populate('uploadedBy', 'firstName lastName')
             .lean();
 
-        const publicApplications = recruiter ? [] : await (async () => {
+        const canViewSharedCandidateData = hasGlobalTAAnalyticsAccess(req.user) || Boolean(req.user?._id);
+
+        const publicApplications = recruiter || !canViewSharedCandidateData ? [] : await (async () => {
             const publicApplicationQuery = {
                 companyId: req.companyId,
                 hiringRequestId: { $in: hrIds },
@@ -1681,6 +1786,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             else if (['Offer Sent', 'Offer Accepted'].includes(c.phase3Decision)) pipeline['Offer Released']++;
             else if (c.phase2Decision === 'Selected') pipeline['Final Selection']++;
             else if (c.phase2Decision === 'Shortlisted') pipeline['Ph 2 Shortlisted']++;
+            else if (c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted')) pipeline['Ph 2 Shortlisted']++;
             else if (c.decision === 'Shortlisted') pipeline['Ph 1 Shortlisted']++;
             else pipeline['Sourced']++;
 
@@ -1789,7 +1895,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 conversionRate: (activeCandidates.length + publicApplications.length) > 0 ? ((ph1Shortlisted / (activeCandidates.length + publicApplications.length)) * 100).toFixed(1) : 0
             };
         } else if (phase === '2') {
-            const ph1Selected = activeCandidates.filter(c => c.decision === 'Shortlisted').length;
+            const ph1Selected = activeCandidates.filter(c => c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted')).length;
             const ph2Selected = activeCandidates.filter(c => c.phase2Decision === 'Selected').length;
             displayMetrics = {
                 ...displayMetrics,
@@ -1890,7 +1996,7 @@ exports.uploadJDFile = async (req, res) => {
 exports.getTAClients = async (req, res) => {
     try {
         setNoCache(res);
-        const query = { companyId: req.companyId };
+        const query = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
         
         // Find all unique client names that have hiring requests
         const clients = await HiringRequest.distinct('client', query);

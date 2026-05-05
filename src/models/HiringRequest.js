@@ -1,5 +1,59 @@
 const mongoose = require('mongoose');
 
+const phaseStatusOptionSchema = new mongoose.Schema({
+    value: { type: String, required: true, trim: true },
+    label: { type: String, required: true, trim: true },
+    color: { type: String, default: '#3B82F6' },
+    isDefault: { type: Boolean, default: false }
+}, { _id: false });
+
+const phaseDecisionOptionSchema = new mongoose.Schema({
+    value: { type: String, required: true, trim: true },
+    label: { type: String, required: true, trim: true },
+    color: { type: String, default: '#10B981' },
+    type: {
+        type: String,
+        enum: ['advance', 'hold', 'reject'],
+        required: true
+    },
+    nextPhaseOrder: { type: Number }
+}, { _id: false });
+
+const hiringRequestPhaseSchema = new mongoose.Schema({
+    phaseId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true, trim: true },
+    description: { type: String, default: '' },
+    order: { type: Number, required: true },
+    color: { type: String, default: '#3B82F6' },
+    statusOptions: {
+        type: [phaseStatusOptionSchema],
+        default: []
+    },
+    decisionOptions: {
+        type: [phaseDecisionOptionSchema],
+        default: []
+    },
+    allowedActions: {
+        type: [String],
+        default: []
+    }
+});
+
+const candidateCardVisibilitySchema = new mongoose.Schema({
+    phaseOrder: { type: Number, required: true },
+    visibleCardKeys: {
+        type: [String],
+        default: []
+    }
+}, { _id: false });
+
+const candidateDropdownVisibilitySchema = new mongoose.Schema({
+    filterStatus: { type: Boolean, default: true },
+    filterDecision: { type: Boolean, default: true },
+    rowStatus: { type: Boolean, default: true },
+    rowDecision: { type: Boolean, default: true }
+}, { _id: false });
+
 const HiringRequestSchema = new mongoose.Schema({
     requestId: { type: String, required: true },
 
@@ -63,6 +117,14 @@ const HiringRequestSchema = new mongoose.Schema({
         recruiter: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         interviewPanel: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Optional at this stage
     },
+    assignedUsers: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
+    analyticsViewers: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
 
     // 6. Approval Workflow & Status
     workflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow' }, // Track selected workflow
@@ -113,6 +175,26 @@ const HiringRequestSchema = new mongoose.Schema({
     previousRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringRequest' },
     reopenedToId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringRequest' },
     closedAt: { type: Date },
+    phaseTemplateId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PhaseTemplate'
+    },
+    phases: {
+        type: [hiringRequestPhaseSchema],
+        default: []
+    },
+    useDynamicPhases: {
+        type: Boolean,
+        default: false
+    },
+    candidateCardVisibility: {
+        type: [candidateCardVisibilitySchema],
+        default: []
+    },
+    candidateDropdownVisibility: {
+        type: candidateDropdownVisibilitySchema,
+        default: () => ({})
+    },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',
@@ -124,6 +206,8 @@ const HiringRequestSchema = new mongoose.Schema({
 HiringRequestSchema.index({ companyId: 1, requestId: 1 }, { unique: true });
 HiringRequestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ createdBy: 1, companyId: 1, createdAt: -1 });
+HiringRequestSchema.index({ companyId: 1, assignedUsers: 1, createdAt: -1 });
+HiringRequestSchema.index({ companyId: 1, analyticsViewers: 1, createdAt: -1 });
 HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1 });
 

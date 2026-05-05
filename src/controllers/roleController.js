@@ -2,6 +2,14 @@ const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 const User = require('../models/User');
 
+const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
+
+const isVisiblePermission = (permission) =>
+    permission &&
+    permission.key !== '*' &&
+    permission.isDeprecated !== true &&
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
+
 // @desc    Get All Roles
 // @route   GET /api/roles
 // @access  Private
@@ -9,7 +17,11 @@ const getRoles = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
         const roles = await Role.find({ companyId: req.companyId }).populate('permissions');
-        res.json(roles);
+        const sanitizedRoles = roles.map(role => ({
+            ...role.toObject(),
+            permissions: (role.permissions || []).filter(isVisiblePermission)
+        }));
+        res.json(sanitizedRoles);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
@@ -78,8 +90,7 @@ const getPermissions = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
         let permissions = await Permission.find({});
-        // Explicit filter
-        permissions = permissions.filter(p => p.key !== '*');
+        permissions = permissions.filter(isVisiblePermission);
         console.log(`Fetching permissions for UI. Count after filter: ${permissions.length}`);
         // Group permissions by module for easier frontend display
         const grouped = permissions.reduce((acc, curr) => {
