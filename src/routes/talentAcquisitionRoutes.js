@@ -8,6 +8,7 @@ const { upload } = require('../config/cloudinary');
 const PublicApplication = require('../models/PublicApplication');
 const Candidate = require('../models/Candidate');
 const { HiringRequest: HiringRequestModel } = require('../models/HiringRequest');
+const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
 
 const APPLICANT_REVIEW_SELECT = [
     'firstName',
@@ -52,6 +53,7 @@ router.use(requireModule('talentAcquisition'));
 // Hiring Requests
 router.post('/hiring-request', protect, authorize('ta.create'), taController.createHiringRequest);
 router.get('/hiring-request', protect, taController.getHiringRequests);
+router.get('/hiring-requests/:id/phases', protect, taController.getHiringRequestPhases);
 router.get('/hiring-request/:id', protect, taController.getHiringRequestById);
 router.put('/hiring-request/:id', protect, authorize('ta.edit'), taController.updateHiringRequest);
 router.patch('/hiring-request/:id/approve', protect, authorize(['ta.hiring_request.manage', 'ta.super_approve']), taController.approveHiringRequest);
@@ -76,6 +78,20 @@ router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taCon
 
 router.get('/hiring-request/:id/public-applications', protect, async (req, res) => {
     try {
+        const hiringRequest = await HiringRequestModel.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
+        }
+
         const apps = await PublicApplication.find({
             hiringRequestId: req.params.id,
             companyId: req.companyId
@@ -91,6 +107,20 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
 
 router.patch('/hiring-request/:id/public-applications/:appId/review', protect, authorize('ta.edit'), async (req, res) => {
     try {
+        const hiringRequest = await HiringRequestModel.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
+        }
+
         const { reviewStatus, reviewNote } = req.body;
         const validStatuses = ['Pending Review', 'Shortlisted', 'Rejected'];
 
@@ -125,6 +155,20 @@ router.patch('/hiring-request/:id/public-applications/:appId/review', protect, a
 
 router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, authorize('ta.edit'), async (req, res) => {
     try {
+        const hiringRequest = await HiringRequestModel.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
+        }
+
         const app = await PublicApplication.findOne({
             _id: req.params.appId,
             hiringRequestId: req.params.id,

@@ -1,6 +1,8 @@
 const Permission = require('../models/Permission');
 const permissionConfig = require('../config/permissions');
 
+const LEGACY_REMOVED_PERMISSION_KEYS = ['ta.analytics.requisition'];
+
 const syncPermissions = async () => {
     try {
         console.log('Syncing permissions...');
@@ -27,11 +29,31 @@ const syncPermissions = async () => {
         // 3. We will NOT mark permissions not in config as deprecated, 
         // to preserve any custom permissions added via UI, Compass, or other scripts.
 
+        const Role = require('../models/Role');
+        const legacyPermissions = await Permission.find({
+            key: { $in: LEGACY_REMOVED_PERMISSION_KEYS }
+        }).select('_id key');
+
+        if (legacyPermissions.length > 0) {
+            const legacyPermissionIds = legacyPermissions.map(permission => permission._id);
+
+            await Permission.updateMany(
+                { _id: { $in: legacyPermissionIds } },
+                { $set: { isDeprecated: true } }
+            );
+
+            await Role.updateMany(
+                { permissions: { $in: legacyPermissionIds } },
+                { $pull: { permissions: { $in: legacyPermissionIds } } }
+            );
+
+            console.log(`Deprecated and detached legacy permissions: ${legacyPermissions.map(permission => permission.key).join(', ')}`);
+        }
+
         // 4. Auto-assign ALL permissions in the database to the Admin role
         const allPermsInDb = await Permission.find({}).select('_id');
         const allDbPermissionIds = allPermsInDb.map(p => p._id);
 
-        const Role = require('../models/Role');
         const adminRole = await Role.findOne({ $or: [{ name: 'Admin' }, { isSystem: true }] });
 
         if (adminRole) {

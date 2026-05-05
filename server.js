@@ -176,6 +176,7 @@ require('./src/models/Plan');
 require('./src/models/ActivityLog');
 require('./src/models/SuperAdminUser');
 require('./src/models/OnboardingEmployee');
+require('./src/models/PhaseTemplate');
 
 const syncPermissions = require('./src/services/permissionSync');
 const startEscalationCron = require('./src/services/escalationCron');
@@ -203,6 +204,8 @@ const discussionRoutes = require('./src/routes/discussionRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 const publicRoutes = require('./src/routes/publicRoutes');
+const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
+const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
 const companyRoutes = require('./src/routes/companyRoutes');
@@ -251,8 +254,10 @@ app.use('/api/holidays', holidayRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/dossier', dossierRoutes);
 app.use('/api/ta', talentAcquisitionRoutes);
+app.use('/api/ta', phaseTemplateRoutes);
 app.use('/api/ta/email-templates', emailTemplateRoutes);
 app.use('/api/ta/candidates', candidateRoutes);
+app.use('/api/ta', candidateDynamicPhaseRoutes);
 app.use('/api/ta/interview-workflows', interviewWorkflowRoutes);
 app.use('/api/workflows', workflowRoutes);
 app.use('/api/meetings', meetingRoutes);

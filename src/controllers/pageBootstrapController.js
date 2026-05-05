@@ -5,6 +5,7 @@ const BusinessUnit = require('../models/BusinessUnit');
 const Client = require('../models/Client');
 const Company = require('../models/Company');
 const Discussion = require('../models/Discussion');
+const { attachDiscussionPermissions, buildAccessibleDiscussionMatch } = require('../utils/discussionAccess');
 const Holiday = require('../models/Holiday');
 const HelpdeskQuery = require('../models/HelpdeskQuery');
 const LeaveBalance = require('../models/LeaveBalance');
@@ -21,6 +22,14 @@ const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
+
+const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
+
+const isVisiblePermission = (permission) =>
+    permission &&
+    permission.key !== '*' &&
+    permission.isDeprecated !== true &&
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
@@ -613,9 +622,10 @@ exports.getDiscussionsBootstrap = async (req, res) => {
         const limit = parseInt(req.query.limit, 10) || 10;
         const skip = (page - 1) * limit;
 
-        const totalPromise = Discussion.countDocuments({ companyId: req.companyId });
+        const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
+        const totalPromise = Discussion.countDocuments(accessMatch);
         const discussionsPromise = Discussion.aggregate([
-            { $match: { companyId: new (require('mongoose')).Types.ObjectId(req.companyId) } },
+            { $match: accessMatch },
             {
                 $addFields: {
                     isCompleted: { $cond: { if: { $eq: ['$status', 'mark as complete'] }, then: 1, else: 0 } }
@@ -638,11 +648,12 @@ exports.getDiscussionsBootstrap = async (req, res) => {
 
         const discussions = await Discussion.populate(discussionRows, [
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
-            { path: 'supervisor', select: 'firstName lastName email profilePicture' }
+            { path: 'supervisor', select: 'firstName lastName email profilePicture' },
+            { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' }
         ]);
 
         res.status(200).json({
-            discussions,
+            discussions: discussions.map((discussion) => attachDiscussionPermissions(discussion, req.user)),
             supervisors,
             currentPage: page,
             totalPages: Math.ceil(total / limit),
@@ -755,13 +766,18 @@ exports.getRoleBootstrap = async (req, res) => {
     try {
         // Role data must always be fresh — never serve from HTTP cache
         res.set('Cache-Control', 'no-cache');
-        const [roles, permissions] = await Promise.all([
+        const [rawRoles, permissions] = await Promise.all([
             Role.find({ companyId: req.companyId }).populate('permissions').lean(),
             Permission.find({}).lean()
         ]);
 
+        const roles = rawRoles.map(role => ({
+            ...role,
+            permissions: (role.permissions || []).filter(isVisiblePermission)
+        }));
+
         const groupedPermissions = permissions
-            .filter(permission => permission.key !== '*')
+            .filter(isVisiblePermission)
             .reduce((acc, curr) => {
                 let groupName = curr.module || 'OTHER';
 

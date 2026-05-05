@@ -234,7 +234,8 @@ const getMyself = async (req, res) => {
             subordinates,
             taCount,
             reportingManagers,
-            company
+            company,
+            analyticsViewerCount
         ] = await Promise.all([
             hasAllPermissions ? Promise.resolve(0) : Permission.countDocuments({ key: { $ne: '*' } }),
             User.countDocuments({ reportingManagers: req.user._id, companyId: effectiveCompanyId }),
@@ -254,7 +255,11 @@ const getMyself = async (req, res) => {
                 ? Promise.resolve(req.company)
                 : Company.findById(effectiveCompanyId)
                     .select('name subdomain email timezone status enabledModules settings logo themeColor planId')
-                    .lean()
+                    .lean(),
+            HiringRequest.countDocuments({
+                companyId: effectiveCompanyId,
+                analyticsViewers: req.user._id
+            })
         ]);
 
         if (hasAllPermissions) {
@@ -301,6 +306,7 @@ const getMyself = async (req, res) => {
             directReports: subordinates,
             directReportsCount,
             isTAParticipant: taCount > 0 || isInterviewer,
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
             company: company  // Always includes enabledModules
         });
     } catch (error) {

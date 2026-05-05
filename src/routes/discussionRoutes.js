@@ -16,8 +16,8 @@ const { authorize } = require('../middlewares/authorize');
 router.use(protect);
 router.use(requireModule('meetingsOfMinutes'));
 
-router.get('/bootstrap', getDiscussionsBootstrap);
-router.get('/supervisors', getSupervisorList);
+router.get('/bootstrap', authorize('discussion.read'), getDiscussionsBootstrap);
+router.get('/supervisors', authorize(['discussion.read', 'discussion.create']), getSupervisorList);
 
 router.route('/')
     .get(authorize('discussion.read'), getDiscussions)
