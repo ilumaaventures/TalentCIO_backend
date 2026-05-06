@@ -5,6 +5,39 @@ const Company = require('../models/Company');
 const LeaveRequest = require('../models/LeaveRequest');
 
 const DEFAULT_ATTENDANCE_LIMIT = 10;
+const IST_TIME_ZONE = 'Asia/Kolkata';
+
+const getCurrentIstDateString = () => new Date().toLocaleDateString('en-CA', { timeZone: IST_TIME_ZONE });
+
+const getIstDayRange = (attendanceDateParam) => {
+    const todayLabel = getCurrentIstDateString();
+
+    if (attendanceDateParam) {
+        const trimmed = String(attendanceDateParam).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            const safeLabel = trimmed > todayLabel ? todayLabel : trimmed;
+            const start = new Date(`${safeLabel}T00:00:00.000+05:30`);
+            if (!Number.isNaN(start.getTime())) {
+                const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+                return {
+                    start,
+                    end,
+                    label: safeLabel
+                };
+            }
+        }
+    }
+
+    const istString = todayLabel;
+    const start = new Date(`${istString}T00:00:00.000+05:30`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    return {
+        start,
+        end,
+        label: istString
+    };
+};
 
 // @desc    Get Dashboard Statistics
 // @route   GET /api/dashboard
@@ -20,10 +53,9 @@ const getDashboardStats = async (req, res) => {
                 ? parsedAttendanceLimit
                 : DEFAULT_ATTENDANCE_LIMIT;
 
-        const now = new Date();
-        const istString = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
-        const today = new Date(istString);
-        const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+        const attendanceDay = getIstDayRange(req.query.attendanceDate);
+        const today = attendanceDay.start;
+        const tomorrow = attendanceDay.end;
 
         // 1. Identify all active users for the company
         const allActiveUsers = await User.find({
@@ -183,7 +215,8 @@ const getDashboardStats = async (req, res) => {
             recentActivityMeta: {
                 total: presentTodayCount,
                 limit: attendanceLimit,
-                hasMore: !fetchAllAttendance && presentTodayCount > dailyStatusList.length
+                hasMore: !fetchAllAttendance && presentTodayCount > dailyStatusList.length,
+                date: attendanceDay.label
             },
             projects: projectsFormatted,
             leavesToday
