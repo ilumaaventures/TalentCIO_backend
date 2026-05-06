@@ -4,15 +4,58 @@ const Project = require('../models/Project');
 const Company = require('../models/Company');
 const LeaveRequest = require('../models/LeaveRequest');
 
+const DEFAULT_ATTENDANCE_LIMIT = 10;
+const IST_TIME_ZONE = 'Asia/Kolkata';
+
+const getCurrentIstDateString = () => new Date().toLocaleDateString('en-CA', { timeZone: IST_TIME_ZONE });
+
+const getIstDayRange = (attendanceDateParam) => {
+    const todayLabel = getCurrentIstDateString();
+
+    if (attendanceDateParam) {
+        const trimmed = String(attendanceDateParam).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            const safeLabel = trimmed > todayLabel ? todayLabel : trimmed;
+            const start = new Date(`${safeLabel}T00:00:00.000+05:30`);
+            if (!Number.isNaN(start.getTime())) {
+                const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+                return {
+                    start,
+                    end,
+                    label: safeLabel
+                };
+            }
+        }
+    }
+
+    const istString = todayLabel;
+    const start = new Date(`${istString}T00:00:00.000+05:30`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    return {
+        start,
+        end,
+        label: istString
+    };
+};
+
 // @desc    Get Dashboard Statistics
 // @route   GET /api/dashboard
 // @access  Private
 const getDashboardStats = async (req, res) => {
     try {
-        const now = new Date();
-        const istString = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
-        const today = new Date(istString);
-        const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+        const attendanceLimitParam = String(req.query.attendanceLimit || DEFAULT_ATTENDANCE_LIMIT).trim().toLowerCase();
+        const fetchAllAttendance = attendanceLimitParam === 'all';
+        const parsedAttendanceLimit = Number.parseInt(attendanceLimitParam, 10);
+        const attendanceLimit = fetchAllAttendance
+            ? null
+            : Number.isFinite(parsedAttendanceLimit) && parsedAttendanceLimit > 0
+                ? parsedAttendanceLimit
+                : DEFAULT_ATTENDANCE_LIMIT;
+
+        const attendanceDay = getIstDayRange(req.query.attendanceDate);
+        const today = attendanceDay.start;
+        const tomorrow = attendanceDay.end;
 
         // 1. Identify all active users for the company
         const allActiveUsers = await User.find({
@@ -45,6 +88,12 @@ const getDashboardStats = async (req, res) => {
 
         const nonSystemUserIds = filteredUsers.map(u => u._id);
         const totalEmployees = nonSystemUserIds.length;
+        const attendanceQuery = {
+            companyId: req.companyId,
+            user: { $in: nonSystemUserIds },
+            date: { $gte: today, $lt: tomorrow },
+            status: { $in: ['PRESENT', 'HALF_DAY'] }
+        };
 
         // 5. Run calculations based on filtered user list
         const [
@@ -55,23 +104,16 @@ const getDashboardStats = async (req, res) => {
             approvedLeavesToday,
             pendingLeaveRequests
         ] = await Promise.all([
-            Attendance.countDocuments({
-                companyId: req.companyId,
-                user: { $in: nonSystemUserIds },
-                date: { $gte: today, $lt: tomorrow },
-                status: { $in: ['PRESENT', 'HALF_DAY'] }
-            }),
+            Attendance.countDocuments(attendanceQuery),
             Attendance.countDocuments({
                 approvalStatus: 'PENDING',
                 companyId: req.companyId,
                 user: { $in: nonSystemUserIds } // Only count pending requests from non-system users
             }),
-            Attendance.find({
-                companyId: req.companyId,
-                user: { $in: nonSystemUserIds },
-                date: { $gte: today, $lt: tomorrow }
-            })
-                .select('user status clockIn clockOut location clockOutLocation')
+            Attendance.find(attendanceQuery)
+                .sort({ clockIn: -1, createdAt: -1 })
+                .limit(attendanceLimit || 0)
+                .select('user status clockIn clockOut location clockOutLocation attendanceMode')
                 .lean(),
             Project.find({ companyId: req.companyId })
                 .sort({ updatedAt: -1 })
@@ -103,16 +145,16 @@ const getDashboardStats = async (req, res) => {
         const presentToday = presentTodayCount;
         const absentToday = Math.max(0, totalEmployees - presentToday);
 
-        const attendanceByUserId = new Map(
-            todaysAttendance.map(record => [record.user.toString(), record])
+        const usersById = new Map(
+            filteredUsers.map(user => [user._id.toString(), user])
         );
 
-        // Map users to their today's attendance status (only filtered non-system users)
-        const dailyStatusList = filteredUsers.map(user => {
-            const record = attendanceByUserId.get(user._id.toString());
+        const dailyStatusList = todaysAttendance.reduce((acc, record) => {
+            const user = usersById.get(record.user.toString());
+            if (!user) return acc;
             const roleName = user.roles?.length > 0 ? user.roles[0].name : 'Employee';
 
-            return {
+            acc.push({
                 id: user._id,
                 user: {
                     name: `${user.firstName} ${user.lastName}`,
@@ -120,13 +162,15 @@ const getDashboardStats = async (req, res) => {
                     employmentType: user.employmentType || 'Employee',
                     avatar: null
                 },
-                time: record ? record.clockIn : null,
-                clockOut: record ? record.clockOut : null,
-                status: record ? (record.status || 'PRESENT') : 'ABSENT',
-                location: record ? record.location : null,
-                clockOutLocation: record ? record.clockOutLocation : null
-            };
-        });
+                time: record.clockIn,
+                clockOut: record.clockOut,
+                attendanceMode: record.attendanceMode || 'clock_in_out',
+                status: record.status || 'PRESENT',
+                location: record.location || null,
+                clockOutLocation: record.clockOutLocation || null
+            });
+            return acc;
+        }, []);
 
         // Map projects to safe structure
         const projectsFormatted = allProjects.map(p => ({
@@ -168,6 +212,12 @@ const getDashboardStats = async (req, res) => {
                 pendingLeaveRequests
             },
             recentActivity: dailyStatusList,
+            recentActivityMeta: {
+                total: presentTodayCount,
+                limit: attendanceLimit,
+                hasMore: !fetchAllAttendance && presentTodayCount > dailyStatusList.length,
+                date: attendanceDay.label
+            },
             projects: projectsFormatted,
             leavesToday
         });

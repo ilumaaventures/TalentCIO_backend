@@ -45,6 +45,46 @@ const setNoCache = (res) => {
     res.set('Expires', '0');
 };
 
+const parseNonNegativeInteger = (value, fallback = 0) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const resolveHiringPositionState = (hiringDetails = {}, status = '') => {
+    let openPositions = parseNonNegativeInteger(hiringDetails?.openPositions, 1);
+    let closedPositions = parseNonNegativeInteger(hiringDetails?.closedPositions, 0);
+    let originalOpenPositions = parseNonNegativeInteger(hiringDetails?.originalOpenPositions, 0);
+
+    if (originalOpenPositions <= 0) {
+        originalOpenPositions = Math.max(openPositions + closedPositions, openPositions, 1);
+    }
+
+    if (status === 'Closed') {
+        closedPositions = Math.max(closedPositions, originalOpenPositions, openPositions);
+        originalOpenPositions = Math.max(originalOpenPositions, closedPositions);
+        openPositions = 0;
+    } else {
+        originalOpenPositions = Math.max(originalOpenPositions, openPositions + closedPositions, 1);
+    }
+
+    return {
+        openPositions,
+        closedPositions,
+        originalOpenPositions
+    };
+};
+
+const normalizeHiringRequestResponse = (request) => {
+    if (!request || !request.hiringDetails) return request;
+    return {
+        ...request,
+        hiringDetails: {
+            ...request.hiringDetails,
+            ...resolveHiringPositionState(request.hiringDetails, request.status)
+        }
+    };
+};
+
 const buildHiringRequestDetailsQuery = (companyId, requestId) => (
     HiringRequest.findOne({ _id: requestId, companyId })
         .populate('ownership.hiringManager', 'firstName lastName email')
@@ -429,6 +469,10 @@ exports.createHiringRequest = async (req, res) => {
 
         let templateReference;
         let copiedPhases = [];
+        const normalizedHiringDetails = {
+            ...hiringDetails,
+            ...resolveHiringPositionState(hiringDetails)
+        };
 
         if (phaseTemplateId) {
             templateReference = await PhaseTemplate.findOne({
@@ -451,7 +495,7 @@ exports.createHiringRequest = async (req, res) => {
             roleDetails,
             purpose,
             requirements,
-            hiringDetails,
+            hiringDetails: normalizedHiringDetails,
             replacementDetails,
             ownership: {
                 ...ownership,
@@ -518,7 +562,7 @@ exports.createHiringRequest = async (req, res) => {
             });
         }
 
-        res.status(201).json(newRequest);
+        res.status(201).json(normalizeHiringRequestResponse(newRequest.toObject()));
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -612,7 +656,7 @@ exports.getHiringRequestById = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        res.status(200).json(request);
+        res.status(200).json(normalizeHiringRequestResponse(request));
     } catch (error) {
         console.error('Error fetching hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -651,6 +695,15 @@ exports.updateHiringRequest = async (req, res) => {
                     request[field] = Array.isArray(updates[field])
                         ? [...new Set(updates[field].map((userId) => String(userId)).filter(Boolean))]
                         : [];
+                } else if (field === 'hiringDetails') {
+                    const mergedHiringDetails = {
+                        ...(request.hiringDetails?.toObject ? request.hiringDetails.toObject() : request.hiringDetails),
+                        ...updates.hiringDetails
+                    };
+                    request.hiringDetails = {
+                        ...mergedHiringDetails,
+                        ...resolveHiringPositionState(mergedHiringDetails, request.status)
+                    };
                 } else {
                     request[field] = updates[field];
                 }
@@ -716,6 +769,11 @@ exports.updateHiringRequest = async (req, res) => {
             }
         }
 
+        request.hiringDetails = {
+            ...(request.hiringDetails?.toObject ? request.hiringDetails.toObject() : request.hiringDetails),
+            ...resolveHiringPositionState(request.hiringDetails, request.status)
+        };
+
         await request.save();
 
         await HRRAuditLog.create({
@@ -727,7 +785,7 @@ exports.updateHiringRequest = async (req, res) => {
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
 
-        res.status(200).json(updatedRequest || request);
+        res.status(200).json(normalizeHiringRequestResponse(updatedRequest || request.toObject()));
     } catch (error) {
         console.error('Error updating hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -956,6 +1014,7 @@ exports.rejectHiringRequest = async (req, res) => {
 exports.closeHiringRequest = async (req, res) => {
     try {
         const { id } = req.params;
+        const mode = req.body?.mode === 'partial' ? 'partial' : 'all';
 
         const existingRequest = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
         if (!existingRequest) return res.status(404).json({ message: 'Not found' });
@@ -965,38 +1024,78 @@ exports.closeHiringRequest = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to close this request' });
         }
 
-        const request = await HiringRequest.findOneAndUpdate(
-            { _id: id, companyId: req.companyId },
-            { status: 'Closed', closedAt: new Date() },
-            { new: true }
-        );
+        const currentPositionState = resolveHiringPositionState(existingRequest.hiringDetails, existingRequest.status);
+        const currentOpenPositions = currentPositionState.openPositions;
 
-        if (!request) return res.status(404).json({ message: 'Not found' });
+        if (currentOpenPositions <= 0 && existingRequest.status === 'Closed') {
+            return res.status(400).json({ message: 'This request is already fully closed.' });
+        }
 
-        // Update candidates with "None" or empty decisions to "Rejected"
-        await Candidate.updateMany(
-            { hiringRequestId: id, decision: { $in: ['None', null, ''] } },
-            { $set: { decision: 'Rejected' } }
-        );
-        await Candidate.updateMany(
-            { hiringRequestId: id, phase2Decision: { $in: ['None', null, ''] } },
-            { $set: { phase2Decision: 'Rejected' } }
-        );
-        await Candidate.updateMany(
-            { hiringRequestId: id, phase3Decision: { $in: ['None', null, ''] } },
-            { $set: { phase3Decision: 'Rejected' } }
-        );
+        if (currentOpenPositions <= 0) {
+            return res.status(400).json({ message: 'There are no open positions left to close.' });
+        }
+
+        let closeCount = currentOpenPositions;
+        if (mode === 'partial') {
+            closeCount = Number.parseInt(req.body?.closeCount, 10);
+            if (!Number.isFinite(closeCount) || closeCount <= 0) {
+                return res.status(400).json({ message: 'Provide a valid number of positions to close.' });
+            }
+            if (closeCount > currentOpenPositions) {
+                return res.status(400).json({ message: `You can close at most ${currentOpenPositions} open positions.` });
+            }
+        }
+
+        const nextOpenPositions = Math.max(currentOpenPositions - closeCount, 0);
+        const nextClosedPositions = currentPositionState.closedPositions + closeCount;
+        const shouldFullyClose = nextOpenPositions === 0;
+
+        existingRequest.hiringDetails = {
+            ...(existingRequest.hiringDetails?.toObject ? existingRequest.hiringDetails.toObject() : existingRequest.hiringDetails),
+            openPositions: nextOpenPositions,
+            closedPositions: nextClosedPositions,
+            originalOpenPositions: Math.max(
+                currentPositionState.originalOpenPositions,
+                nextOpenPositions + nextClosedPositions
+            )
+        };
+
+        existingRequest.status = shouldFullyClose ? 'Closed' : existingRequest.status;
+        existingRequest.closedAt = shouldFullyClose ? new Date() : undefined;
+
+        await existingRequest.save();
+
+        if (shouldFullyClose) {
+            // Update candidates with "None" or empty decisions to "Rejected" only when the requisition is fully closed.
+            await Candidate.updateMany(
+                { hiringRequestId: id, decision: { $in: ['None', null, ''] } },
+                { $set: { decision: 'Rejected' } }
+            );
+            await Candidate.updateMany(
+                { hiringRequestId: id, phase2Decision: { $in: ['None', null, ''] } },
+                { $set: { phase2Decision: 'Rejected' } }
+            );
+            await Candidate.updateMany(
+                { hiringRequestId: id, phase3Decision: { $in: ['None', null, ''] } },
+                { $set: { phase3Decision: 'Rejected' } }
+            );
+        }
 
         await HRRAuditLog.create({
-            hiringRequestId: request._id,
-            action: 'CLOSED',
+            hiringRequestId: existingRequest._id,
+            action: shouldFullyClose ? 'CLOSED' : 'POSITIONS_PARTIALLY_CLOSED',
             performedBy: req.user._id,
-            details: {}
+            details: {
+                mode,
+                closeCount,
+                remainingOpenPositions: nextOpenPositions,
+                closedPositions: nextClosedPositions
+            }
         });
 
-        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
+        const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, existingRequest._id).lean();
 
-        res.status(200).json(updatedRequest || request);
+        res.status(200).json(normalizeHiringRequestResponse(updatedRequest || existingRequest.toObject()));
 
     } catch (error) {
         console.error(error);
