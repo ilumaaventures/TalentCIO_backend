@@ -101,6 +101,8 @@ const HiringRequestSchema = new mongoose.Schema({
     // 4. Hiring Details
     hiringDetails: {
         openPositions: { type: Number, default: 1 },
+        originalOpenPositions: { type: Number, default: 1 },
+        closedPositions: { type: Number, default: 0 },
         expectedJoiningDate: Date,
         budgetRange: {
             min: Number,

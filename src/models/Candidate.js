@@ -154,6 +154,9 @@ const candidateSchema = new mongoose.Schema({
         type: Number,
         min: 0
     },
+    offerJoiningDate: {
+        type: Date
+    },
 
     preference: {
         type: String,

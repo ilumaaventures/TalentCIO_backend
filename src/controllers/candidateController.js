@@ -117,6 +117,13 @@ const hasRealResume = (resumeUrl) => (
     /^https?:\/\//i.test(resumeUrl.trim())
 );
 
+const hasMeaningfulOfferValue = (value) => {
+    if (value === null || value === undefined) return false;
+    if (value instanceof Date) return !Number.isNaN(value.getTime());
+    if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+    return String(value).trim() !== '';
+};
+
 const APPLICANT_REVIEW_SELECT = [
     'firstName',
     'lastName',
@@ -292,6 +299,7 @@ exports.createCandidate = async (req, res) => {
             inHandOffer,
             offerCompany,
             offerCTC,
+            offerJoiningDate,
             preference,
             totalExperience,
             qualification,
@@ -313,6 +321,10 @@ exports.createCandidate = async (req, res) => {
         const normalizedReferralName = normalizedSource === 'Referral'
             ? String(referralName || '').trim()
             : '';
+        const normalizedInHandOffer = Boolean(inHandOffer) ||
+            hasMeaningfulOfferValue(offerCompany) ||
+            hasMeaningfulOfferValue(offerCTC) ||
+            hasMeaningfulOfferValue(offerJoiningDate);
 
         // Verify hiring request exists
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
@@ -360,9 +372,10 @@ exports.createCandidate = async (req, res) => {
             if (req.body.profileShared !== undefined) {
                 compareAndUpdate('profileShared', Boolean(profileShared), 'Profile Shared');
             }
-            compareAndUpdate('inHandOffer', inHandOffer, 'Offer in Hand');
+            compareAndUpdate('inHandOffer', normalizedInHandOffer, 'Offer in Hand');
             compareAndUpdate('offerCompany', offerCompany, 'Offer Company');
             compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
+            compareAndUpdate('offerJoiningDate', offerJoiningDate, 'Offer Joining Date');
             compareAndUpdate('totalExperience', totalExperience, 'Experience');
             compareAndUpdate('qualification', qualification, 'Qualification');
             compareAndUpdate('currentCompany', currentCompany, 'Company');
@@ -487,9 +500,10 @@ exports.createCandidate = async (req, res) => {
             profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()),
             phase2Decision: phase2Decision || 'None',
             phase2InterviewerFeedback,
-            inHandOffer: inHandOffer || false,
+            inHandOffer: normalizedInHandOffer,
             offerCompany,
             offerCTC,
+            offerJoiningDate,
             preference,
             totalExperience,
             qualification,
@@ -626,7 +640,7 @@ exports.getShortlistedCandidates = async (req, res) => {
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName') // only pull what is necessary
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
-            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC location expectedLocation pastExperience currentCompany')
+            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings')
             .sort({ uploadedAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -750,7 +764,7 @@ exports.updateCandidate = async (req, res) => {
         // Update fields securely (prevent mass assignment)
         const allowedUpdates = [
             'candidateName', 'email', 'mobile', 'source', 'referralName',
-            'profilePulledBy', 'calledBy', 'rate', 'currentCTC', 'expectedCTC', 'inHandOffer', 'offerCompany', 'offerCTC',
+            'profilePulledBy', 'calledBy', 'rate', 'currentCTC', 'expectedCTC', 'inHandOffer', 'offerCompany', 'offerCTC', 'offerJoiningDate',
             'preference', 'totalExperience', 'qualification', 'currentCompany', 'pastExperience',
             'currentLocation', 'preferredLocation', 'tatToJoin', 'noticePeriod',
             'status', 'remark', 'decision', 'profileShared', 'phase2Decision', 'phase2InterviewerFeedback', 'phase3Decision', 'lastWorkingDay', 'resumeUrl', 'resumePublicId',
@@ -770,6 +784,11 @@ exports.updateCandidate = async (req, res) => {
         if (updateData.profileShared !== undefined) {
             updateData.profileShared = Boolean(updateData.profileShared);
         }
+
+        updateData.inHandOffer = Boolean(updateData.inHandOffer) ||
+            hasMeaningfulOfferValue(updateData.offerCompany) ||
+            hasMeaningfulOfferValue(updateData.offerCTC) ||
+            hasMeaningfulOfferValue(updateData.offerJoiningDate);
 
         if (
             (updateData.phase2Decision && updateData.phase2Decision !== 'None') ||
