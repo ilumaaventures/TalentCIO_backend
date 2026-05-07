@@ -18,6 +18,7 @@ const {
     buildEndOfDayIST
 } = require('../utils/attendancePolicy');
 
+
 const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
     const date = new Date(dateValue);
     if (cycle === 'Weekly') return format(date, "yyyy-'W'II");
