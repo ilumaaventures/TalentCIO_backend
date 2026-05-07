@@ -1,7 +1,8 @@
 const Timesheet = require('../models/Timesheet');
 const WorkLog = require('../models/WorkLog');
 const Task = require('../models/Task');
-const { format } = require('date-fns');
+const { buildEndOfDayIST, parseDateAsIST } = require('../utils/attendancePolicy');
+const { getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
 
 // @desc    Log work on a task
 // @route   POST /api/projects/tasks/:taskId/log
@@ -16,11 +17,26 @@ const logWork = async (req, res) => {
             return res.status(404).json({ message: 'Task not found' });
         }
 
-        // Check availability (One log per task per day)
-        const startOfDay = new Date(date);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(date);
-        endOfDay.setHours(23, 59, 59, 999);
+        const parsedDate = new Date(date);
+        if (!date || Number.isNaN(parsedDate.getTime())) {
+            return res.status(400).json({ message: 'Valid work log date is required' });
+        }
+        const normalizedDate = parseDateAsIST(parsedDate);
+
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(normalizedDate, cycle);
+        const existingTimesheet = await Timesheet.findOne({
+            user: req.user._id,
+            month: periodId,
+            companyId: req.companyId
+        });
+
+        if (existingTimesheet && (existingTimesheet.status === 'SUBMITTED' || existingTimesheet.status === 'APPROVED')) {
+            return res.status(400).json({ message: 'Cannot add logs to a submitted or approved timesheet.' });
+        }
+
+        const startOfDay = normalizedDate;
+        const endOfDay = buildEndOfDayIST(normalizedDate);
 
         const existingLog = await WorkLog.findOne({
             task: taskId,
@@ -37,20 +53,19 @@ const logWork = async (req, res) => {
             task: taskId,
             user: req.user._id,
             companyId: req.companyId,
-            date: new Date(date),
+            date: normalizedDate,
             hours,
             description,
             status: 'PENDING' // Default status
         });
 
-        // Ensure a Timesheet exists for this month, but don't duplicate data
-        const month = new Date(date).toISOString().slice(0, 7); // YYYY-MM
-        let timesheet = await Timesheet.findOne({ user: req.user._id, month, companyId: req.companyId });
+        // Ensure a Timesheet exists for this period, but don't duplicate data
+        let timesheet = existingTimesheet;
 
         if (!timesheet) {
             await Timesheet.create({
                 user: req.user._id,
-                month,
+                month: periodId,
                 companyId: req.companyId,
                 status: 'DRAFT'
             });
@@ -72,8 +87,9 @@ const updateWorkLog = async (req, res) => {
         if (!workLog) return res.status(404).json({ message: 'Work log not found' });
 
         // Check if Timesheet is locked (Submitted/Approved)
-        const month = format(workLog.date, 'yyyy-MM');
-        const timesheet = await Timesheet.findOne({ user: req.user._id, month, companyId: req.companyId });
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(workLog.date, cycle);
+        const timesheet = await Timesheet.findOne({ user: req.user._id, month: periodId, companyId: req.companyId });
 
         if (timesheet && (timesheet.status === 'SUBMITTED' || timesheet.status === 'APPROVED')) {
             return res.status(400).json({ message: 'Cannot edit logs for a submitted timesheet' });
@@ -99,8 +115,9 @@ const deleteWorkLog = async (req, res) => {
         if (!workLog) return res.status(404).json({ message: 'Work log not found' });
 
         // Check if Timesheet is locked (Submitted/Approved)
-        const month = format(workLog.date, 'yyyy-MM');
-        const timesheet = await Timesheet.findOne({ user: req.user._id, month, companyId: req.companyId });
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(workLog.date, cycle);
+        const timesheet = await Timesheet.findOne({ user: req.user._id, month: periodId, companyId: req.companyId });
 
         if (timesheet && (timesheet.status === 'SUBMITTED' || timesheet.status === 'APPROVED')) {
             return res.status(400).json({ message: 'Cannot delete logs for a submitted timesheet' });

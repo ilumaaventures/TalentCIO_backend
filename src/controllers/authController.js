@@ -147,7 +147,9 @@ const loginUser = async (req, res) => {
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
-                        { 'ownership.recruiter': user._id }
+                        { 'ownership.recruiter': user._id },
+                        { assignedUsers: user._id },
+                        { 'ownership.interviewPanel': user._id }
                     ]
                 }),
                 HiringRequest.countDocuments({
@@ -165,7 +167,9 @@ const loginUser = async (req, res) => {
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
-                        { 'ownership.recruiter': user._id }
+                        { 'ownership.recruiter': user._id },
+                        { assignedUsers: user._id },
+                        { 'ownership.interviewPanel': user._id }
                     ]
                 }),
                 HiringRequest.countDocuments({
@@ -183,7 +187,8 @@ const loginUser = async (req, res) => {
         let isInterviewer = false;
         if (taCount === 0 && !permissions.includes('ta.view') && !permissions.includes('*')) {
             const interviewCount = await Candidate.countDocuments({
-                'interviewRounds.assignedTo': user._id
+                'interviewRounds.assignedTo': user._id,
+                companyId: user.companyId
             });
             isInterviewer = interviewCount > 0;
         }

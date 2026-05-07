@@ -247,7 +247,9 @@ const getMyself = async (req, res) => {
                 $or: [
                     { createdBy: req.user._id },
                     { 'ownership.hiringManager': req.user._id },
-                    { 'ownership.recruiter': req.user._id }
+                    { 'ownership.recruiter': req.user._id },
+                    { assignedUsers: req.user._id },
+                    { 'ownership.interviewPanel': req.user._id }
                 ]
             }),
             User.findById(req.user._id).select('reportingManagers').populate('reportingManagers', 'firstName lastName email').lean(),
@@ -353,9 +355,10 @@ const debugTA = async (req, res) => {
             $or: [
                 { createdBy: req.user._id },
                 { 'ownership.hiringManager': req.user._id },
-                { 'ownership.recruiter': req.user._id }
+                { 'ownership.recruiter': req.user._id },
+                { assignedUsers: req.user._id }
             ]
-        }).select('requestId createdBy ownership.hiringManager ownership.recruiter').lean();
+        }).select('requestId createdBy ownership.hiringManager ownership.recruiter assignedUsers').lean();
 
         const panelHRRs = await HiringRequest.find({ 'ownership.interviewPanel': req.user._id, companyId: req.companyId }).select('requestId').lean();
 

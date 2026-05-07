@@ -2,8 +2,9 @@ const express = require('express');
 const { requireModule } = require('../middlewares/moduleGuard');
 const router = express.Router();
 const taController = require('../controllers/talentAcquisitionController');
+const taAccessSettingsController = require('../controllers/taAccessSettingsController');
 const { protect } = require('../middlewares/authMiddleware');
-const { authorize } = require('../middlewares/authorize');
+const { authorizeAny } = require('../middlewares/authorize');
 const { upload } = require('../config/cloudinary');
 const PublicApplication = require('../models/PublicApplication');
 const Candidate = require('../models/Candidate');
@@ -51,20 +52,20 @@ router.use(protect);
 router.use(requireModule('talentAcquisition'));
 
 // Hiring Requests
-router.post('/hiring-request', protect, authorize('ta.create'), taController.createHiringRequest);
+router.post('/hiring-request', protect, authorizeAny(['ta.create']), taController.createHiringRequest);
 router.get('/hiring-request', protect, taController.getHiringRequests);
 router.get('/hiring-requests/:id/phases', protect, taController.getHiringRequestPhases);
 router.get('/hiring-request/:id', protect, taController.getHiringRequestById);
-router.put('/hiring-request/:id', protect, authorize('ta.edit'), taController.updateHiringRequest);
-router.patch('/hiring-request/:id/approve', protect, authorize(['ta.hiring_request.manage', 'ta.super_approve']), taController.approveHiringRequest);
-router.patch('/hiring-request/:id/reject', protect, authorize(['ta.hiring_request.manage', 'ta.super_approve']), taController.rejectHiringRequest);
-router.patch('/hiring-request/:id/close', protect, authorize('ta.hiring_request.manage'), taController.closeHiringRequest);
+router.put('/hiring-request/:id', protect, authorizeAny(['ta.edit']), taController.updateHiringRequest);
+router.patch('/hiring-request/:id/approve', protect, authorizeAny(['ta.hiring_request.manage', 'ta.super_approve']), taController.approveHiringRequest);
+router.patch('/hiring-request/:id/reject', protect, authorizeAny(['ta.hiring_request.manage', 'ta.super_approve']), taController.rejectHiringRequest);
+router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.hiring_request.manage']), taController.closeHiringRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
-router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorize('ta.edit'), taController.transferCandidate);
-router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorize('ta.edit'), taController.transferCandidateToRequisition);
-router.post('/transfer-candidates-bulk', protect, authorize(['ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
-router.post('/hiring-request/:id/send-mass-mail', protect, authorize(['ta.mass_mail', 'ta.edit']), taController.sendMassMail);
-router.post('/send-mass-mail-bulk', protect, authorize(['ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
+router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
+router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
+router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
+router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.mass_mail', 'ta.edit']), taController.sendMassMail);
+router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
 
 // Analytics
 router.get('/analytics/global', protect, taController.getGlobalAnalytics);
@@ -72,6 +73,11 @@ router.get('/analytics/client/:clientName', protect, taController.getClientAnaly
 
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);
+
+// TA access settings
+router.get('/settings/access/overview', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.getOverview);
+router.put('/settings/access/roles/:roleId', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRolePermissions);
+router.put('/settings/access/requisitions/:id', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRequisitionAccess);
 
 // File Uploads
 router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taController.uploadJDFile);
@@ -105,7 +111,7 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
     }
 });
 
-router.patch('/hiring-request/:id/public-applications/:appId/review', protect, authorize('ta.edit'), async (req, res) => {
+router.patch('/hiring-request/:id/public-applications/:appId/review', protect, authorizeAny(['ta.candidate.make_decision', 'ta.edit']), async (req, res) => {
     try {
         const hiringRequest = await HiringRequestModel.findOne({
             _id: req.params.id,
@@ -153,7 +159,7 @@ router.patch('/hiring-request/:id/public-applications/:appId/review', protect, a
     }
 });
 
-router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, authorize('ta.edit'), async (req, res) => {
+router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), async (req, res) => {
     try {
         const hiringRequest = await HiringRequestModel.findOne({
             _id: req.params.id,
@@ -253,6 +259,6 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
     }
 });
 
-router.patch('/hiring-request/:id/visibility', protect, authorize('ta.edit'), taController.toggleJobVisibility);
+router.patch('/hiring-request/:id/visibility', protect, authorizeAny(['ta.config.manage', 'ta.edit']), taController.toggleJobVisibility);
 
 module.exports = router;

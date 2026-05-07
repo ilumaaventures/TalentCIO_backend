@@ -33,7 +33,14 @@ const buildAccessibleHiringRequestQuery = async (companyId, user) => {
         return query;
     }
 
-    query.assignedUsers = user?._id;
+    query.$or = [
+        { createdBy: user?._id },
+        { 'ownership.hiringManager': user?._id },
+        { 'ownership.recruiter': user?._id },
+        { assignedUsers: user?._id },
+        { analyticsViewers: user?._id },
+        { 'ownership.interviewPanel': user?._id }
+    ];
 
     return query;
 };
@@ -48,10 +55,36 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user) => {
     }
 
     const userId = String(user._id);
+    if (String(hiringRequest.createdBy?._id || hiringRequest.createdBy || '') === userId) {
+        return true;
+    }
+
+    if (String(hiringRequest.ownership?.hiringManager?._id || hiringRequest.ownership?.hiringManager || '') === userId) {
+        return true;
+    }
+
+    if (String(hiringRequest.ownership?.recruiter?._id || hiringRequest.ownership?.recruiter || '') === userId) {
+        return true;
+    }
+
     const assignedUserIds = Array.isArray(hiringRequest.assignedUsers)
         ? hiringRequest.assignedUsers.map((assignedUser) => String(assignedUser?._id || assignedUser))
         : [];
-    return assignedUserIds.includes(userId);
+    if (assignedUserIds.includes(userId)) {
+        return true;
+    }
+
+    const analyticsViewerIds = Array.isArray(hiringRequest.analyticsViewers)
+        ? hiringRequest.analyticsViewers.map((viewer) => String(viewer?._id || viewer))
+        : [];
+    if (analyticsViewerIds.includes(userId)) {
+        return true;
+    }
+
+    const interviewPanelIds = Array.isArray(hiringRequest.ownership?.interviewPanel)
+        ? hiringRequest.ownership.interviewPanel.map((panelUser) => String(panelUser?._id || panelUser))
+        : [];
+    return interviewPanelIds.includes(userId);
 };
 
 module.exports = {

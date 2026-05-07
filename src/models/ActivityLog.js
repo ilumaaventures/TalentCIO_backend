@@ -14,4 +14,7 @@ const activityLogSchema = new mongoose.Schema({
     ipAddress: { type: String, default: '' },
 }, { timestamps: true });
 
+activityLogSchema.index({ companyId: 1, createdAt: -1 });
+activityLogSchema.index({ companyId: 1, action: 1, createdAt: -1 });
+
 module.exports = mongoose.model('ActivityLog', activityLogSchema);

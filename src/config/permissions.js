@@ -284,6 +284,36 @@ module.exports = [
         module: "TA",
         description: "View performance analytics for the entire TA module"
     },
+    {
+        key: "ta.candidate.view",
+        module: "TA",
+        description: "View candidates through requisition or interviewer access rules"
+    },
+    {
+        key: "ta.candidate.edit",
+        module: "TA",
+        description: "Edit candidate records for accessible requisitions"
+    },
+    {
+        key: "ta.candidate.evaluate_round",
+        module: "TA",
+        description: "Evaluate assigned interview rounds without full candidate edit access"
+    },
+    {
+        key: "ta.candidate.make_decision",
+        module: "TA",
+        description: "Make hiring decisions for accessible requisitions"
+    },
+    {
+        key: "ta.candidate.transfer",
+        module: "TA",
+        description: "Transfer candidates across requisitions or into onboarding"
+    },
+    {
+        key: "ta.config.manage",
+        module: "TA",
+        description: "Manage TA configuration such as workflows, templates, and access settings"
+    },
 
     // DISCUSSIONS
     {
