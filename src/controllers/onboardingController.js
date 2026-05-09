@@ -13,6 +13,7 @@ const PizZip = require('pizzip');
 const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
+const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -390,8 +391,20 @@ exports.sendCustomFile = async (req, res) => {
             return res.status(500).json({ message: 'Failed to send email' });
         }
 
-        // Add audit log entries
+        const sentAt = new Date();
+
+        // Persist the HR-shared files so they appear in Documents & Requirements.
         files.forEach(f => {
+            employee.documents.push({
+                type: 'custom_file',
+                label: f.originalname || `Manual Document ${employee.documents.filter((doc) => doc.type === 'custom_file').length + 1}`,
+                url: f.path,
+                publicId: extractPublicIdFromUrl(f.path) || '',
+                status: 'Mail Sent',
+                uploadedAt: sentAt,
+                emailSentAt: sentAt
+            });
+
             employee.auditLog.push({
                 action: 'CUSTOM_FILE_SENT',
                 details: `File "${f.originalname}" sent to candidate's email by HR`
@@ -399,7 +412,10 @@ exports.sendCustomFile = async (req, res) => {
         });
         await employee.save();
 
-        res.json({ message: `${files.length} file(s) sent successfully to candidate email` });
+        res.json({
+            message: `${files.length} file(s) sent successfully to candidate email`,
+            employee
+        });
     } catch (error) {
         console.error('Error sending custom file(s):', error);
         res.status(500).json({ message: 'Server error', error: error.message });
