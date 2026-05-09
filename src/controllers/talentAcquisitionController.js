@@ -1897,6 +1897,32 @@ exports.getGlobalAnalytics = async (req, res) => {
         let sourceToInterviewTime = 0;
         let interviewToOfferTime = 0;
         let offerToJoinTime = 0;
+        const metricTrendBuckets = {};
+
+        const getMonthKey = (value) => {
+            if (!value) return '';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '';
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        };
+
+        const ensureMetricTrendBucket = (month) => {
+            if (!month) return null;
+
+            if (!metricTrendBuckets[month]) {
+                metricTrendBuckets[month] = {
+                    sourced: 0,
+                    offersReleased: 0,
+                    joined: 0,
+                    hiresWithTime: 0,
+                    totalTimeToHire: 0,
+                    closedReqsCount: 0,
+                    totalTimeToFill: 0
+                };
+            }
+
+            return metricTrendBuckets[month];
+        };
 
         activeCandidates.forEach(c => {
             const hrInfo = c.hiringRequestId || {};
@@ -1910,6 +1936,10 @@ exports.getGlobalAnalytics = async (req, res) => {
             const month = `${monthObj.getFullYear()}-${String(monthObj.getMonth() + 1).padStart(2, '0')}`;
             if (!monthlyTrend[month]) monthlyTrend[month] = { sourced: 0, interviews: 0, offers: 0, joined: 0 };
             monthlyTrend[month].sourced++;
+            const sourcedTrendBucket = ensureMetricTrendBucket(month);
+            if (sourcedTrendBucket) {
+                sourcedTrendBucket.sourced++;
+            }
 
             if (!deptAnalysis[dept]) deptAnalysis[dept] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
             if (!clientAnalysis[clientName]) clientAnalysis[clientName] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
@@ -1975,6 +2005,10 @@ exports.getGlobalAnalytics = async (req, res) => {
                 monthlyTrend[month].offers++;
 
                 const offerDate = c.statusHistory?.find(h => h.status === 'Offer Released')?.changedAt || c.updatedAt;
+                const offerTrendBucket = ensureMetricTrendBucket(getMonthKey(offerDate));
+                if (offerTrendBucket) {
+                    offerTrendBucket.offersReleased++;
+                }
                 const lastIntv = [...c.interviewRounds].reverse().find(r => r.evaluatedAt)?.evaluatedAt;
                 if (offerDate && lastIntv) {
                     interviewToOfferTime += (new Date(offerDate) - new Date(lastIntv)) / (1000 * 60 * 60 * 24);
@@ -1993,14 +2027,24 @@ exports.getGlobalAnalytics = async (req, res) => {
 
                 const joinDate = c.statusHistory?.find(h => h.status === 'Joined')?.changedAt || c.updatedAt;
                 const offerDate = c.statusHistory?.find(h => h.status === 'Offer Released')?.changedAt;
+                const joinedTrendBucket = ensureMetricTrendBucket(getMonthKey(joinDate));
+                if (joinedTrendBucket) {
+                    joinedTrendBucket.joined++;
+                }
                 if (joinDate && offerDate) {
                     offerToJoinTime += (new Date(joinDate) - new Date(offerDate)) / (1000 * 60 * 60 * 24);
                     joinedAfterOfferCount++;
                 }
 
                 if (joinDate && c.createdAt) {
-                    sumTimeToHireDays += (new Date(joinDate) - new Date(c.createdAt)) / (1000 * 60 * 60 * 24);
+                    const timeToHireDays = (new Date(joinDate) - new Date(c.createdAt)) / (1000 * 60 * 60 * 24);
+                    sumTimeToHireDays += timeToHireDays;
                     hiresWithTime++;
+                    const trendBucket = ensureMetricTrendBucket(getMonthKey(joinDate));
+                    if (trendBucket) {
+                        trendBucket.totalTimeToHire += timeToHireDays;
+                        trendBucket.hiresWithTime++;
+                    }
                 }
             }
         });
@@ -2032,6 +2076,10 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
 
             monthlyTrend[month].sourced++;
+            const applicationTrendBucket = ensureMetricTrendBucket(month);
+            if (applicationTrendBucket) {
+                applicationTrendBucket.sourced++;
+            }
             deptAnalysis[dept].sourced++;
             clientAnalysis[clientName].sourced++;
             sourceAnalysis[src].sourced++;
@@ -2041,8 +2089,14 @@ exports.getGlobalAnalytics = async (req, res) => {
         // Time to fill (req based)
         filteredHiringRequests.forEach(hr => {
             if (hr.status === 'Closed' && hr.closedAt && hr.createdAt) {
-                totalTimeToFill += (new Date(hr.closedAt) - new Date(hr.createdAt)) / (1000 * 60 * 60 * 24);
+                const timeToFillDays = (new Date(hr.closedAt) - new Date(hr.createdAt)) / (1000 * 60 * 60 * 24);
+                totalTimeToFill += timeToFillDays;
                 closedReqsCount++;
+                const trendBucket = ensureMetricTrendBucket(getMonthKey(hr.closedAt));
+                if (trendBucket) {
+                    trendBucket.totalTimeToFill += timeToFillDays;
+                    trendBucket.closedReqsCount++;
+                }
             }
         });
 
@@ -2096,6 +2150,54 @@ exports.getGlobalAnalytics = async (req, res) => {
             month: m,
             ...monthlyTrend[m]
         }));
+        const metricTrendMonths = Object.keys(metricTrendBuckets).sort();
+        const latestMetricTrendMonth = metricTrendMonths[metricTrendMonths.length - 1];
+        const previousMetricTrendMonth = metricTrendMonths[metricTrendMonths.length - 2];
+        const latestMetricTrendBucket = latestMetricTrendMonth ? metricTrendBuckets[latestMetricTrendMonth] : null;
+        const previousMetricTrendBucket = previousMetricTrendMonth ? metricTrendBuckets[previousMetricTrendMonth] : null;
+
+        const getBucketMetricValue = (bucket, metricName) => {
+            if (!bucket) return 0;
+
+            switch (metricName) {
+                case 'offerAcceptanceRate':
+                    return bucket.offersReleased > 0 ? (bucket.joined / bucket.offersReleased) * 100 : 0;
+                case 'joiningConversionRate':
+                    return bucket.sourced > 0 ? (bucket.joined / bucket.sourced) * 100 : 0;
+                case 'avgTimeToHire':
+                    return bucket.hiresWithTime > 0 ? bucket.totalTimeToHire / bucket.hiresWithTime : 0;
+                case 'avgTimeToFill':
+                    return bucket.closedReqsCount > 0 ? bucket.totalTimeToFill / bucket.closedReqsCount : 0;
+                default:
+                    return 0;
+            }
+        };
+
+        const buildMetricTrend = (metricName, { lowerIsBetter = false } = {}) => {
+            const currentValue = getBucketMetricValue(latestMetricTrendBucket, metricName);
+            const previousValue = getBucketMetricValue(previousMetricTrendBucket, metricName);
+            const delta = previousValue === 0
+                ? (currentValue === 0 ? 0 : 100)
+                : ((currentValue - previousValue) / Math.abs(previousValue)) * 100;
+            const roundedDelta = Number(Math.abs(delta).toFixed(1));
+            const direction = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+            const improved = direction === 'flat' ? null : (lowerIsBetter ? direction === 'down' : direction === 'up');
+
+            return {
+                delta: roundedDelta,
+                direction,
+                improved,
+                current: Number(currentValue.toFixed(1)),
+                previous: Number(previousValue.toFixed(1))
+            };
+        };
+
+        const metricTrends = {
+            offerAcceptanceRate: buildMetricTrend('offerAcceptanceRate'),
+            joiningConversionRate: buildMetricTrend('joiningConversionRate'),
+            avgTimeToHire: buildMetricTrend('avgTimeToHire', { lowerIsBetter: true }),
+            avgTimeToFill: buildMetricTrend('avgTimeToFill', { lowerIsBetter: true })
+        };
 
         const filterOptions = {
             clients: [...new Set(allHiringRequests.map(hr => hr.client).filter(Boolean))].sort(),
@@ -2137,6 +2239,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 ],
                 sourceAnalysis: Object.keys(sourceAnalysis).map(s => ({ name: s, ...sourceAnalysis[s] })),
                 monthlyTrend: monthlyTrendArray,
+                metricTrends,
                 filterOptions
             }
         });
