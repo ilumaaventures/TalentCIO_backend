@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     }],
+    taAssignedClients: [{
+        type: String,
+        trim: true
+    }],
     joiningDate: Date,
     employeeProfile: {
         type: mongoose.Schema.Types.ObjectId,
@@ -89,6 +93,7 @@ userSchema.index({ companyId: 1, isActive: 1 });
 userSchema.index({ companyId: 1, roles: 1, isActive: 1 });
 userSchema.index({ companyId: 1, department: 1 });
 userSchema.index({ companyId: 1, reportingManagers: 1 });
+userSchema.index({ companyId: 1, taAssignedClients: 1 });
 userSchema.index({ companyId: 1, email: 1 }, { unique: true });
 userSchema.index({ companyId: 1, employeeCode: 1 }, { unique: true, sparse: true });
 
@@ -106,7 +111,7 @@ userSchema.pre('save', async function () {
 
     // 2. Token Invalidation (Logout on detail update)
     // If any of these fields are modified, increment tokenVersion to log the user out
-    const securityFields = ['firstName', 'lastName', 'email', 'password', 'roles', 'isActive'];
+    const securityFields = ['firstName', 'lastName', 'email', 'password', 'roles', 'isActive', 'taAssignedClients'];
     const isSecurityModified = securityFields.some(field => this.isModified(field));
 
     if (isSecurityModified && !this.isNew) {

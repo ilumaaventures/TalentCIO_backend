@@ -249,7 +249,8 @@ const getMyself = async (req, res) => {
                     { 'ownership.hiringManager': req.user._id },
                     { 'ownership.recruiter': req.user._id },
                     { assignedUsers: req.user._id },
-                    { 'ownership.interviewPanel': req.user._id }
+                    { 'ownership.interviewPanel': req.user._id },
+                    ...(getAssignedClientNames(req.user).length > 0 ? [{ client: { $in: getAssignedClientNames(req.user) } }] : [])
                 ]
             }),
             User.findById(req.user._id).select('reportingManagers').populate('reportingManagers', 'firstName lastName email').lean(),
@@ -356,7 +357,8 @@ const debugTA = async (req, res) => {
                 { createdBy: req.user._id },
                 { 'ownership.hiringManager': req.user._id },
                 { 'ownership.recruiter': req.user._id },
-                { assignedUsers: req.user._id }
+                { assignedUsers: req.user._id },
+                ...(getAssignedClientNames(req.user).length > 0 ? [{ client: { $in: getAssignedClientNames(req.user) } }] : [])
             ]
         }).select('requestId createdBy ownership.hiringManager ownership.recruiter assignedUsers').lean();
 
@@ -414,3 +416,10 @@ module.exports = {
     toggleUserStatus,
     debugTA
 };
+const getAssignedClientNames = (user) => (
+    [...new Set(
+        (Array.isArray(user?.taAssignedClients) ? user.taAssignedClients : [])
+            .map((client) => String(client || '').trim())
+            .filter(Boolean)
+    )]
+);

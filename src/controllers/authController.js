@@ -7,6 +7,13 @@ const crypto = require('crypto');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+const getAssignedClientNames = (user) => (
+    [...new Set(
+        (Array.isArray(user?.taAssignedClients) ? user.taAssignedClients : [])
+            .map((client) => String(client || '').trim())
+            .filter(Boolean)
+    )]
+);
 
 // Generate JWT Helper
 const generateToken = (id, tokenVersion) => {
@@ -140,6 +147,7 @@ const loginUser = async (req, res) => {
             permissions = [...new Set([...permissions, ...allKeys])];
 
             // Run auth queries in parallel
+            const assignedClientNames = getAssignedClientNames(user);
             [directReportsCount, taCount, analyticsViewerCount] = await Promise.all([
                 User.countDocuments({ reportingManagers: user._id }),
                 HiringRequest.countDocuments({
@@ -149,7 +157,8 @@ const loginUser = async (req, res) => {
                         { 'ownership.hiringManager': user._id },
                         { 'ownership.recruiter': user._id },
                         { assignedUsers: user._id },
-                        { 'ownership.interviewPanel': user._id }
+                        { 'ownership.interviewPanel': user._id },
+                        ...(assignedClientNames.length > 0 ? [{ client: { $in: assignedClientNames } }] : [])
                     ]
                 }),
                 HiringRequest.countDocuments({
@@ -159,6 +168,7 @@ const loginUser = async (req, res) => {
             ]);
         } else {
             // Run auth queries in parallel
+            const assignedClientNames = getAssignedClientNames(user);
             [totalPerms, directReportsCount, taCount, analyticsViewerCount] = await Promise.all([
                 Permission.countDocuments({ key: { $ne: '*' } }),
                 User.countDocuments({ reportingManagers: user._id }),
@@ -169,7 +179,8 @@ const loginUser = async (req, res) => {
                         { 'ownership.hiringManager': user._id },
                         { 'ownership.recruiter': user._id },
                         { assignedUsers: user._id },
-                        { 'ownership.interviewPanel': user._id }
+                        { 'ownership.interviewPanel': user._id },
+                        ...(assignedClientNames.length > 0 ? [{ client: { $in: assignedClientNames } }] : [])
                     ]
                 }),
                 HiringRequest.countDocuments({

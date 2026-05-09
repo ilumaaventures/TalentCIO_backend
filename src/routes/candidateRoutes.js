@@ -14,19 +14,19 @@ router.use(requireModule('talentAcquisition'));
 // Base path: /api/ta/candidates
 
 // Upload resume
-router.post('/upload-resume/:hiringRequestId', protect, authorizeAny(['ta.create']), upload.single('resume'), candidateController.uploadResume);
+router.post('/upload-resume/:hiringRequestId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create']), upload.single('resume'), candidateController.uploadResume);
 
 // Parse resume without uploading to Cloudinary
-router.post('/parse-resume', protect, authorizeAny(['ta.create']), memoryUpload.single('resume'), candidateController.parseResume);
+router.post('/parse-resume', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create']), memoryUpload.single('resume'), candidateController.parseResume);
 
 // Get discrete sources
 router.get('/user/:userName', protect, candidateController.getCandidatesByPulledBy);
 router.get('/sources', protect, candidateController.getCandidateSources);
-router.post('/sources', protect, authorizeAny(['ta.create']), candidateController.addCandidateSource);
-router.delete('/sources/:id', protect, authorizeAny(['ta.delete', 'ta.candidate.edit']), candidateController.deleteCandidateSource);
+router.post('/sources', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create']), candidateController.addCandidateSource);
+router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.delete', 'ta.candidate.edit']), candidateController.deleteCandidateSource);
 
 // CRUD operations
-router.post('/', protect, authorizeAny(['ta.create']), candidateController.createCandidate);
+router.post('/', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create']), candidateController.createCandidate);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
 router.get('/candidate/:id', protect, candidateController.getCandidateById);

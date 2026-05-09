@@ -1,7 +1,19 @@
 const Permission = require('../models/Permission');
 const permissionConfig = require('../config/permissions');
 
-const LEGACY_REMOVED_PERMISSION_KEYS = ['ta.analytics.requisition'];
+const LEGACY_PERMISSION_REPLACEMENTS = {
+    'ta.application.read': 'ta.candidate.view',
+    'ta.application.create': 'ta.candidate.manage.assigned',
+    'ta.application.update': 'ta.candidate.manage.assigned',
+    'ta.application.delete': 'ta.candidate.manage.assigned',
+    'ta.application.manage.assigned': 'ta.candidate.manage.assigned',
+    'ta.application.manage.all': 'ta.candidate.manage.all'
+};
+
+const LEGACY_REMOVED_PERMISSION_KEYS = [
+    'ta.analytics.requisition',
+    ...Object.keys(LEGACY_PERMISSION_REPLACEMENTS)
+];
 
 const syncPermissions = async () => {
     try {
@@ -36,15 +48,53 @@ const syncPermissions = async () => {
 
         if (legacyPermissions.length > 0) {
             const legacyPermissionIds = legacyPermissions.map(permission => permission._id);
+            const replacementKeys = Array.from(new Set(
+                legacyPermissions
+                    .map((permission) => LEGACY_PERMISSION_REPLACEMENTS[permission.key])
+                    .filter(Boolean)
+            ));
+            const replacementPermissions = replacementKeys.length > 0
+                ? await Permission.find({ key: { $in: replacementKeys } }).select('_id key')
+                : [];
+            const replacementIdByKey = replacementPermissions.reduce((accumulator, permission) => {
+                accumulator[permission.key] = permission._id;
+                return accumulator;
+            }, {});
+
+            const rolesNeedingMigration = await Role.find({
+                permissions: { $in: legacyPermissionIds }
+            }).select('_id permissions');
+
+            for (const role of rolesNeedingMigration) {
+                const permissionIds = new Set((role.permissions || []).map((permissionId) => String(permissionId)));
+                const replacementIdsToAdd = [];
+
+                legacyPermissions.forEach((legacyPermission) => {
+                    if (!permissionIds.has(String(legacyPermission._id))) {
+                        return;
+                    }
+
+                    const replacementKey = LEGACY_PERMISSION_REPLACEMENTS[legacyPermission.key];
+                    const replacementId = replacementKey ? replacementIdByKey[replacementKey] : null;
+                    if (replacementId) {
+                        replacementIdsToAdd.push(replacementId);
+                    }
+                });
+
+                await Role.updateOne(
+                    { _id: role._id },
+                    {
+                        ...(replacementIdsToAdd.length > 0
+                            ? { $addToSet: { permissions: { $each: replacementIdsToAdd } } }
+                            : {}),
+                        $pull: { permissions: { $in: legacyPermissionIds } }
+                    }
+                );
+            }
 
             await Permission.updateMany(
                 { _id: { $in: legacyPermissionIds } },
                 { $set: { isDeprecated: true } }
-            );
-
-            await Role.updateMany(
-                { permissions: { $in: legacyPermissionIds } },
-                { $pull: { permissions: { $in: legacyPermissionIds } } }
             );
 
             console.log(`Deprecated and detached legacy permissions: ${legacyPermissions.map(permission => permission.key).join(', ')}`);

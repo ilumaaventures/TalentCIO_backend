@@ -61,11 +61,11 @@ router.patch('/hiring-request/:id/approve', protect, authorizeAny(['ta.hiring_re
 router.patch('/hiring-request/:id/reject', protect, authorizeAny(['ta.hiring_request.manage', 'ta.super_approve']), taController.rejectHiringRequest);
 router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.hiring_request.manage']), taController.closeHiringRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
-router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
-router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
-router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
-router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.mass_mail', 'ta.edit']), taController.sendMassMail);
-router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
+router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
+router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
+router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
+router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), taController.sendMassMail);
+router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
 
 // Analytics
 router.get('/analytics/global', protect, taController.getGlobalAnalytics);
@@ -78,6 +78,8 @@ router.get('/clients', protect, taController.getTAClients);
 router.get('/settings/access/overview', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.getOverview);
 router.put('/settings/access/roles/:roleId', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRolePermissions);
 router.put('/settings/access/requisitions/:id', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRequisitionAccess);
+router.put('/settings/access/users/:userId/clients', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateUserClientAssignments);
+router.put('/settings/access/clients/assignments', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateClientUserAssignments);
 
 // File Uploads
 router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taController.uploadJDFile);
@@ -111,7 +113,7 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
     }
 });
 
-router.patch('/hiring-request/:id/public-applications/:appId/review', protect, authorizeAny(['ta.candidate.make_decision', 'ta.edit']), async (req, res) => {
+router.patch('/hiring-request/:id/public-applications/:appId/review', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision', 'ta.candidate.edit', 'ta.edit']), async (req, res) => {
     try {
         const hiringRequest = await HiringRequestModel.findOne({
             _id: req.params.id,
@@ -159,7 +161,7 @@ router.patch('/hiring-request/:id/public-applications/:appId/review', protect, a
     }
 });
 
-router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, authorizeAny(['ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), async (req, res) => {
+router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), async (req, res) => {
     try {
         const hiringRequest = await HiringRequestModel.findOne({
             _id: req.params.id,

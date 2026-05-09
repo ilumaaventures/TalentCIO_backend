@@ -19,6 +19,7 @@ const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
     canAccessCandidate,
+    canAccessHiringRequestForCapability,
     isInterviewerOnlyView,
     sanitizeCandidateForInterviewer
 } = require('../utils/candidateAccess');
@@ -244,6 +245,10 @@ exports.uploadResume = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
+        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        if (!canManageHiringRequest) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to upload candidates for this requisition' });
+        }
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
 
         // Check if file is uploaded
@@ -360,6 +365,10 @@ exports.createCandidate = async (req, res) => {
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
+        }
+        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        if (!canManageHiringRequest) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
         }
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
 

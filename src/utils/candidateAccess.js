@@ -2,6 +2,7 @@ const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQueryForCapability,
     canAccessCandidateThroughHiringRequest,
+    canAccessHiringRequestForCapability,
     isInterviewerOnlyView,
     sanitizeCandidateForInterviewer
 } = require('./taAccess');
@@ -30,6 +31,7 @@ module.exports = {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
     canAccessCandidate,
+    canAccessHiringRequestForCapability,
     isInterviewerOnlyView,
     sanitizeCandidateForInterviewer
 };

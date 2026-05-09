@@ -60,7 +60,9 @@ const buildUserResponse = (user, requestStats = {}, interviewerStats = {}) => {
         employeeCode: user.employeeCode || '',
         isActive: user.isActive !== false,
         roles: roleNames,
+        taAssignedClients: Array.isArray(user.taAssignedClients) ? user.taAssignedClients : [],
         assignedRequests: requestStats.assignedRequests || 0,
+        clientAssignments: requestStats.clientAssignments || 0,
         recruiterOn: requestStats.recruiterOn || 0,
         hiringManagerOn: requestStats.hiringManagerOn || 0,
         analyticsViewerOn: requestStats.analyticsViewerOn || 0,
@@ -99,7 +101,7 @@ exports.getOverview = async (req, res) => {
                 .sort({ name: 1 })
                 .lean(),
             User.find({ companyId: req.companyId })
-                .select('firstName lastName email employeeCode isActive roles')
+                .select('firstName lastName email employeeCode isActive roles taAssignedClients')
                 .populate('roles', 'name')
                 .sort({ firstName: 1, lastName: 1, email: 1 })
                 .lean(),
@@ -180,6 +182,30 @@ exports.getOverview = async (req, res) => {
             });
         });
 
+        users.forEach((user) => {
+            const normalizedUserId = String(user._id);
+            const current = requestSummaryByUser.get(normalizedUserId) || {
+                assignedRequests: 0,
+                recruiterOn: 0,
+                hiringManagerOn: 0,
+                analyticsViewerOn: 0,
+                clientAssignments: 0
+            };
+            current.clientAssignments = Array.isArray(user.taAssignedClients) ? user.taAssignedClients.length : 0;
+            requestSummaryByUser.set(normalizedUserId, current);
+        });
+
+        const clients = [...new Set([
+            ...requests
+                .map((request) => String(request.client || '').trim())
+                .filter(Boolean),
+            ...users.flatMap((user) => (
+                Array.isArray(user.taAssignedClients)
+                    ? user.taAssignedClients.map((client) => String(client || '').trim()).filter(Boolean)
+                    : []
+            ))
+        ])].sort((left, right) => left.localeCompare(right));
+
         const userResponses = users.map((user) => buildUserResponse(
             user,
             requestSummaryByUser.get(String(user._id)) || {},
@@ -198,6 +224,7 @@ exports.getOverview = async (req, res) => {
                 key: permission.key,
                 description: permission.description || ''
             })),
+            clients,
             roles: roles.map((role) => buildRoleResponse(role, taPermissionIds)),
             users: userResponses,
             requests: requestResponses
@@ -329,5 +356,101 @@ exports.updateRequisitionAccess = async (req, res) => {
     } catch (error) {
         console.error('updateRequisitionAccess error:', error);
         res.status(500).json({ message: 'Failed to update requisition access', error: error.message });
+    }
+};
+
+exports.updateUserClientAssignments = async (req, res) => {
+    try {
+        if (!canManageTAAccess(req.user)) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA client assignments' });
+        }
+
+        const user = await User.findOne({ _id: req.params.userId, companyId: req.companyId });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const assignedClients = Array.isArray(req.body?.assignedClients)
+            ? [...new Set(req.body.assignedClients.map((client) => String(client || '').trim()).filter(Boolean))]
+            : [];
+
+        user.taAssignedClients = assignedClients;
+        await user.save();
+
+        const updatedUser = await User.findById(user._id)
+            .select('firstName lastName email employeeCode isActive roles taAssignedClients')
+            .populate('roles', 'name')
+            .lean();
+
+        res.status(200).json({
+            message: 'TA client assignments updated successfully',
+            user: buildUserResponse(updatedUser, { clientAssignments: assignedClients.length }, {})
+        });
+    } catch (error) {
+        console.error('updateUserClientAssignments error:', error);
+        res.status(500).json({ message: 'Failed to update TA client assignments', error: error.message });
+    }
+};
+
+exports.updateClientUserAssignments = async (req, res) => {
+    try {
+        if (!canManageTAAccess(req.user)) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA client assignments' });
+        }
+
+        const clientName = String(req.body?.clientName || '').trim();
+        if (!clientName) {
+            return res.status(400).json({ message: 'Client name is required' });
+        }
+
+        const selectedUserIds = Array.isArray(req.body?.userIds)
+            ? [...new Set(req.body.userIds.map((userId) => String(userId)).filter(Boolean))]
+            : [];
+
+        const usersToAddQuery = {
+            companyId: req.companyId,
+            _id: { $in: selectedUserIds }
+        };
+        const usersToRemoveQuery = {
+            companyId: req.companyId,
+            _id: { $nin: selectedUserIds },
+            taAssignedClients: clientName
+        };
+
+        await Promise.all([
+            User.updateMany(
+                usersToAddQuery,
+                {
+                    $addToSet: { taAssignedClients: clientName },
+                    $inc: { tokenVersion: 1 }
+                }
+            ),
+            User.updateMany(
+                usersToRemoveQuery,
+                {
+                    $pull: { taAssignedClients: clientName },
+                    $inc: { tokenVersion: 1 }
+                }
+            )
+        ]);
+
+        const updatedUsers = await User.find({ companyId: req.companyId })
+            .select('firstName lastName email employeeCode isActive roles taAssignedClients')
+            .populate('roles', 'name')
+            .sort({ firstName: 1, lastName: 1, email: 1 })
+            .lean();
+
+        res.status(200).json({
+            message: 'TA client assignments updated successfully',
+            clientName,
+            users: updatedUsers.map((user) => buildUserResponse(
+                user,
+                { clientAssignments: Array.isArray(user.taAssignedClients) ? user.taAssignedClients.length : 0 },
+                {}
+            ))
+        });
+    } catch (error) {
+        console.error('updateClientUserAssignments error:', error);
+        res.status(500).json({ message: 'Failed to update TA client assignments', error: error.message });
     }
 };

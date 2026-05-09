@@ -310,11 +310,55 @@ module.exports = [
         description: "Transfer candidates across requisitions or into onboarding"
     },
     {
+        key: "ta.candidate.manage.assigned",
+        module: "TA",
+        description: "Manage assigned TA candidates with view, create, update, and delete access"
+    },
+    {
+        key: "ta.candidate.manage.all",
+        module: "TA",
+        description: "Manage all TA candidates with workspace-wide access"
+    },
+    {
         key: "ta.config.manage",
         module: "TA",
         description: "Manage TA configuration such as workflows, templates, and access settings"
     },
-
+    {
+        key: "ta.manage",
+        module: "TA",
+        description: "Manage TA approvals, workflows, templates, access settings, publishing, and analytics"
+    },
+    {
+        key: "ta.requisition.read",
+        module: "TA",
+        description: "View TA requisitions you can access"
+    },
+    {
+        key: "ta.requisition.create",
+        module: "TA",
+        description: "Create TA requisitions"
+    },
+    {
+        key: "ta.requisition.update",
+        module: "TA",
+        description: "Edit TA requisitions you can access"
+    },
+    {
+        key: "ta.requisition.delete",
+        module: "TA",
+        description: "Delete TA requisitions you can access"
+    },
+    {
+        key: "ta.requisition.manage.assigned",
+        module: "TA",
+        description: "Manage assigned TA requisitions with view, create, update, and delete access"
+    },
+    {
+        key: "ta.requisition.manage.all",
+        module: "TA",
+        description: "Manage all TA requisitions with workspace-wide access"
+    },
     // DISCUSSIONS
     {
         key: "discussion.read",

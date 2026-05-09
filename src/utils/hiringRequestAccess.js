@@ -1,5 +1,24 @@
 const ADMIN_ROLE_NAMES = new Set(['Admin', 'HR', 'Super Admin', 'System Admin']);
 
+const normalizeClientName = (value) => String(value || '').trim().toLowerCase();
+
+const getAssignedClientNames = (user) => (
+    [...new Set(
+        (Array.isArray(user?.taAssignedClients) ? user.taAssignedClients : [])
+            .map((client) => String(client || '').trim())
+            .filter(Boolean)
+    )]
+);
+
+const hasAssignedClientAccess = (hiringRequest, user) => {
+    const assignedClientNames = getAssignedClientNames(user).map(normalizeClientName);
+    if (!assignedClientNames.length) {
+        return false;
+    }
+
+    return assignedClientNames.includes(normalizeClientName(hiringRequest?.client));
+};
+
 const getRoleName = (role) => {
     if (!role) return '';
     if (typeof role === 'string') return role;
@@ -41,6 +60,10 @@ const buildAccessibleHiringRequestQuery = async (companyId, user) => {
         { analyticsViewers: user?._id },
         { 'ownership.interviewPanel': user?._id }
     ];
+    const assignedClientNames = getAssignedClientNames(user);
+    if (assignedClientNames.length > 0) {
+        query.$or.push({ client: { $in: assignedClientNames } });
+    }
 
     return query;
 };
@@ -84,12 +107,18 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user) => {
     const interviewPanelIds = Array.isArray(hiringRequest.ownership?.interviewPanel)
         ? hiringRequest.ownership.interviewPanel.map((panelUser) => String(panelUser?._id || panelUser))
         : [];
-    return interviewPanelIds.includes(userId);
+    if (interviewPanelIds.includes(userId)) {
+        return true;
+    }
+
+    return hasAssignedClientAccess(hiringRequest, user);
 };
 
 module.exports = {
     buildAccessibleHiringRequestQuery,
     canAccessHiringRequest,
+    getAssignedClientNames,
     getUserPermissionKeys,
+    hasAssignedClientAccess,
     isHiringRequestAdmin
 };
