@@ -14,7 +14,7 @@ const {
     getPhaseStatusOption,
     isDynamicHiringRequest
 } = require('../utils/phaseTemplateUtils');
-const { canAccessCandidate } = require('../utils/candidateAccess');
+const { canAccessCandidate, TA_CAPABILITIES } = require('../utils/candidateAccess');
 
 const isAdminUser = (req) => (
     (req.user?.roles || []).some((role) =>
@@ -70,17 +70,11 @@ const notifyDynamicPhaseStakeholders = async (req, hiringRequest, title, message
     })));
 };
 
-const getCandidateContext = async (candidateId, companyId, user) => {
+const getCandidateContext = async (candidateId, companyId, user, capability = TA_CAPABILITIES.VIEW) => {
     const candidate = await Candidate.findOne({ _id: candidateId, companyId });
     if (!candidate) {
         const error = new Error('Candidate not found');
         error.statusCode = 404;
-        throw error;
-    }
-
-    if (!canAccessCandidate(candidate, user)) {
-        const error = new Error('Forbidden: You do not have permission to access this candidate');
-        error.statusCode = 403;
         throw error;
     }
 
@@ -98,6 +92,12 @@ const getCandidateContext = async (candidateId, companyId, user) => {
     if (!isDynamicHiringRequest(hiringRequest)) {
         const error = new Error('This hiring request does not use dynamic phases');
         error.statusCode = 400;
+        throw error;
+    }
+
+    if (!(await canAccessCandidate(candidate, user, { companyId, hiringRequest, capability }))) {
+        const error = new Error('Forbidden: You do not have permission to access this candidate');
+        error.statusCode = 403;
         throw error;
     }
 
@@ -140,7 +140,7 @@ exports.updatePhaseStatus = async (req, res) => {
             return res.status(400).json({ message: 'Phase ID is required' });
         }
 
-        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user);
+        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user, TA_CAPABILITIES.EDIT);
         const phase = findPhaseById(hiringRequest.phases, phaseId);
         if (!phase) {
             return res.status(404).json({ message: 'Phase not found for this hiring request' });
@@ -200,7 +200,7 @@ exports.recordDecision = async (req, res) => {
             return res.status(400).json({ message: 'Phase ID and decision are required' });
         }
 
-        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user);
+        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user, TA_CAPABILITIES.MAKE_DECISION);
         const phase = findPhaseById(hiringRequest.phases, phaseId);
         if (!phase) {
             return res.status(404).json({ message: 'Phase not found for this hiring request' });
@@ -326,7 +326,7 @@ exports.manualAdvance = async (req, res) => {
             return res.status(400).json({ message: 'Target phase order is required' });
         }
 
-        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user);
+        const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user, TA_CAPABILITIES.EDIT);
         const currentPhaseEntry = getCurrentPhaseEntry(candidate);
         if (!currentPhaseEntry) {
             return res.status(400).json({ message: 'Candidate does not have an active phase entry' });
@@ -414,7 +414,7 @@ exports.getPhaseHistory = async (req, res) => {
             return res.status(400).json({ message: 'Invalid candidate ID format' });
         }
 
-        const { candidate } = await getCandidateContext(candidateId, req.companyId, req.user);
+        const { candidate } = await getCandidateContext(candidateId, req.companyId, req.user, TA_CAPABILITIES.VIEW);
 
         const phaseHistory = [...(candidate.phaseHistory || [])]
             .sort((left, right) => {
@@ -459,7 +459,7 @@ exports.bulkUpdateStatus = async (req, res) => {
 
         for (const candidateId of candidateIds) {
             try {
-                const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user);
+                const { candidate, hiringRequest } = await getCandidateContext(candidateId, req.companyId, req.user, TA_CAPABILITIES.EDIT);
                 const phase = findPhaseById(hiringRequest.phases, phaseId);
                 if (!phase || !getPhaseStatusOption(phase, status)) {
                     failed += 1;

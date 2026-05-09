@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const interviewWorkflowController = require('../controllers/interviewWorkflowController');
 const { protect } = require('../middlewares/authMiddleware');
-const { authorize } = require('../middlewares/authorize');
+const { authorizeAny } = require('../middlewares/authorize');
+const { requireModule } = require('../middlewares/moduleGuard');
 
-// Make all routes protected and accessible by Admin or ta.workflows_manage (using ta.edit for now)
 router.use(protect);
-router.use(authorize(['ta.edit'])); // Assuming ta.edit is the standard authorization for managing configuration
+router.use(requireModule('talentAcquisition'));
+router.use(authorizeAny(['ta.config.manage', 'ta.edit']));
 
 router.post('/', interviewWorkflowController.createInterviewWorkflow);
 router.get('/', interviewWorkflowController.getInterviewWorkflows);

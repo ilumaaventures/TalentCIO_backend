@@ -15,7 +15,14 @@ const {
     isDynamicHiringRequest
 } = require('../utils/phaseTemplateUtils');
 const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
-const { buildAccessibleCandidateQuery, canAccessCandidate } = require('../utils/candidateAccess');
+const {
+    TA_CAPABILITIES,
+    buildAccessibleCandidateQuery,
+    canAccessCandidate,
+    canAccessHiringRequestForCapability,
+    isInterviewerOnlyView,
+    sanitizeCandidateForInterviewer
+} = require('../utils/candidateAccess');
 
 const LEGACY_STATUS_VALUES = new Set([
     'Interested',
@@ -161,6 +168,30 @@ const APPLICANT_REVIEW_SELECT = [
     'updatedAt'
 ].join(' ');
 
+const getCandidateHiringRequestForAccess = async (candidate, companyId) => (
+    HiringRequest.findOne({
+        _id: candidate?.hiringRequestId?._id || candidate?.hiringRequestId,
+        companyId
+    })
+        .select('createdBy ownership assignedUsers analyticsViewers requestId roleDetails requirements')
+        .lean()
+);
+
+const ensureCandidateCapability = async (candidate, companyId, user, capability, options = {}) => {
+    const hiringRequest = options.hiringRequest || await getCandidateHiringRequestForAccess(candidate, companyId);
+    const hasAccess = await canAccessCandidate(candidate, user, {
+        companyId,
+        hiringRequest,
+        capability,
+        roundId: options.roundId || null
+    });
+
+    return {
+        hasAccess,
+        hiringRequest
+    };
+};
+
 const enrichCandidatesWithPublicProfiles = async (candidates, companyId) => {
     const candidateList = Array.isArray(candidates) ? candidates : [candidates].filter(Boolean);
     if (!candidateList.length) return candidates;
@@ -213,6 +244,10 @@ exports.uploadResume = async (req, res) => {
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
+        }
+        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        if (!canManageHiringRequest) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to upload candidates for this requisition' });
         }
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
 
@@ -331,6 +366,10 @@ exports.createCandidate = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
+        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        if (!canManageHiringRequest) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
+        }
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
 
         // Check for duplicate email or mobile in same hiring request
@@ -341,7 +380,14 @@ exports.createCandidate = async (req, res) => {
         });
 
         if (candidate) {
-            if (!canAccessCandidate(candidate, req.user)) {
+            const { hasAccess } = await ensureCandidateCapability(
+                candidate,
+                req.companyId,
+                req.user,
+                TA_CAPABILITIES.EDIT,
+                { hiringRequest }
+            );
+            if (!hasAccess) {
                 return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
             }
             // Update mode
@@ -580,7 +626,12 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        const candidates = await Candidate.find(buildAccessibleCandidateQuery(req.companyId, req.user, { hiringRequestId }))
+        const candidates = await Candidate.find(await buildAccessibleCandidateQuery(
+            req.companyId,
+            req.user,
+            { hiringRequestId },
+            { capability: TA_CAPABILITIES.VIEW }
+        ))
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
@@ -626,13 +677,13 @@ exports.getShortlistedCandidates = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        const query = buildAccessibleCandidateQuery(req.companyId, req.user, {
+        const query = await buildAccessibleCandidateQuery(req.companyId, req.user, {
             hiringRequestId,
             $or: [
                 { profileShared: true },
                 { profileShared: { $exists: false }, decision: 'Shortlisted' }
             ]
-        });
+        }, { capability: TA_CAPABILITIES.VIEW });
 
         const totalOptions = await Candidate.countDocuments(query);
         const candidates = await Candidate.find(query)
@@ -677,7 +728,15 @@ exports.getCandidateById = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidateData, req.user)) {
+        const hiringRequest = await getCandidateHiringRequestForAccess(candidateData, req.companyId);
+        const { hasAccess } = await ensureCandidateCapability(
+            candidateData,
+            req.companyId,
+            req.user,
+            TA_CAPABILITIES.VIEW,
+            { hiringRequest }
+        );
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this candidate' });
         }
 
@@ -699,7 +758,14 @@ exports.getCandidateById = async (req, res) => {
                 });
             };
 
-            syncSkills(hrr.mustHaveSkills, 'Must-Have');
+            const mustHaveSkillList = Array.isArray(hrr.mustHaveSkills)
+                ? hrr.mustHaveSkills
+                : [
+                    ...(Array.isArray(hrr.mustHaveSkills?.technical) ? hrr.mustHaveSkills.technical : []),
+                    ...(Array.isArray(hrr.mustHaveSkills?.softSkills) ? hrr.mustHaveSkills.softSkills : [])
+                ];
+
+            syncSkills(mustHaveSkillList, 'Must-Have');
             syncSkills(hrr.niceToHaveSkills, 'Nice-To-Have');
 
             if (hasChanges) {
@@ -708,16 +774,23 @@ exports.getCandidateById = async (req, res) => {
             }
         }
 
-        const candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
+        let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
 
-        const hiringRequest = await HiringRequest.findOne({
-            _id: candidate.hiringRequestId?._id || candidate.hiringRequestId,
-            companyId: req.companyId
-        });
         const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
 
         if (!hasHiringRequestAccess) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this candidate' });
+            const interviewerOnly = await isInterviewerOnlyView({
+                candidate,
+                hiringRequest,
+                companyId: req.companyId,
+                user: req.user
+            });
+
+            if (!interviewerOnly) {
+                return res.status(403).json({ message: 'Forbidden: You do not have permission to view this candidate' });
+            }
+
+            candidate = sanitizeCandidateForInterviewer(candidate);
         }
 
         res.status(200).json(candidate);
@@ -739,7 +812,8 @@ exports.updateCandidate = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -830,7 +904,8 @@ exports.deleteCandidate = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to delete this candidate' });
         }
 
@@ -869,7 +944,8 @@ exports.updateCandidateStatus = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -912,7 +988,8 @@ exports.updateCandidateRemark = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -945,7 +1022,8 @@ exports.updateCandidateInternalRemark = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -978,7 +1056,8 @@ exports.updateCandidateDecision = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.MAKE_DECISION);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1018,7 +1097,8 @@ exports.updatePhase2Decision = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.MAKE_DECISION);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1058,7 +1138,8 @@ exports.updatePhase3Decision = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.MAKE_DECISION);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1187,7 +1268,8 @@ exports.addInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1255,7 +1337,8 @@ exports.updateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1310,6 +1393,11 @@ exports.deleteInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
+        }
+
         const round = candidate.interviewRounds.id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
@@ -1333,7 +1421,7 @@ exports.getMyScheduledInterviews = async (req, res) => {
         // Only return rounds that are actually scheduled for the interviewer.
         // Some rounds are created in a "Pending" state before a date is set, and those
         // should not appear in the "Upcoming Interviews" widgets.
-        const candidates = await Candidate.find(buildAccessibleCandidateQuery(req.companyId, req.user, {
+        const candidates = await Candidate.find(await buildAccessibleCandidateQuery(req.companyId, req.user, {
             'interviewRounds': {
                 $elemMatch: {
                     assignedTo: userId,
@@ -1341,7 +1429,7 @@ exports.getMyScheduledInterviews = async (req, res) => {
                     scheduledDate: { $type: 'date' }
                 }
             }
-        }))
+        }, { capability: TA_CAPABILITIES.EVALUATE_ROUND }))
             .populate('hiringRequestId', 'requestId roleDetails')
             .select('candidateName email mobile interviewRounds hiringRequestId');
 
@@ -1393,9 +1481,9 @@ exports.getCandidatesByPulledBy = async (req, res) => {
         const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
         const skip = (page - 1) * limit;
 
-        const query = buildAccessibleCandidateQuery(req.companyId, req.user, {
+        const query = await buildAccessibleCandidateQuery(req.companyId, req.user, {
             profilePulledBy: { $regex: new RegExp(`^${userName}$`, 'i') }
-        });
+        }, { capability: TA_CAPABILITIES.VIEW });
 
         const [totalCandidates, summaryRows, candidates] = await Promise.all([
             Candidate.countDocuments(query),
@@ -1520,17 +1608,26 @@ exports.evaluateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
-        }
-
         const round = candidate.interviewRounds.id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
         }
 
+        const { hasAccess } = await ensureCandidateCapability(
+            candidate,
+            req.companyId,
+            req.user,
+            TA_CAPABILITIES.EVALUATE_ROUND,
+            { roundId }
+        );
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You are not authorized to evaluate this round' });
+        }
+
         // Authorization check: User must be an assigned evaluator or have super approve
-        const userPermissions = req.user.roles.flatMap(role => (role.permissions || []).map(p => p.key));
+        const userPermissions = Array.isArray(req.user?.permissions)
+            ? req.user.permissions
+            : (req.user?.roles || []).flatMap((role) => (role.permissions || []).map((permission) => permission.key));
         const hasSuperApprove = userPermissions.includes('ta.super_approve') || userPermissions.includes('*');
         const isAssigned = round.assignedTo.some(user => user._id.toString() === req.user._id.toString());
 
@@ -1625,7 +1722,8 @@ exports.updateSkillRatings = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1657,7 +1755,8 @@ exports.addSkillRating = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1689,7 +1788,8 @@ exports.deleteSkillRating = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1718,7 +1818,8 @@ exports.transferToOnboarding = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.TRANSFER);
+        if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
@@ -1782,7 +1883,7 @@ exports.transferToOnboarding = async (req, res) => {
             lastName,
             email: candidate.email,
             phone: candidate.mobile,
-            designation: candidate.hiringRequestId?.roleDetails?.positionName || '',
+            designation: candidate.hiringRequestId?.roleDetails?.title || '',
             joiningDate: candidate.lastWorkingDay || null,
             workLocation: candidate.preferredLocation || candidate.currentLocation || '',
             salary: {

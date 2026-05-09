@@ -15,7 +15,8 @@ const cloneCachedUser = (user) => ({
     reportingManagers: Array.isArray(user.reportingManagers)
         ? user.reportingManagers.map(manager => ({ ...manager }))
         : [],
-    permissions: Array.isArray(user.permissions) ? [...user.permissions] : []
+    permissions: Array.isArray(user.permissions) ? [...user.permissions] : [],
+    taAssignedClients: Array.isArray(user.taAssignedClients) ? [...user.taAssignedClients] : []
 });
 
 const protect = async (req, res, next) => {
@@ -40,7 +41,7 @@ const protect = async (req, res, next) => {
             } else {
                 // Keep auth hydration minimal because every protected API pays this cost.
                 req.user = await User.findById(decoded.id)
-                    .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
+                    .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients')
                     .populate({
                         path: 'roles',
                         select: 'name isSystem permissions',

@@ -1,31 +1,37 @@
-const { isHiringRequestAdmin } = require('./hiringRequestAccess');
+const {
+    TA_CAPABILITIES,
+    buildAccessibleCandidateQueryForCapability,
+    canAccessCandidateThroughHiringRequest,
+    canAccessHiringRequestForCapability,
+    isInterviewerOnlyView,
+    sanitizeCandidateForInterviewer
+} = require('./taAccess');
 
-const buildAccessibleCandidateQuery = (companyId, user, extraQuery = {}) => {
-    const query = {
+const buildAccessibleCandidateQuery = async (companyId, user, extraQuery = {}, options = {}) => (
+    buildAccessibleCandidateQueryForCapability(
         companyId,
-        ...extraQuery
-    };
+        user,
+        extraQuery,
+        options.capability || TA_CAPABILITIES.VIEW
+    )
+);
 
-    if (!isHiringRequestAdmin(user)) {
-        query.uploadedBy = user?._id;
-    }
-
-    return query;
-};
-
-const canAccessCandidate = (candidate, user) => {
-    if (!candidate || !user?._id) {
-        return false;
-    }
-
-    if (isHiringRequestAdmin(user)) {
-        return true;
-    }
-
-    return String(candidate.uploadedBy?._id || candidate.uploadedBy || '') === String(user._id);
-};
+const canAccessCandidate = async (candidate, user, options = {}) => (
+    canAccessCandidateThroughHiringRequest({
+        candidate,
+        user,
+        companyId: options.companyId,
+        hiringRequest: options.hiringRequest,
+        capability: options.capability || TA_CAPABILITIES.VIEW,
+        roundId: options.roundId || null
+    })
+);
 
 module.exports = {
+    TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
-    canAccessCandidate
+    canAccessCandidate,
+    canAccessHiringRequestForCapability,
+    isInterviewerOnlyView,
+    sanitizeCandidateForInterviewer
 };

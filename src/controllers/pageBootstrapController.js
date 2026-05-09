@@ -1,4 +1,4 @@
-const { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfDay, endOfDay, addWeeks, format } = require('date-fns');
+const { startOfMonth, endOfMonth, format } = require('date-fns');
 const Attendance = require('../models/Attendance');
 const Candidate = require('../models/Candidate');
 const BusinessUnit = require('../models/BusinessUnit');
@@ -22,6 +22,7 @@ const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
+const { buildTimesheetPeriodRange } = require('../utils/timesheetPeriod');
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
 
@@ -163,33 +164,6 @@ const getMonthRange = (year, month) => {
     const start = new Date(yearValue, monthValue - 1, 1);
     const end = new Date(yearValue, monthValue, 1);
     return { start, end };
-};
-
-const buildTimesheetPeriodRange = (periodId, cycle) => {
-    if (cycle === 'Weekly') {
-        if (periodId.includes('-W')) {
-            const [year, weekStr] = periodId.split('-W');
-            const weekNum = parseInt(weekStr, 10);
-            const firstDayOfYear = new Date(parseInt(year, 10), 0, 1);
-            const daysToFirstMonday = (8 - firstDayOfYear.getDay()) % 7;
-            const firstMonday = new Date(parseInt(year, 10), 0, 1 + daysToFirstMonday);
-            const start = startOfWeek(addWeeks(firstMonday, weekNum - 1));
-            const end = endOfWeek(start);
-            return { start, end };
-        }
-
-        const date = new Date(`${periodId}-01`);
-        return { start: startOfWeek(date), end: endOfWeek(date) };
-    }
-
-    if (cycle === 'Daily') {
-        const start = startOfDay(new Date(periodId));
-        return { start, end: endOfDay(start) };
-    }
-
-    const [year, month] = periodId.split('-');
-    const date = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1);
-    return { start: startOfMonth(date), end: endOfMonth(date) };
 };
 
 const getTimesheetProjectsForUser = async ({ requestUser, companyId, targetUserId }) => {

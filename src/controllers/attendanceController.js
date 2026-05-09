@@ -9,6 +9,7 @@ const { startOfDay, endOfDay, format, differenceInCalendarDays, subDays, startOf
 const LeaveRequest = require('../models/LeaveRequest');
 const LeaveConfig = require('../models/LeaveConfig');
 const NotificationService = require('../services/notificationService');
+const { getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
 const {
     getISTTime,
     getStartOfDayIST,
@@ -18,13 +19,6 @@ const {
     buildEndOfDayIST
 } = require('../utils/attendancePolicy');
 
-
-const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
-    const date = new Date(dateValue);
-    if (cycle === 'Weekly') return format(date, "yyyy-'W'II");
-    if (cycle === 'Daily') return format(date, 'yyyy-MM-dd');
-    return format(date, 'yyyy-MM');
-};
 
 const ensureTimesheetPeriodEditable = async ({ company, companyId, userId, dateValue }) => {
     const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
@@ -999,6 +993,17 @@ exports.processRegularizationRequest = async (req, res) => {
         request.status = status;
         request.approvedBy = req.user._id;
         if (status === 'APPROVED') {
+            const company = req.company || await Company.findById(req.companyId).select('settings.timesheet settings.attendance').lean();
+            const editability = await ensureTimesheetPeriodEditable({
+                company,
+                companyId: req.companyId,
+                userId: request.user,
+                dateValue: request.date
+            });
+            if (!editability.ok) {
+                return res.status(400).json({ message: editability.message });
+            }
+
             let attendance = await Attendance.findOne({ user: request.user, companyId: req.companyId, date: request.date });
             if (!attendance) {
                 attendance = new Attendance({ user: request.user, companyId: req.companyId, date: parseDateAsIST(request.date), status: 'PRESENT' });
@@ -1013,7 +1018,6 @@ exports.processRegularizationRequest = async (req, res) => {
             }
             attendance.approvalStatus = 'APPROVED';
 
-            const company = req.company || await Company.findById(req.companyId).select('settings.attendance').lean();
             const policy = buildAttendancePolicy({
                 company,
                 user: requestUser,

@@ -7,6 +7,7 @@ const EmailTemplate = require('../models/EmailTemplate');
 const PublicApplication = require('../models/PublicApplication');
 const PhaseTemplate = require('../models/PhaseTemplate');
 const mongoose = require('mongoose');
+const SequenceCounter = require('../models/SequenceCounter');
 const NotificationService = require('../services/notificationService');
 const { sendEmail } = require('../services/emailService');
 const {
@@ -20,11 +21,13 @@ const { copyTemplatePhasesForHiringRequest } = require('../utils/phaseTemplateUt
 const {
     buildAccessibleHiringRequestQuery,
     canAccessHiringRequest,
+    getUserPermissionKeys,
     isHiringRequestAdmin
 } = require('../utils/hiringRequestAccess');
 const {
     buildAccessibleCandidateQuery,
-    canAccessCandidate
+    canAccessCandidate,
+    TA_CAPABILITIES
 } = require('../utils/candidateAccess');
 const {
     buildAnalyticsHiringRequestQuery,
@@ -32,11 +35,78 @@ const {
 } = require('../utils/taAnalyticsAccess');
 
 
-// Helper to generate Request ID (e.g., HRR-2023-001)
+const HIRING_REQUEST_SEQUENCE_KEY = 'hiring_request';
+
+const getHiringRequestPrefix = (year) => `HRR-${year}-`;
+
+const extractSequenceNumber = (requestId, year) => {
+    const prefix = getHiringRequestPrefix(year);
+    if (typeof requestId !== 'string' || !requestId.startsWith(prefix)) {
+        return 0;
+    }
+
+    const suffix = requestId.slice(prefix.length);
+    return Number.parseInt(suffix, 10) || 0;
+};
+
+const seedHiringRequestSequenceCounter = async (companyId, year) => {
+    const existingCounter = await SequenceCounter.findOne({
+        companyId,
+        key: HIRING_REQUEST_SEQUENCE_KEY,
+        year
+    }).lean();
+
+    if (existingCounter) {
+        return existingCounter;
+    }
+
+    const prefix = getHiringRequestPrefix(year);
+    const latestRequest = await HiringRequest.findOne({
+        companyId,
+        requestId: { $regex: `^${prefix}` }
+    })
+        .sort({ requestId: -1 })
+        .select('requestId')
+        .lean();
+
+    const lastSequence = extractSequenceNumber(latestRequest?.requestId, year);
+
+    try {
+        return await SequenceCounter.create({
+            companyId,
+            key: HIRING_REQUEST_SEQUENCE_KEY,
+            year,
+            seq: lastSequence
+        });
+    } catch (error) {
+        if (error?.code !== 11000) {
+            throw error;
+        }
+
+        return SequenceCounter.findOne({
+            companyId,
+            key: HIRING_REQUEST_SEQUENCE_KEY,
+            year
+        }).lean();
+    }
+};
+
+// Helper to generate Request ID (e.g., HRR-2026-001) using an atomic per-company counter.
 const generateRequestId = async (companyId) => {
-    const count = await HiringRequest.countDocuments({ companyId });
     const year = new Date().getFullYear();
-    return `HRR-${year}-${String(count + 1).padStart(3, '0')}`;
+    await seedHiringRequestSequenceCounter(companyId, year);
+
+    const counter = await SequenceCounter.findOneAndUpdate(
+        {
+            companyId,
+            key: HIRING_REQUEST_SEQUENCE_KEY,
+            year
+        },
+        { $inc: { seq: 1 } },
+        { new: true }
+    ).lean();
+
+    return `${getHiringRequestPrefix(year)}${String(counter.seq).padStart(3, '0')}`;
 };
 
 const setNoCache = (res) => {
@@ -190,7 +260,7 @@ const transferCandidateToTargetRequisition = async ({ candidateId, targetRequisi
         throw error;
     }
 
-    if (!canAccessCandidate(candidate, user)) {
+    if (!(await canAccessCandidate(candidate, user, { companyId, capability: TA_CAPABILITIES.TRANSFER }))) {
         const error = new Error('Forbidden: You do not have permission to transfer this candidate.');
         error.statusCode = 403;
         throw error;
@@ -341,10 +411,10 @@ const sendMassMailForHiringRequest = async ({
         throw error;
     }
 
-    const query = buildAccessibleCandidateQuery(companyId, user, {
+    const query = await buildAccessibleCandidateQuery(companyId, user, {
         hiringRequestId,
         ...buildCandidateFilterQuery(filters)
-    });
+    }, { capability: TA_CAPABILITIES.VIEW });
 
     if (Array.isArray(candidateIds) && candidateIds.length) {
         query._id = {
@@ -1119,8 +1189,14 @@ exports.toggleJobVisibility = async (req, res) => {
             return res.status(404).json({ message: 'Job not found' });
         }
 
+        const userPermissions = getUserPermissionKeys(req.user);
         const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user);
-        if (!hasAccess) {
+        const canManageVisibility = hasAccess
+            || userPermissions.includes('ta.config.manage')
+            || userPermissions.includes('ta.edit')
+            || userPermissions.includes('*');
+
+        if (!canManageVisibility) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
         }
 
@@ -1250,9 +1326,9 @@ exports.getPreviousCandidates = async (req, res) => {
         // Fetch candidates for each requisition and group them
         const groups = await Promise.all(
             legacyRequisitions.map(async (legacyRequisition) => {
-                const candidates = await Candidate.find(buildAccessibleCandidateQuery(req.companyId, req.user, {
+                const candidates = await Candidate.find(await buildAccessibleCandidateQuery(req.companyId, req.user, {
                     hiringRequestId: legacyRequisition._id
-                })).lean();
+                }, { capability: TA_CAPABILITIES.VIEW })).lean();
                 return {
                     requisition: {
                         _id: legacyRequisition._id,
@@ -1303,7 +1379,7 @@ exports.transferCandidate = async (req, res) => {
 
         if (!candidate) return res.status(404).json({ message: 'Candidate not found' });
 
-        if (!canAccessCandidate(candidate, req.user)) {
+        if (!(await canAccessCandidate(candidate, req.user, { companyId: req.companyId, capability: TA_CAPABILITIES.TRANSFER }))) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to transfer this candidate' });
         }
 

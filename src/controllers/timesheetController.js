@@ -2,25 +2,21 @@ const Timesheet = require('../models/Timesheet');
 const Project = require('../models/Project');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
-const { startOfMonth, endOfMonth, startOfWeek, endOfWeek, format, startOfDay, endOfDay, addWeeks, subWeeks } = require('date-fns');
+const { startOfDay } = require('date-fns');
 const WorkLog = require('../models/WorkLog');
 const Task = require('../models/Task');
 const Module = require('../models/Module');
 const NotificationService = require('../services/notificationService');
-
-const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
-    const date = new Date(dateValue);
-    if (cycle === 'Weekly') return format(date, "yyyy-'W'II");
-    if (cycle === 'Daily') return format(date, 'yyyy-MM-dd');
-    return format(date, 'yyyy-MM');
-};
+const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
+const { parseDateAsIST } = require('../utils/attendancePolicy');
 
 // @desc    Get Current Month Timesheet
 // @route   GET /api/timesheet/current
 // @access  Private
 const getCurrentTimesheet = async (req, res) => {
     try {
-        const currentMonth = req.query.month || format(new Date(), 'yyyy-MM');
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const currentMonth = req.query.month || getTimesheetPeriodIdForDate(new Date(), cycle);
 
         if (!req.user) {
             return res.status(401).json({ message: 'User not authenticated (req.user missing)' });
@@ -58,35 +54,7 @@ const getCurrentTimesheet = async (req, res) => {
             };
         }
 
-        // Fetch WorkLogs for this period based on cycle
-        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
-        let start, end;
-
-        if (cycle === 'Weekly') {
-            if (currentMonth.includes('-W')) {
-                const [year, weekStr] = currentMonth.split('-W');
-                const weekNum = parseInt(weekStr);
-                const firstDayOfYear = new Date(parseInt(year), 0, 1);
-                const daysToFirstMonday = (8 - firstDayOfYear.getDay()) % 7;
-                const firstMonday = new Date(parseInt(year), 0, 1 + daysToFirstMonday);
-                start = startOfWeek(addWeeks(firstMonday, weekNum - 1));
-                end = endOfWeek(start);
-            } else {
-                // Fallback context
-                const date = new Date(currentMonth + '-01');
-                start = startOfWeek(date);
-                end = endOfWeek(date);
-            }
-        } else if (cycle === 'Daily') {
-            start = startOfDay(new Date(currentMonth));
-            end = endOfDay(start);
-        } else {
-            // Monthly
-            const [year, month] = currentMonth.split('-');
-            const date = new Date(parseInt(year), parseInt(month) - 1, 1);
-            start = startOfMonth(date);
-            end = endOfMonth(date);
-        }
+        const { start, end } = buildTimesheetPeriodRange(currentMonth, cycle);
 
         const [workLogs, attendance] = await Promise.all([
             WorkLog.find({
@@ -161,8 +129,14 @@ const addEntry = async (req, res) => {
         }
 
         // Check for Existing Timesheet Logic
+        const parsedEntryDate = new Date(entryDate);
+        if (!entryDate || Number.isNaN(parsedEntryDate.getTime())) {
+            return res.status(400).json({ message: 'Valid work log date is required' });
+        }
+        const normalizedEntryDate = parseDateAsIST(parsedEntryDate);
+
         const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
-        const periodId = getTimesheetPeriodIdForDate(entryDate, cycle);
+        const periodId = getTimesheetPeriodIdForDate(normalizedEntryDate, cycle);
 
         const timesheet = await Timesheet.findOne({
             user: targetUserId,
@@ -179,7 +153,7 @@ const addEntry = async (req, res) => {
 
         if (targetUser?.joiningDate && !isAdmin) {
             const joiningStart = startOfDay(new Date(targetUser.joiningDate));
-            const entryStart = startOfDay(new Date(entryDate));
+            const entryStart = startOfDay(normalizedEntryDate);
 
             if (entryStart < joiningStart) {
                 return res.status(400).json({ message: 'Cannot add entries before joining date.' });
@@ -205,7 +179,7 @@ const addEntry = async (req, res) => {
         // 3. Create WorkLog
         const workLog = new WorkLog({
             user: targetUserId,
-            date: entryDate,
+            date: normalizedEntryDate,
             companyId: req.companyId,
             task: taskId, // This implies taskId is required. 
             // If we support Project-only logs, we'd need a Task to hold it (e.g. "General Task" under project)
@@ -260,6 +234,14 @@ const submitTimesheet = async (req, res) => {
         }
 
         const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+
+        if (timesheet.status === 'APPROVED') {
+            return res.status(400).json({ message: 'Approved timesheets cannot be resubmitted.' });
+        }
+
+        if (timesheet.status === 'SUBMITTED') {
+            return res.status(400).json({ message: 'Timesheet is already submitted.' });
+        }
         
         timesheet.status = 'SUBMITTED';
         timesheet.submissionCycle = cycle;
@@ -367,7 +349,8 @@ const createProject = async (req, res) => {
 const getUserTimesheet = async (req, res) => {
     try {
         const targetUserId = req.params.userId;
-        const currentMonth = req.query.month || format(new Date(), 'yyyy-MM');
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const currentMonth = req.query.month || getTimesheetPeriodIdForDate(new Date(), cycle);
 
         if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -398,18 +381,7 @@ const getUserTimesheet = async (req, res) => {
             companyId: req.companyId
         }).lean();
 
-        // Fetch WorkLogs
-        const [year, month] = currentMonth.split('-');
-        const currentMonthIdx = parseInt(month) - 1;
-
-        let start, end;
-        if (!isNaN(currentMonthIdx)) {
-            start = startOfMonth(new Date(parseInt(year), currentMonthIdx));
-            end = endOfMonth(new Date(parseInt(year), currentMonthIdx));
-        } else {
-            start = startOfMonth(new Date());
-            end = endOfMonth(new Date());
-        }
+        const { start, end } = buildTimesheetPeriodRange(currentMonth, cycle);
 
         const [workLogs, attendance, fullTargetUser] = await Promise.all([
             WorkLog.find({
@@ -506,9 +478,8 @@ const getPendingTimesheets = async (req, res) => {
 
         // Enrich with Entries
         const enrichedTimesheets = await Promise.all(timesheets.map(async (ts) => {
-            const [year, month] = ts.month.split('-');
-            const start = startOfMonth(new Date(parseInt(year), parseInt(month) - 1));
-            const end = endOfMonth(new Date(parseInt(year), parseInt(month) - 1));
+            const cycle = ts.submissionCycle || req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+            const { start, end } = buildTimesheetPeriodRange(ts.month, cycle);
 
             const workLogs = await WorkLog.find({
                 user: ts.user._id,
@@ -575,21 +546,46 @@ const approveTimesheet = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
-        const [year, month] = timesheet.month.split('-');
-        const start = startOfMonth(new Date(parseInt(year), parseInt(month) - 1));
-        const end = endOfMonth(new Date(parseInt(year), parseInt(month) - 1));
+        if (timesheet.status !== 'SUBMITTED') {
+            return res.status(400).json({ message: 'Only submitted timesheets can be approved or rejected.' });
+        }
+
+        if (!['APPROVED', 'REJECTED'].includes(status)) {
+            return res.status(400).json({ message: 'Invalid approval status.' });
+        }
+
+        const cycle = timesheet.submissionCycle || req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const { start, end } = buildTimesheetPeriodRange(timesheet.month, cycle);
 
         if (status === 'REJECTED' && type === 'PARTIAL') {
+            if (rejectedEntryIds.length === 0) {
+                return res.status(400).json({ message: 'Select at least one timesheet entry to reject.' });
+            }
+
+            const scopedRejectedEntries = await WorkLog.find({
+                _id: { $in: rejectedEntryIds },
+                user: targetUser._id,
+                companyId: req.companyId,
+                date: { $gte: start, $lte: end }
+            }).select('_id').lean();
+
+            if (scopedRejectedEntries.length !== rejectedEntryIds.length) {
+                return res.status(400).json({ message: 'One or more selected entries are outside this timesheet period.' });
+            }
+
             timesheet.status = 'REJECTED';
             timesheet.approver = req.user._id;
             timesheet.rejectionReason = "Partial Rejection: " + reason;
 
-            if (rejectedEntryIds.length > 0) {
-                await WorkLog.updateMany(
-                    { _id: { $in: rejectedEntryIds }, companyId: req.companyId },
-                    { $set: { status: 'REJECTED', rejectionReason: reason } }
-                );
-            }
+            await WorkLog.updateMany(
+                {
+                    _id: { $in: rejectedEntryIds },
+                    user: targetUser._id,
+                    companyId: req.companyId,
+                    date: { $gte: start, $lte: end }
+                },
+                { $set: { status: 'REJECTED', rejectionReason: reason } }
+            );
 
         } else {
             timesheet.status = status;
