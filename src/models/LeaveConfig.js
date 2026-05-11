@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const leaveConfigSchema = new mongoose.Schema({
     leaveType: {
@@ -75,5 +76,8 @@ const leaveConfigSchema = new mongoose.Schema({
 
 // Ensure leave types are unique per company
 leaveConfigSchema.index({ leaveType: 1, companyId: 1 }, { unique: true });
+leaveConfigSchema.index({ companyId: 1, isDeleted: 1 });
+
+leaveConfigSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('LeaveConfig', leaveConfigSchema);

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const queryTypeSchema = new mongoose.Schema({
     name: { type: String, required: true },
@@ -18,5 +19,9 @@ const queryTypeSchema = new mongoose.Schema({
 }, { timestamps: true });
  
 queryTypeSchema.index({ name: 1, companyId: 1 }, { unique: true });
+
+queryTypeSchema.index({ companyId: 1, isDeleted: 1 });
+
+queryTypeSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('QueryType', queryTypeSchema);

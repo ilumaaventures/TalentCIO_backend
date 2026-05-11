@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const holidaySchema = new mongoose.Schema({
     name: {
@@ -30,5 +31,8 @@ holidaySchema.index({ companyId: 1, name: 1, year: 1 }, { unique: true });
 
 // For month-based filtering with company scoping
 holidaySchema.index({ companyId: 1, date: 1 });
+holidaySchema.index({ companyId: 1, isDeleted: 1 });
+
+holidaySchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Holiday', holidaySchema);

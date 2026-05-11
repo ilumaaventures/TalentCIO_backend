@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const InterviewWorkflowSchema = new mongoose.Schema({
     name: { type: String, required: true },
@@ -24,5 +25,9 @@ const InterviewWorkflowSchema = new mongoose.Schema({
 }, { timestamps: true });
  
 InterviewWorkflowSchema.index({ name: 1, companyId: 1 }, { unique: true });
+
+InterviewWorkflowSchema.index({ companyId: 1, isDeleted: 1 });
+
+InterviewWorkflowSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('InterviewWorkflow', InterviewWorkflowSchema);

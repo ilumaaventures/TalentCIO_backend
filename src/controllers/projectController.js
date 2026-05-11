@@ -6,6 +6,11 @@ const Module = require('../models/Module');
 const Task = require('../models/Task');
 
 const User = require('../models/User');
+const {
+    softDeleteProjectTree,
+    softDeleteModuleTree,
+    softDeleteTaskTree
+} = require('../services/binService');
 
 const hasPermission = (req, permission) => (req.user.permissions || []).includes(permission);
 const hasAnyPermission = (req, permissions) => permissions.some(permission => hasPermission(req, permission));
@@ -335,26 +340,13 @@ const updateProject = async (req, res) => {
 
 const deleteProject = async (req, res) => {
     try {
-        const project = await Project.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
+        const project = await Project.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // Cascade Delete
-        const modules = await Module.find({ project: project._id, companyId: req.companyId });
-        const moduleIds = modules.map(m => m._id);
+        await project.softDelete(req.user._id);
+        await softDeleteProjectTree(project._id, req.companyId, req.user._id);
 
-        if (moduleIds.length > 0) {
-            const tasks = await Task.find({ module: { $in: moduleIds }, companyId: req.companyId });
-            const taskIds = tasks.map(t => t._id);
-
-            const WorkLog = require('../models/WorkLog');
-            if (taskIds.length > 0) {
-                await WorkLog.deleteMany({ task: { $in: taskIds }, companyId: req.companyId });
-            }
-            await Task.deleteMany({ module: { $in: moduleIds }, companyId: req.companyId });
-            await Module.deleteMany({ project: project._id, companyId: req.companyId });
-        }
-
-        res.json({ message: 'Project and associated data deleted' });
+        res.json({ message: 'Project moved to bin' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -463,20 +455,13 @@ const updateModule = async (req, res) => {
 
 const deleteModule = async (req, res) => {
     try {
-        const module = await Module.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
+        const module = await Module.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!module) return res.status(404).json({ message: 'Module not found' });
 
-        // Cascade Delete
-        const tasks = await Task.find({ module: module._id, companyId: req.companyId });
-        const taskIds = tasks.map(t => t._id);
+        await module.softDelete(req.user._id);
+        await softDeleteModuleTree(module._id, req.companyId, req.user._id);
 
-        const WorkLog = require('../models/WorkLog');
-        if (taskIds.length > 0) {
-            await WorkLog.deleteMany({ task: { $in: taskIds }, companyId: req.companyId });
-        }
-        await Task.deleteMany({ module: module._id, companyId: req.companyId });
-
-        res.json({ message: 'Module and tasks deleted' });
+        res.json({ message: 'Module moved to bin' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -562,13 +547,13 @@ const updateTask = async (req, res) => {
 
 const deleteTask = async (req, res) => {
     try {
-        const task = await Task.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
+        const task = await Task.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!task) return res.status(404).json({ message: 'Task not found' });
 
-        const WorkLog = require('../models/WorkLog');
-        await WorkLog.deleteMany({ task: task._id, companyId: req.companyId });
+        await task.softDelete(req.user._id);
+        await softDeleteTaskTree(task._id, req.companyId, req.user._id);
 
-        res.json({ message: 'Task deleted' });
+        res.json({ message: 'Task moved to bin' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

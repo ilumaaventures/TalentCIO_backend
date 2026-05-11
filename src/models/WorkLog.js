@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const workLogSchema = new mongoose.Schema({
     task: {
@@ -38,5 +39,8 @@ const workLogSchema = new mongoose.Schema({
 workLogSchema.index({ companyId: 1, user: 1, date: -1 });
 workLogSchema.index({ companyId: 1, date: 1 });
 workLogSchema.index({ task: 1, companyId: 1, date: -1 });
+workLogSchema.index({ companyId: 1, isDeleted: 1 });
+
+workLogSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('WorkLog', workLogSchema);

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const ActionItemSchema = new mongoose.Schema({
     taskDescription: { type: String, required: true },
@@ -68,5 +69,8 @@ const meetingSchema = new mongoose.Schema({
 
 meetingSchema.index({ companyId: 1, date: 1 });
 meetingSchema.index({ host: 1, companyId: 1, date: -1 });
+meetingSchema.index({ companyId: 1, isDeleted: 1 });
+
+meetingSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Meeting', meetingSchema);

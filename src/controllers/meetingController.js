@@ -119,8 +119,8 @@ const deleteMeeting = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to delete this meeting' });
         }
 
-        await Meeting.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
-        res.json({ message: 'Meeting deleted successfully' });
+        await meeting.softDelete(req.user._id);
+        res.json({ message: 'Meeting moved to bin successfully' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

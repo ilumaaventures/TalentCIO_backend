@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const phaseStatusOptionSchema = new mongoose.Schema({
     value: { type: String, required: true, trim: true },
@@ -212,6 +213,9 @@ HiringRequestSchema.index({ companyId: 1, assignedUsers: 1, createdAt: -1 });
 HiringRequestSchema.index({ companyId: 1, analyticsViewers: 1, createdAt: -1 });
 HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1 });
+HiringRequestSchema.index({ companyId: 1, isDeleted: 1 });
+
+HiringRequestSchema.plugin(softDeletePlugin);
 
 // Audit Logs for this specific request
 const HRRAuditLogSchema = new mongoose.Schema({

@@ -15,6 +15,22 @@ const getAssignedClientNames = (user) => (
     )]
 );
 
+const getCompanyEmailBranding = async (companyId, company = null) => {
+    let workspace = company;
+
+    if (!workspace && companyId) {
+        workspace = await require('../models/Company')
+            .findById(companyId)
+            .select('name settings.logo')
+            .lean();
+    }
+
+    return {
+        logoUrl: workspace?.settings?.logo || undefined,
+        logoAlt: workspace?.name || 'TalentCIO'
+    };
+};
+
 // Generate JWT Helper
 const generateToken = (id, tokenVersion) => {
     return jwt.sign({ id, tokenVersion }, process.env.JWT_SECRET, {
@@ -113,7 +129,9 @@ const loginUser = async (req, res) => {
             await user.save();
 
             // Send OTP via Email (Non-blocking)
-            emailService.sendOTPEmail(user.email, otpCode, user.firstName).catch(err => {
+            const branding = await getCompanyEmailBranding(user.companyId, req.company);
+
+            emailService.sendOTPEmail(user.email, otpCode, user.firstName, branding).catch(err => {
                 console.error('[AUTH] Background Email Send Error:', err.message);
             });
 
@@ -325,7 +343,8 @@ const resendOtp = async (req, res) => {
         user.otpExpires = Date.now() + 10 * 60 * 1000;
         await user.save();
 
-        const emailSent = await emailService.sendOTPEmail(user.email, otpCode, user.firstName);
+        const branding = await getCompanyEmailBranding(user.companyId, req.company);
+        const emailSent = await emailService.sendOTPEmail(user.email, otpCode, user.firstName, branding);
 
         res.json({
             message: 'A new OTP has been sent to your email.',
