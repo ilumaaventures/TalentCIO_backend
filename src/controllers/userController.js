@@ -5,22 +5,87 @@ const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const Permission = require('../models/Permission');
 
+const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
+
+const isPrimaryCompanyAdmin = ({ user, companyEmail, oldestSystemUserId }) => {
+    const normalizedCompanyEmail = String(companyEmail || '').trim().toLowerCase();
+    const normalizedUserEmail = String(user?.email || '').trim().toLowerCase();
+    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
+    const isAdminUser = roleNames.includes('Admin') || roleNames.includes('System Admin');
+    const userId = user?._id ? String(user._id) : '';
+    const normalizedOldestSystemUserId = oldestSystemUserId ? String(oldestSystemUserId) : '';
+    const isMatchByEmail = Boolean(normalizedCompanyEmail && normalizedUserEmail === normalizedCompanyEmail && isAdminUser);
+    const isMatchByOldestSystemUser = Boolean(normalizedOldestSystemUserId && userId === normalizedOldestSystemUserId && isAdminUser);
+
+    return isMatchByEmail || isMatchByOldestSystemUser;
+};
+
+const getPrimaryAdminProtectionContext = async (companyId) => {
+    const [company, systemUsers] = await Promise.all([
+        Company.findById(companyId).select('email').lean(),
+        User.find({ companyId }, null, { includeDeleted: true })
+            .select('_id email createdAt roles')
+            .populate('roles', 'name isSystem')
+            .lean()
+    ]);
+
+    const oldestSystemUser = systemUsers
+        .filter((user) => Array.isArray(user.roles) && user.roles.some((role) => role?.isSystem === true))
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+
+    return {
+        companyEmail: company?.email || '',
+        oldestSystemUserId: oldestSystemUser?._id || null
+    };
+};
+
+const attachPrimaryAdminFlags = async (users, companyId) => {
+    if (!Array.isArray(users) || users.length === 0) {
+        return users || [];
+    }
+
+    const protectionContext = await getPrimaryAdminProtectionContext(companyId);
+
+    return users.map((user) => ({
+        ...user,
+        isProtectedPrimaryAdmin: isPrimaryCompanyAdmin({
+            user,
+            ...protectionContext
+        })
+    }));
+};
+
+const isProtectedPrimaryAdminUser = async (user, companyId) => {
+    if (!user) return false;
+    const protectionContext = await getPrimaryAdminProtectionContext(companyId);
+    return isPrimaryCompanyAdmin({
+        user,
+        ...protectionContext
+    });
+};
+
 // @desc    Get All Users
 // @route   GET /api/users
 // @access  Private (Admin) 
 const getUsers = async (req, res) => {
     try {
-        const users = await User.find({ companyId: req.companyId })
-            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
+        const includeDeleted = req.query.includeDeleted === 'true';
+        const users = await User.find(
+            { companyId: req.companyId },
+            null,
+            includeDeleted ? { includeDeleted: true } : undefined
+        )
+            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
             .populate({
                 path: 'roles',
-                select: 'name permissions',
+                select: 'name isSystem permissions',
                 populate: { path: 'permissions', select: 'key' }
             })
             .populate('reportingManagers', 'firstName lastName email')
             .populate('employeeProfile', 'hris')
             .lean();
-        res.json(users);
+        const usersWithFlags = await attachPrimaryAdminFlags(users, req.companyId);
+        res.json(usersWithFlags);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
@@ -320,9 +385,14 @@ const getMyself = async (req, res) => {
 
 const getUserById = async (req, res) => {
     try {
-        const user = await User.findOne({ _id: req.params.id, companyId: req.companyId })
-            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
-            .populate('roles', 'name')
+        const includeDeleted = req.query.includeDeleted === 'true';
+        const user = await User.findOne(
+            { _id: req.params.id, companyId: req.companyId },
+            null,
+            includeDeleted ? { includeDeleted: true } : undefined
+        )
+            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
+            .populate('roles', 'name isSystem')
             .populate('reportingManagers', 'firstName lastName email')
             .lean();
 
@@ -337,6 +407,7 @@ const getUserById = async (req, res) => {
         }).select('_id firstName lastName email').lean();
 
         user.directReports = directReports;
+        user.isProtectedPrimaryAdmin = await isProtectedPrimaryAdminUser(user, req.companyId);
 
         res.json(user);
     } catch (error) {
@@ -391,6 +462,10 @@ const toggleUserStatus = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        if (user.isActive && await isProtectedPrimaryAdminUser(user, req.companyId)) {
+            return res.status(403).json({ message: 'The main admin created by Super Admin cannot be deactivated.' });
+        }
+
         user.isActive = !user.isActive;
 
         await user.save();
@@ -399,6 +474,30 @@ const toggleUserStatus = async (req, res) => {
             message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,
             isActive: user.isActive
         });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+const deleteUser = async (req, res) => {
+    try {
+        const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (await isProtectedPrimaryAdminUser(user, req.companyId)) {
+            return res.status(403).json({ message: 'The main admin created by Super Admin cannot be moved to the bin.' });
+        }
+
+        user.isActive = false;
+        user.isDeleted = true;
+        user.deletedAt = new Date();
+        user.deletedBy = req.user._id;
+        await user.save();
+
+        res.json({ message: 'User moved to bin' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
@@ -414,6 +513,7 @@ module.exports = {
     getMyself,
     getUserById,
     toggleUserStatus,
+    deleteUser,
     debugTA
 };
 const getAssignedClientNames = (user) => (

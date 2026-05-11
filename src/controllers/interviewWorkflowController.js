@@ -112,8 +112,8 @@ exports.deleteInterviewWorkflow = async (req, res) => {
             return res.status(404).json({ message: 'Interview workflow not found' });
         }
 
-        await workflow.deleteOne();
-        res.json({ message: 'Interview workflow removed' });
+        await workflow.softDelete(req.user._id);
+        res.json({ message: 'Interview workflow moved to bin' });
     } catch (error) {
         console.error('Error deleting interview workflow:', error);
         res.status(500).json({ message: 'Server error', error: error.message });

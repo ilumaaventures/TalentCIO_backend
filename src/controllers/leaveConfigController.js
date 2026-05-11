@@ -172,8 +172,8 @@ const deleteLeavePolicy = async (req, res) => {
             return res.status(404).json({ message: 'Policy not found' });
         }
 
-        await policy.deleteOne();
-        res.json({ message: 'Policy removed' });
+        await policy.softDelete(req.user._id);
+        res.json({ message: 'Policy moved to bin' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });

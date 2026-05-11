@@ -188,8 +188,8 @@ exports.deleteDiscussion = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to delete this discussion' });
         }
 
-        await Discussion.deleteOne({ _id: req.params.id, companyId: req.companyId });
-        res.status(200).json({ message: 'Discussion deleted successfully' });
+        await discussion.softDelete(req.user._id);
+        res.status(200).json({ message: 'Discussion moved to bin successfully' });
     } catch (error) {
         console.error('Error deleting discussion:', error);
         res.status(500).json({ message: 'Error deleting discussion', error: error.message });

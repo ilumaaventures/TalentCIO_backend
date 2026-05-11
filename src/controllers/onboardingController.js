@@ -53,6 +53,21 @@ const formatCurrency = (val) => {
     return '₹ ' + num.toLocaleString('en-IN');
 };
 
+const getCompanyEmailBranding = async (companyId, company = null) => {
+    let workspace = company;
+
+    if ((!workspace || !workspace.settings?.logo) && companyId) {
+        workspace = await Company.findById(companyId)
+            .select('name settings.logo')
+            .lean();
+    }
+
+    return {
+        logoUrl: workspace?.settings?.logo || undefined,
+        logoAlt: workspace?.name || 'TalentCIO'
+    };
+};
+
 const getTemplateContent = async (customUrl, defaultPath) => {
     try {
         if (customUrl && typeof customUrl === 'string' && customUrl.startsWith('http')) {
@@ -313,10 +328,12 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             </div>
         `;
 
+        const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         await sendEmail({
             to: employee.email,
             subject: `Action Required: Complete Your Pre-Onboarding – ${employee.tempEmployeeId}`,
-            html: emailHtml
+            html: emailHtml,
+            ...branding
         });
 
         // Add audit log
@@ -380,11 +397,13 @@ exports.sendCustomFile = async (req, res) => {
             path: f.path
         }));
 
+        const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         const sent = await sendEmail({
             to: employee.email,
             subject: `Action Required: New ${files.length > 1 ? 'Documents' : 'Document'} for Your Onboarding`,
             html: emailHtml,
-            attachments
+            attachments,
+            ...branding
         });
 
         if (!sent) {
@@ -689,6 +708,7 @@ exports.flagDocument = async (req, res) => {
                     </div>
                 `).join('');
 
+                const branding = await getCompanyEmailBranding(employee.companyId, req.company);
                 await sendEmail({
                     to: employee.email,
                     subject: `Action Required: Document Updates Needed for Your Onboarding`,
@@ -701,7 +721,8 @@ exports.flagDocument = async (req, res) => {
                             <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
-                    `
+                    `,
+                    ...branding
                 });
             }
         }
@@ -757,6 +778,7 @@ exports.approveDocument = async (req, res) => {
                     </div>
                 `).join('');
 
+                const branding = await getCompanyEmailBranding(employee.companyId, req.company);
                 await sendEmail({
                     to: employee.email,
                     subject: `Action Required: Document Updates Needed for Your Onboarding`,
@@ -769,7 +791,8 @@ exports.approveDocument = async (req, res) => {
                             <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
-                    `
+                    `,
+                    ...branding
                 });
             }
         }
@@ -1229,6 +1252,7 @@ exports.submitOnboarding = async (req, res) => {
 
             // Notify HR via email
             if (employee.createdBy.email) {
+                const branding = await getCompanyEmailBranding(employee.companyId, req.company);
                 await sendEmail({
                     to: employee.createdBy.email,
                     subject: `Onboarding Submitted: ${employee.firstName} ${employee.lastName}`,
@@ -1242,7 +1266,8 @@ exports.submitOnboarding = async (req, res) => {
                                 <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/onboarding" style="background: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review Submission</a>
                             </div>
                         </div>
-                    `
+                    `,
+                    ...branding
                 });
             }
         }
@@ -2164,6 +2189,7 @@ exports.transferToActiveEmployee = async (req, res) => {
 
         // 4. Send welcome email
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+        const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         await sendEmail({
             to: employee.email,
             subject: `Welcome! Your Employee Account is Ready`,
@@ -2193,7 +2219,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                         © ${new Date().getFullYear()} TalentCio. All rights reserved.
                     </div>
                 </div>
-            `
+            `,
+            ...branding
         });
 
         res.status(201).json({

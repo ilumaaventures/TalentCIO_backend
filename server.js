@@ -190,6 +190,7 @@ const syncPermissions = require('./src/services/permissionSync');
 const startEscalationCron = require('./src/services/escalationCron');
 const startAutoCheckoutCron = require('./src/services/attendanceAutoCheckoutCron');
 const cleanupStaleIndexes = require('./src/services/indexCleanup');
+const { startBinAutoPurgeCron } = require('./src/services/binAutoPurgeCron');
 
 const authRoutes = require('./src/routes/authRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
@@ -214,6 +215,7 @@ const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes'
 const publicRoutes = require('./src/routes/publicRoutes');
 const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
+const binRoutes = require('./src/routes/binRoutes');
 
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
 const companyRoutes = require('./src/routes/companyRoutes');
@@ -232,6 +234,7 @@ const initServer = async () => {
     await syncPermissions();
     startEscalationCron(io);
     startAutoCheckoutCron();
+    startBinAutoPurgeCron();
 };
 
 initServer();
@@ -273,6 +276,7 @@ app.use('/api/helpdesk', helpdeskRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/discussions', discussionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/bin', binRoutes);
 
 app.use('/api/superadmin/auth', superAdminAuthRoutes);
 app.use('/api/superadmin/companies', companyRoutes);

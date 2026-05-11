@@ -370,6 +370,21 @@ module.exports = [
         module: "DISCUSSION",
         description: "Create discussions"
     },
+    {
+        key: "bin.view",
+        module: "SYSTEM",
+        description: "View recycle bin items"
+    },
+    {
+        key: "bin.restore",
+        module: "SYSTEM",
+        description: "Restore items from recycle bin"
+    },
+    {
+        key: "bin.permanent_delete",
+        module: "SYSTEM",
+        description: "Permanently delete items from recycle bin"
+    },
 
     // ONBOARDING
     {

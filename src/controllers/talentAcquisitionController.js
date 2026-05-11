@@ -423,7 +423,7 @@ const sendMassMailForHiringRequest = async ({
     }
 
     const candidates = await Candidate.find(query).lean();
-    const company = await Company.findById(companyId).select('name').lean();
+    const company = await Company.findById(companyId).select('name settings.logo').lean();
     const { template, subject, htmlBody } = await resolveMassMailTemplate({
         companyId,
         templateId,
@@ -453,7 +453,9 @@ const sendMassMailForHiringRequest = async ({
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,
-            text: resolvedText
+            text: resolvedText,
+            logoUrl: company?.settings?.logo || undefined,
+            logoAlt: company?.name || 'TalentCIO'
         });
 
         if (delivered) {

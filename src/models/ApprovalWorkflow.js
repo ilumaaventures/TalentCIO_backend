@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const ApprovalWorkflowSchema = new mongoose.Schema({
     name: { type: String, required: true },
@@ -25,5 +26,9 @@ const ApprovalWorkflowSchema = new mongoose.Schema({
 }, { timestamps: true });
  
 ApprovalWorkflowSchema.index({ name: 1, companyId: 1 }, { unique: true });
+
+ApprovalWorkflowSchema.index({ companyId: 1, isDeleted: 1 });
+
+ApprovalWorkflowSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('ApprovalWorkflow', ApprovalWorkflowSchema);

@@ -103,9 +103,9 @@ exports.deleteHoliday = async (req, res) => {
             return res.status(404).json({ msg: 'Holiday not found' });
         }
 
-        await Holiday.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
+        await holiday.softDelete(req.user._id);
 
-        res.json({ msg: 'Holiday removed' });
+        res.json({ msg: 'Holiday moved to bin' });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');

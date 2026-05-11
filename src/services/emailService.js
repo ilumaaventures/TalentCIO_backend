@@ -1,6 +1,9 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 
+const DEFAULT_LOGO_URL = 'https://talentcio.in/navbar-logo.png';
+const DEFAULT_LOGO_LINK = 'https://talentcio.in';
+
 /**
  * Configure the transporter using Brevo SMTP.
  */
@@ -22,12 +25,52 @@ const getTransporter = () => {
     });
 };
 
+const getEmailLogoUrl = () => process.env.EMAIL_LOGO_URL || process.env.TALENTCIO_LOGO_URL || DEFAULT_LOGO_URL;
+const getEmailLogoLink = () => process.env.EMAIL_LOGO_LINK || process.env.TALENTCIO_WEBSITE_URL || DEFAULT_LOGO_LINK;
+
+const wrapEmailHtmlWithBranding = (html, branding = {}) => {
+    const content = String(html || '').trim();
+    if (!content) return html;
+
+    const logoUrl = branding.logoUrl || getEmailLogoUrl();
+    const logoLink = branding.logoLink || getEmailLogoLink();
+    const logoAlt = branding.logoAlt || 'TalentCIO';
+
+    return `
+        <div style="background: #f8fafc; padding: 24px 12px;">
+            <div style="max-width: 680px; margin: 0 auto;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <a href="${logoLink}" target="_blank" rel="noopener noreferrer" style="display: inline-block; text-decoration: none;">
+                        <img
+                            src="${logoUrl}"
+                            alt="${logoAlt}"
+                            style="display: inline-block; max-width: 200px; width: auto; height: 48px; object-fit: contain; border: 0; outline: none; text-decoration: none;"
+                        />
+                    </a>
+                </div>
+                ${content}
+            </div>
+        </div>
+    `;
+};
+
 /**
  * Generic function to send an email (Supports Brevo API and SMTP)
  */
-const sendEmail = async ({ to, subject, html, text, attachments = [] }) => {
+const sendEmail = async ({
+    to,
+    subject,
+    html,
+    text,
+    attachments = [],
+    brandEmail = true,
+    logoUrl,
+    logoLink,
+    logoAlt
+}) => {
     const apiKey = process.env.BREVO_API_KEY || process.env.EMAIL_PASS;
     const fromEmail = process.env.EMAIL_FROM || 'no-reply@talentcio.in';
+    const brandedHtml = brandEmail ? wrapEmailHtmlWithBranding(html, { logoUrl, logoLink, logoAlt }) : html;
 
     // 1. Try Brevo HTTP API first (Most reliable for production/Render)
     if (apiKey && apiKey.startsWith('xkeysib-')) {
@@ -42,10 +85,10 @@ const sendEmail = async ({ to, subject, html, text, attachments = [] }) => {
             })).filter(att => att.content || att.url);
 
             const payload = {
-                sender: { name: 'TalentCio', email: fromEmail },
+                sender: { name: 'TalentCIO', email: fromEmail },
                 to: [{ email: to }],
                 subject: subject,
-                htmlContent: html,
+                htmlContent: brandedHtml,
                 textContent: text
             };
 
@@ -76,10 +119,10 @@ const sendEmail = async ({ to, subject, html, text, attachments = [] }) => {
     try {
         const transporter = getTransporter();
         const mailOptions = {
-            from: `"TalentCio" <${fromEmail}>`,
+            from: `"TalentCIO" <${fromEmail}>`,
             to,
             subject,
-            html,
+            html: brandedHtml,
             text
         };
 
@@ -99,10 +142,10 @@ const sendEmail = async ({ to, subject, html, text, attachments = [] }) => {
 /**
  * Specific function for OTP emails
  */
-const sendOTPEmail = async (to, otp, firstName) => {
+const sendOTPEmail = async (to, otp, firstName, branding = {}) => {
     const html = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-            <h2 style="color: #4a90e2; text-align: center;">Welcome to TalentCio!</h2>
+            <h2 style="color: #4a90e2; text-align: center;">Welcome to TalentCIO!</h2>
             <p>Hello ${firstName},</p>
             <p>To ensure the security of your account, we require a mandatory password reset for your first login.</p>
             <p>Please use the following One-Time Password (OTP) to verify your identity and set your new password:</p>
@@ -111,14 +154,15 @@ const sendOTPEmail = async (to, otp, firstName) => {
             </div>
             <p style="color: #666; font-size: 14px;">This OTP is valid for 10 minutes. If you did not expect this email, please ignore it.</p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-            <p style="text-align: center; color: #999; font-size: 12px;">© 2026 TalentCio. All rights reserved.</p>
+            <p style="text-align: center; color: #999; font-size: 12px;">© 2026 TalentCIO. All rights reserved.</p>
         </div>
     `;
 
     return await sendEmail({
         to,
-        subject: 'Your Password Reset OTP - TalentCio',
-        html
+        subject: 'Your Password Reset OTP - TalentCIO',
+        html,
+        ...branding
     });
 };
 

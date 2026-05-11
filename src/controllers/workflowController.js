@@ -86,9 +86,10 @@ exports.updateWorkflow = async (req, res) => {
 // --- Delete Workflow ---
 exports.deleteWorkflow = async (req, res) => {
     try {
-        const workflow = await ApprovalWorkflow.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
+        const workflow = await ApprovalWorkflow.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!workflow) return res.status(404).json({ message: 'Workflow not found' });
-        res.status(200).json({ message: 'Workflow deleted successfully' });
+        await workflow.softDelete(req.user._id);
+        res.status(200).json({ message: 'Workflow moved to bin successfully' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error', error: error.message });

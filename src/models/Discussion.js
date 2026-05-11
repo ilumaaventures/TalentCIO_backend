@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const discussionSchema = new mongoose.Schema({
     title: {
@@ -47,5 +48,8 @@ const discussionSchema = new mongoose.Schema({
 discussionSchema.index({ supervisor: 1, companyId: 1, createdAt: -1 });
 discussionSchema.index({ visibleToUsers: 1, companyId: 1, createdAt: -1 });
 discussionSchema.index({ participants: 1, companyId: 1, createdAt: -1 });
+discussionSchema.index({ companyId: 1, isDeleted: 1 });
+
+discussionSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Discussion', discussionSchema);

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const roleSchema = new mongoose.Schema({
     name: {
@@ -27,5 +28,8 @@ const roleSchema = new mongoose.Schema({
 // Ensure role names are unique
 // Ensure role names are unique per company
 roleSchema.index({ name: 1, companyId: 1 }, { unique: true });
+roleSchema.index({ companyId: 1, isDeleted: 1 });
+
+roleSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Role', roleSchema);

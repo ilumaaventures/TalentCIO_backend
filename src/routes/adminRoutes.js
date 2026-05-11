@@ -9,7 +9,8 @@ const {
     updateUser,
     getMyTeam,
     getUserById,
-    toggleUserStatus
+    toggleUserStatus,
+    deleteUser
 } = require('../controllers/userController');
 const {
     getRoles,
@@ -35,6 +36,7 @@ router.get('/users/:id', authorize(['user.read', 'attendance.view']), getUserByI
 router.put('/users/:id', authorize('user.update'), updateUser);
 router.put('/users/:id/role', authorize('user.update'), updateUserRole);
 router.patch('/users/:id/status', authorize('user.update'), toggleUserStatus);
+router.delete('/users/:id', authorize('user.delete'), deleteUser);
 
 // Role Routes
 router.get('/roles/bootstrap', authorize('role.read'), getRoleBootstrap);

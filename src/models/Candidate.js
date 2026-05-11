@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { buildInitialDynamicPhaseState } = require('../utils/phaseTemplateUtils');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const phaseHistorySchema = new mongoose.Schema({
     phaseId: {
@@ -372,6 +373,7 @@ candidateSchema.index({ companyId: 1, 'interviewRounds.assignedTo': 1 });
 candidateSchema.index({ currentPhaseId: 1, hiringRequestId: 1 });
 candidateSchema.index({ currentPhaseOrder: 1, hiringRequestId: 1 });
 candidateSchema.index({ companyId: 1, currentPhaseId: 1 });
+candidateSchema.index({ companyId: 1, isDeleted: 1 });
 
 candidateSchema.methods.getCurrentPhaseEntry = function getCurrentPhaseEntry() {
     return this.phaseHistory.find((phase) => !phase.exitedAt);
@@ -406,5 +408,6 @@ candidateSchema.pre('save', async function candidatePreSave() {
     }
 });
 
+candidateSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Candidate', candidateSchema);

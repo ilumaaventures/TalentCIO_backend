@@ -1,7 +1,5 @@
 const Candidate = require('../models/Candidate');
 const { HiringRequest } = require('../models/HiringRequest');
-const { cloudinary } = require('../config/cloudinary');
-const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const mongoose = require('mongoose');
 const Company = require('../models/Company');
 const { sendEmail } = require('../services/emailService');
@@ -909,19 +907,9 @@ exports.deleteCandidate = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to delete this candidate' });
         }
 
-        // Delete resume from Cloudinary
-        if (candidate.resumePublicId) {
-            try {
-                await cloudinary.uploader.destroy(candidate.resumePublicId, { resource_type: 'raw' });
-            } catch (cloudinaryError) {
-                console.error('Error deleting from Cloudinary:', cloudinaryError);
-                // Continue with deletion even if Cloudinary fails
-            }
-        }
+        await candidate.softDelete(req.user._id);
 
-        await Candidate.findOneAndDelete({ _id: id, companyId: req.companyId });
-
-        res.status(200).json({ message: 'Candidate deleted successfully' });
+        res.status(200).json({ message: 'Candidate moved to bin' });
 
     } catch (error) {
         console.error('Error deleting candidate:', error);

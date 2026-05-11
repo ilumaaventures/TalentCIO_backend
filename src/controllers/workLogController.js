@@ -123,9 +123,9 @@ const deleteWorkLog = async (req, res) => {
             return res.status(400).json({ message: 'Cannot delete logs for a submitted timesheet' });
         }
 
-        await WorkLog.deleteOne({ _id: req.params.id });
+        await workLog.softDelete(req.user._id);
 
-        res.json({ message: 'Work log deleted' });
+        res.json({ message: 'Work log moved to bin' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });

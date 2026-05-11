@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const userSchema = new mongoose.Schema({
     email: {
@@ -96,6 +97,7 @@ userSchema.index({ companyId: 1, reportingManagers: 1 });
 userSchema.index({ companyId: 1, taAssignedClients: 1 });
 userSchema.index({ companyId: 1, email: 1 }, { unique: true });
 userSchema.index({ companyId: 1, employeeCode: 1 }, { unique: true, sparse: true });
+userSchema.index({ companyId: 1, isDeleted: 1 });
 
 // Encrypt password before save and handle token invalidation
 userSchema.pre('save', async function () {
@@ -111,7 +113,7 @@ userSchema.pre('save', async function () {
 
     // 2. Token Invalidation (Logout on detail update)
     // If any of these fields are modified, increment tokenVersion to log the user out
-    const securityFields = ['firstName', 'lastName', 'email', 'password', 'roles', 'isActive', 'taAssignedClients'];
+    const securityFields = ['firstName', 'lastName', 'email', 'password', 'roles', 'isActive', 'isDeleted', 'taAssignedClients'];
     const isSecurityModified = securityFields.some(field => this.isModified(field));
 
     if (isSecurityModified && !this.isNew) {
@@ -123,5 +125,7 @@ userSchema.pre('save', async function () {
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
 };
+
+userSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('User', userSchema);

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const businessUnitSchema = new mongoose.Schema({
     name: {
@@ -17,5 +18,9 @@ const businessUnitSchema = new mongoose.Schema({
     },
     description: String
 }, { timestamps: true });
+
+businessUnitSchema.index({ companyId: 1, isDeleted: 1 });
+
+businessUnitSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('BusinessUnit', businessUnitSchema);

@@ -86,8 +86,11 @@ exports.deleteQueryType = async (req, res) => {
     try {
         if (!req.user.roles.some(r => r.name === 'Admin')) return res.status(403).json({ success: false, message: 'Admins only' });
 
-        await QueryType.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
-        res.status(200).json({ success: true, message: 'Type deleted' });
+        const queryType = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
+        if (!queryType) return res.status(404).json({ success: false, message: 'Type not found' });
+
+        await queryType.softDelete(req.user._id);
+        res.status(200).json({ success: true, message: 'Type moved to bin' });
     } catch (error) {
         console.error('Error deleting query type:', error);
         res.status(500).json({ success: false, message: 'Server Error' });

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const projectSchema = new mongoose.Schema({
     name: {
@@ -41,5 +42,8 @@ const projectSchema = new mongoose.Schema({
 // Performance Indexes
 projectSchema.index({ companyId: 1, isActive: 1 });
 projectSchema.index({ companyId: 1, status: 1 });
+projectSchema.index({ companyId: 1, isDeleted: 1 });
+
+projectSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('Project', projectSchema);
