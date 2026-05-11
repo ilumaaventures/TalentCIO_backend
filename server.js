@@ -12,12 +12,20 @@ app.set('trust proxy', 1);
 
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
+const SERVER_REQUEST_TIMEOUT_MS = Math.max(parseInt(process.env.SERVER_REQUEST_TIMEOUT_MS || '40000', 10), 1000);
+const SERVER_HEADERS_TIMEOUT_MS = Math.max(parseInt(process.env.SERVER_HEADERS_TIMEOUT_MS || '41000', 10), SERVER_REQUEST_TIMEOUT_MS + 1000);
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = Math.max(parseInt(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || '40000', 10), 1000);
 const MAX_SOCKET_CONNECTIONS_PER_IP = Math.max(parseInt(process.env.SOCKET_MAX_CONNECTIONS_PER_IP || '10', 10), 1);
 const MAX_SOCKET_ROOMS_PER_SOCKET = Math.max(parseInt(process.env.SOCKET_MAX_ROOMS_PER_SOCKET || '20', 10), 1);
 const SOCKET_MAX_HTTP_BUFFER_SIZE = Math.max(parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_SIZE || '1048576', 10), 1024);
 const activeSocketCounts = new Map();
 const trackedSocketIps = new Map();
 const requestTiming = require('./src/middlewares/requestTiming');
+
+server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS;
+server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
+server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
+server.setTimeout(SERVER_REQUEST_TIMEOUT_MS);
 
 const allowedOriginPatterns = [
     /^https?:\/\/localhost(?::\d+)?$/i,

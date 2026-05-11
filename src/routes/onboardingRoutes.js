@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, admin } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
-const { upload } = require('../config/cloudinary');
+const { upload, uploadOnboardingCustomFiles } = require('../config/cloudinary');
 const onboardingController = require('../controllers/onboardingController');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const jwt = require('jsonwebtoken');
@@ -51,6 +51,18 @@ const protectOnboarding = async (req, res, next) => {
 // ==========================================
 const requireOnboarding = authorize('onboarding.manage');
 
+const handleCustomFileUpload = (req, res, next) => {
+    uploadOnboardingCustomFiles.array('documents', 10)(req, res, (err) => {
+        if (!err) return next();
+
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({ message: 'Each file must be 5 MB or smaller.' });
+        }
+
+        return res.status(400).json({ message: err.message || 'Invalid file upload.' });
+    });
+};
+
 router.post('/employees', protect, requireOnboarding, onboardingController.addEmployee);
 router.post('/employees/bulk', protect, requireOnboarding, onboardingController.bulkAddEmployees);
 router.get('/bootstrap', protect, requireOnboarding, getOnboardingBootstrap);
@@ -59,7 +71,7 @@ router.get('/employees/:id', protect, requireOnboarding, onboardingController.ge
 router.patch('/employees/:id', protect, requireOnboarding, onboardingController.updateEmployee);
 router.post('/employees/:id/regenerate-credentials', protect, requireOnboarding, onboardingController.regenerateCredentials);
 router.post('/employees/:id/send-onboarding-email', protect, requireOnboarding, onboardingController.sendPreOnboardingEmail);
-router.post('/employees/:id/send-custom-file', protect, requireOnboarding, upload.array('documents', 10), onboardingController.sendCustomFile);
+router.post('/employees/:id/send-custom-file', protect, requireOnboarding, handleCustomFileUpload, onboardingController.sendCustomFile);
 router.patch('/employees/:id/documents/:docId/flag', protect, requireOnboarding, onboardingController.flagDocument);
 router.patch('/employees/:id/documents/:docId/approve', protect, requireOnboarding, onboardingController.approveDocument);
 router.post('/employees/:id/extension/:extId/resolve', protect, requireOnboarding, onboardingController.resolveExtensionRequest);
