@@ -457,9 +457,17 @@ const debugTA = async (req, res) => {
 
 const toggleUserStatus = async (req, res) => {
     try {
-        const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
+        const user = await User.findOne(
+            { _id: req.params.id, companyId: req.companyId },
+            null,
+            { includeDeleted: true }
+        );
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (user.isDeleted) {
+            return res.status(400).json({ message: 'Users in the recycle bin cannot be activated or deactivated.' });
         }
 
         if (user.isActive && await isProtectedPrimaryAdminUser(user, req.companyId)) {
@@ -482,9 +490,17 @@ const toggleUserStatus = async (req, res) => {
 
 const deleteUser = async (req, res) => {
     try {
-        const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
+        const user = await User.findOne(
+            { _id: req.params.id, companyId: req.companyId },
+            null,
+            { includeDeleted: true }
+        );
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (user.isDeleted) {
+            return res.status(400).json({ message: 'User is already in the recycle bin.' });
         }
 
         if (await isProtectedPrimaryAdminUser(user, req.companyId)) {

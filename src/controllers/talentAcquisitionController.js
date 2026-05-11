@@ -1773,17 +1773,41 @@ exports.getClientAnalytics = async (req, res) => {
 // --- Global Analytics ---
 exports.getGlobalAnalytics = async (req, res) => {
     try {
-        const { client, department, position, recruiter, startDate, endDate, phase, requisitionId } = req.query;
+        const {
+            client,
+            department,
+            position,
+            recruiter,
+            pulledBy,
+            uploadedBy,
+            calledBy,
+            startDate,
+            endDate,
+            phase,
+            requisitionId
+        } = req.query;
+        const pulledByFilter = String(pulledBy || recruiter || '').trim();
+        const uploadedByFilter = String(uploadedBy || '').trim();
+        const calledByFilter = String(calledBy || '').trim();
+        const hasCandidateOwnerFilter = Boolean(pulledByFilter || uploadedByFilter || calledByFilter);
 
-        const hrQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
+        const accessibleHiringRequestQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
+        const filteredHiringRequestQuery = { ...accessibleHiringRequestQuery };
 
-        if (client) hrQuery.client = new RegExp(client, 'i');
-        if (department) hrQuery['roleDetails.department'] = new RegExp(department, 'i');
-        if (position) hrQuery['roleDetails.title'] = new RegExp(position, 'i');
+        if (client) filteredHiringRequestQuery.client = new RegExp(client, 'i');
+        if (department) filteredHiringRequestQuery['roleDetails.department'] = new RegExp(department, 'i');
+        if (position) filteredHiringRequestQuery['roleDetails.title'] = new RegExp(position, 'i');
 
-        const allHiringRequests = await HiringRequest.find(hrQuery).select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt').lean();
-        
-        const requisitionsList = allHiringRequests.map(hr => ({
+        const [accessibleHiringRequests, allHiringRequests] = await Promise.all([
+            HiringRequest.find(accessibleHiringRequestQuery)
+                .select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt')
+                .lean(),
+            HiringRequest.find(filteredHiringRequestQuery)
+                .select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt')
+                .lean()
+        ]);
+
+        const requisitionsList = accessibleHiringRequests.map(hr => ({
             _id: hr._id,
             title: hr.roleDetails?.title,
             status: hr.status,
@@ -1808,10 +1832,6 @@ exports.getGlobalAnalytics = async (req, res) => {
             if (startDate) candidateQuery.createdAt.$gte = new Date(startDate);
             if (endDate) candidateQuery.createdAt.$lte = new Date(endDate);
         }
-        if (recruiter) {
-            candidateQuery.profilePulledBy = new RegExp(recruiter, 'i');
-        }
-
         const candidates = await Candidate.find(candidateQuery)
             .populate('hiringRequestId', 'client roleDetails.title roleDetails.department status createdAt closedAt hiringDetails')
             .populate('uploadedBy', 'firstName lastName')
@@ -1819,7 +1839,7 @@ exports.getGlobalAnalytics = async (req, res) => {
 
         const canViewSharedCandidateData = hasGlobalTAAnalyticsAccess(req.user) || Boolean(req.user?._id);
 
-        const publicApplications = recruiter || !canViewSharedCandidateData ? [] : await (async () => {
+        const publicApplications = hasCandidateOwnerFilter || !canViewSharedCandidateData ? [] : await (async () => {
             const publicApplicationQuery = {
                 companyId: req.companyId,
                 hiringRequestId: { $in: hrIds },
@@ -1844,14 +1864,25 @@ exports.getGlobalAnalytics = async (req, res) => {
             return 'Self/Other';
         };
 
-        // If recruiter filter is manually passed, we need to filter the candidate list precisely
-        let filteredCandidates = candidates;
-        if (recruiter) {
-            filteredCandidates = candidates.filter(c => {
-                const name = getCandidateRecruiterName(c);
-                return name.toLowerCase().includes(recruiter.toLowerCase());
-            });
-        }
+        const getCandidateUploadedByName = (c) => (
+            c.uploadedBy
+                ? `${c.uploadedBy.firstName || ''} ${c.uploadedBy.lastName || ''}`.trim()
+                : ''
+        );
+
+        const normalizeAnalyticsValue = (value) => String(value || '').trim().toLowerCase();
+
+        let filteredCandidates = candidates.filter((candidateDoc) => {
+            const recruiterName = normalizeAnalyticsValue(getCandidateRecruiterName(candidateDoc));
+            const uploadedByName = normalizeAnalyticsValue(getCandidateUploadedByName(candidateDoc));
+            const calledByName = normalizeAnalyticsValue(candidateDoc.calledBy);
+
+            const matchesPulledBy = !pulledByFilter || recruiterName === normalizeAnalyticsValue(pulledByFilter);
+            const matchesUploadedBy = !uploadedByFilter || uploadedByName === normalizeAnalyticsValue(uploadedByFilter);
+            const matchesCalledBy = !calledByFilter || calledByName === normalizeAnalyticsValue(calledByFilter);
+
+            return matchesPulledBy && matchesUploadedBy && matchesCalledBy;
+        });
 
         const activeCandidates = filteredCandidates;
 
@@ -1863,7 +1894,7 @@ exports.getGlobalAnalytics = async (req, res) => {
         ])];
         const activeHrSet = new Set(activeHrIds);
 
-        const filteredHiringRequests = (startDate || endDate || recruiter)
+        const filteredHiringRequests = (startDate || endDate || hasCandidateOwnerFilter)
             ? hiringRequests.filter(hr => activeHrSet.has(hr._id.toString()))
             : hiringRequests;
 
@@ -2202,10 +2233,13 @@ exports.getGlobalAnalytics = async (req, res) => {
         };
 
         const filterOptions = {
-            clients: [...new Set(allHiringRequests.map(hr => hr.client).filter(Boolean))].sort(),
-            departments: [...new Set(allHiringRequests.map(hr => hr.roleDetails?.department).filter(Boolean))].sort(),
-            positions: [...new Set(allHiringRequests.map(hr => hr.roleDetails?.title).filter(Boolean))].sort(),
+            clients: [...new Set(accessibleHiringRequests.map(hr => hr.client).filter(Boolean))].sort(),
+            departments: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.department).filter(Boolean))].sort(),
+            positions: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.title).filter(Boolean))].sort(),
             recruiters: [...new Set(candidates.map(c => getCandidateRecruiterName(c)).filter(Boolean))].sort(),
+            pulledBys: [...new Set(candidates.map(c => getCandidateRecruiterName(c)).filter(Boolean))].sort(),
+            uploadedBys: [...new Set(candidates.map(c => getCandidateUploadedByName(c)).filter(Boolean))].sort(),
+            calledBys: [...new Set(candidates.map(c => String(c.calledBy || '').trim()).filter(Boolean))].sort(),
             requisitions: requisitionsList
         };
 
