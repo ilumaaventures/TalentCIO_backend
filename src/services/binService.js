@@ -53,6 +53,169 @@ const getEntityModel = (entity) => ENTITY_MAP[String(entity || '').trim().toLowe
 
 const getDeletedEntityKeys = () => Object.keys(ENTITY_MAP);
 
+const getDateRangeForDay = (value) => {
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) {
+        return null;
+    }
+
+    const start = new Date(parsedDate);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(parsedDate);
+    end.setHours(23, 59, 59, 999);
+
+    return { start, end };
+};
+
+const getEntityConflictQuery = (entity, item) => {
+    const entityKey = String(entity || '').trim().toLowerCase();
+    const baseQuery = {
+        companyId: item.companyId,
+        isDeleted: { $ne: true },
+        _id: { $ne: item._id }
+    };
+
+    if (entityKey === 'project' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'module' && item.name && item.project) {
+        return { ...baseQuery, project: item.project, name: item.name };
+    }
+
+    if (entityKey === 'task' && item.name && item.module) {
+        return { ...baseQuery, module: item.module, name: item.name };
+    }
+
+    if (entityKey === 'worklog' && item.task && item.user && item.date) {
+        const dateRange = getDateRangeForDay(item.date);
+        if (!dateRange) {
+            return null;
+        }
+
+        return {
+            ...baseQuery,
+            task: item.task,
+            user: item.user,
+            date: { $gte: dateRange.start, $lte: dateRange.end }
+        };
+    }
+
+    if (entityKey === 'candidate' && item.hiringRequestId && item.email) {
+        return { ...baseQuery, hiringRequestId: item.hiringRequestId, email: item.email };
+    }
+
+    if (entityKey === 'hiringrequest' && item.requestId) {
+        return { ...baseQuery, requestId: item.requestId };
+    }
+
+    if (entityKey === 'user' && item.email) {
+        return { ...baseQuery, email: item.email };
+    }
+
+    if (entityKey === 'role' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'client' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'businessunit' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'discussion' && item.title && item.createdBy && item.supervisor) {
+        return {
+            ...baseQuery,
+            title: item.title,
+            createdBy: item.createdBy,
+            supervisor: item.supervisor
+        };
+    }
+
+    if (entityKey === 'meeting' && item.title && item.date && item.host) {
+        return {
+            ...baseQuery,
+            title: item.title,
+            date: item.date,
+            host: item.host
+        };
+    }
+
+    if (entityKey === 'holiday' && item.name && item.year) {
+        return { ...baseQuery, name: item.name, year: item.year };
+    }
+
+    if (entityKey === 'approvalworkflow' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'interviewworkflow' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    if (entityKey === 'leaveconfig' && item.leaveType) {
+        return { ...baseQuery, leaveType: item.leaveType };
+    }
+
+    if (entityKey === 'querytype' && item.name) {
+        return { ...baseQuery, name: item.name };
+    }
+
+    return null;
+};
+
+const getEntityConflictLabel = (entity, item) => {
+    const entityKey = String(entity || '').trim().toLowerCase();
+
+    if (['project', 'module', 'task', 'role', 'client', 'businessunit', 'holiday', 'approvalworkflow', 'interviewworkflow', 'querytype'].includes(entityKey)) {
+        return item.name || entityKey;
+    }
+
+    if (entityKey === 'leaveconfig') {
+        return item.name || item.leaveType || 'leave policy';
+    }
+
+    if (entityKey === 'candidate') {
+        return item.candidateName || item.email || 'candidate';
+    }
+
+    if (entityKey === 'hiringrequest') {
+        return item.requestId || item.roleDetails?.title || 'hiring request';
+    }
+
+    if (entityKey === 'user') {
+        const fullName = [item.firstName, item.lastName].filter(Boolean).join(' ').trim();
+        return fullName || item.email || 'user';
+    }
+
+    if (entityKey === 'discussion' || entityKey === 'meeting') {
+        return item.title || entityKey;
+    }
+
+    if (entityKey === 'worklog') {
+        return item.description || 'work log';
+    }
+
+    return item.name || item.title || item.email || item.requestId || entityKey;
+};
+
+const findRestoreConflict = async (entity, item) => {
+    const Model = getEntityModel(entity);
+    if (!Model) {
+        return null;
+    }
+
+    const conflictQuery = getEntityConflictQuery(entity, item);
+    if (!conflictQuery) {
+        return null;
+    }
+
+    return Model.findOne(conflictQuery);
+};
+
 const softDeleteProjectTree = async (projectId, companyId, userId) => {
     const deletedAt = new Date();
     const deleteUpdate = buildSoftDeleteUpdate(userId, deletedAt);
@@ -173,6 +336,35 @@ const restoreTaskTree = async (taskId, companyId) => {
     );
 };
 
+const moveEntityToBin = async (entity, item, userId, companyId) => {
+    const entityKey = String(entity || '').trim().toLowerCase();
+
+    if (entityKey === 'user') {
+        item.isActive = false;
+        item.isDeleted = true;
+        item.deletedAt = new Date();
+        item.deletedBy = userId || null;
+        await item.save();
+        return item;
+    }
+
+    await item.softDelete(userId);
+
+    if (entityKey === 'project') {
+        await softDeleteProjectTree(item._id, companyId, userId);
+    }
+
+    if (entityKey === 'module') {
+        await softDeleteModuleTree(item._id, companyId, userId);
+    }
+
+    if (entityKey === 'task') {
+        await softDeleteTaskTree(item._id, companyId, userId);
+    }
+
+    return item;
+};
+
 const permanentlyDeleteProjectTree = async (projectId, companyId) => {
     const modules = await Module.find({ project: projectId, companyId }, '_id', { includeDeleted: true }).lean();
     const moduleIds = modules.map((moduleDoc) => moduleDoc._id);
@@ -254,5 +446,8 @@ module.exports = {
     restoreProjectTree,
     restoreModuleTree,
     restoreTaskTree,
+    getEntityConflictLabel,
+    findRestoreConflict,
+    moveEntityToBin,
     purgeDeletedDocument
 };

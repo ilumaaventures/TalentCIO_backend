@@ -4,6 +4,9 @@ const {
     restoreProjectTree,
     restoreModuleTree,
     restoreTaskTree,
+    getEntityConflictLabel,
+    findRestoreConflict,
+    moveEntityToBin,
     purgeDeletedDocument
 } = require('../services/binService');
 
@@ -28,6 +31,23 @@ const restoreEntityTree = async (entity, item, req) => {
         item.isActive = true;
         await item.save();
     }
+};
+
+const buildConflictResponse = (entity, binItem, activeItem) => {
+    const entityLabel = String(entity || 'item').toLowerCase();
+    const conflictingLabel = getEntityConflictLabel(entity, activeItem);
+    const restoringLabel = getEntityConflictLabel(entity, binItem);
+
+    return {
+        message: `A matching ${entityLabel} already exists. Choose replace to move "${conflictingLabel}" to the bin and restore "${restoringLabel}", or cancel.`,
+        requiresAction: true,
+        options: ['replace', 'cancel'],
+        conflict: {
+            id: activeItem._id,
+            entity: entityLabel,
+            title: conflictingLabel
+        }
+    };
 };
 
 exports.getBinItems = async (req, res) => {
@@ -91,6 +111,7 @@ exports.getBinItems = async (req, res) => {
 exports.restoreItem = async (req, res) => {
     try {
         const { entity, id } = req.params;
+        const action = String(req.body?.action || '').trim().toLowerCase();
         const Model = getEntityModel(entity);
         if (!Model) {
             return res.status(400).json({ message: `Unknown entity type: ${entity}` });
@@ -105,11 +126,36 @@ exports.restoreItem = async (req, res) => {
             return res.status(404).json({ message: 'Item not found in bin' });
         }
 
+        const conflictingItem = await findRestoreConflict(entity, item);
+        if (conflictingItem) {
+            if (action === 'cancel') {
+                return res.json({ message: 'Restore cancelled', cancelled: true });
+            }
+
+            if (action !== 'replace') {
+                return res.status(409).json(buildConflictResponse(entity, item, conflictingItem));
+            }
+
+            await moveEntityToBin(entity, conflictingItem, req.user?._id, req.companyId);
+        }
+
         await item.restore();
         await restoreEntityTree(entity, item, req);
 
-        res.json({ message: `${entity} restored successfully` });
+        res.json({
+            message: conflictingItem
+                ? `${entity} restored successfully and the existing conflicting item was moved to the bin`
+                : `${entity} restored successfully`
+        });
     } catch (error) {
+        if (error?.code === 11000) {
+            return res.status(409).json({
+                message: 'A conflicting active record already exists, so this item cannot be restored as-is.',
+                requiresAction: true,
+                options: ['replace', 'cancel']
+            });
+        }
+
         res.status(500).json({ message: error.message });
     }
 };
