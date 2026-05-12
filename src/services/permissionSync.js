@@ -48,6 +48,7 @@ const syncPermissions = async () => {
 
         if (legacyPermissions.length > 0) {
             const legacyPermissionIds = legacyPermissions.map(permission => permission._id);
+            const legacyPermissionIdSet = new Set(legacyPermissionIds.map((permissionId) => String(permissionId)));
             const replacementKeys = Array.from(new Set(
                 legacyPermissions
                     .map((permission) => LEGACY_PERMISSION_REPLACEMENTS[permission.key])
@@ -66,29 +67,38 @@ const syncPermissions = async () => {
             }).select('_id permissions');
 
             for (const role of rolesNeedingMigration) {
-                const permissionIds = new Set((role.permissions || []).map((permissionId) => String(permissionId)));
-                const replacementIdsToAdd = [];
+                const currentPermissions = Array.isArray(role.permissions) ? role.permissions : [];
+                const currentPermissionIdSet = new Set(currentPermissions.map((permissionId) => String(permissionId)));
+                const finalPermissionIds = [];
+                const finalPermissionIdSet = new Set();
+
+                currentPermissions.forEach((permissionId) => {
+                    const permissionIdString = String(permissionId);
+                    if (legacyPermissionIdSet.has(permissionIdString) || finalPermissionIdSet.has(permissionIdString)) {
+                        return;
+                    }
+
+                    finalPermissionIdSet.add(permissionIdString);
+                    finalPermissionIds.push(permissionId);
+                });
 
                 legacyPermissions.forEach((legacyPermission) => {
-                    if (!permissionIds.has(String(legacyPermission._id))) {
+                    if (!currentPermissionIdSet.has(String(legacyPermission._id))) {
                         return;
                     }
 
                     const replacementKey = LEGACY_PERMISSION_REPLACEMENTS[legacyPermission.key];
                     const replacementId = replacementKey ? replacementIdByKey[replacementKey] : null;
-                    if (replacementId) {
-                        replacementIdsToAdd.push(replacementId);
+                    const replacementIdString = replacementId ? String(replacementId) : null;
+                    if (replacementIdString && !finalPermissionIdSet.has(replacementIdString)) {
+                        finalPermissionIdSet.add(replacementIdString);
+                        finalPermissionIds.push(replacementId);
                     }
                 });
 
                 await Role.updateOne(
                     { _id: role._id },
-                    {
-                        ...(replacementIdsToAdd.length > 0
-                            ? { $addToSet: { permissions: { $each: replacementIdsToAdd } } }
-                            : {}),
-                        $pull: { permissions: { $in: legacyPermissionIds } }
-                    }
+                    { $set: { permissions: finalPermissionIds } }
                 );
             }
 

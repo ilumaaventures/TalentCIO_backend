@@ -131,6 +131,32 @@ const hasMeaningfulOfferValue = (value) => {
     return String(value).trim() !== '';
 };
 
+const normalizeSkillEntry = (skillEntry = {}) => {
+    const skill = String(skillEntry?.skill || '').trim();
+    if (!skill) return null;
+
+    let experience = skillEntry?.experience;
+    if (experience === '' || experience === null || experience === undefined) {
+        experience = 0;
+    } else if (typeof experience === 'string') {
+        const match = experience.match(/(\d+(\.\d+)?)/);
+        experience = match ? Number(match[1]) : 0;
+    } else {
+        experience = Number(experience);
+    }
+
+    return {
+        skill,
+        experience: Number.isFinite(experience) && experience >= 0 ? experience : 0
+    };
+};
+
+const normalizeSkillList = (skills = []) => (
+    Array.isArray(skills)
+        ? skills.map(normalizeSkillEntry).filter(Boolean)
+        : []
+);
+
 const APPLICANT_REVIEW_SELECT = [
     'firstName',
     'lastName',
@@ -351,6 +377,8 @@ exports.createCandidate = async (req, res) => {
             niceToHaveSkills,
             interviewRounds
         } = req.body;
+        const normalizedMustHaveSkills = normalizeSkillList(mustHaveSkills);
+        const normalizedNiceToHaveSkills = normalizeSkillList(niceToHaveSkills);
 
         const normalizedSource = String(source || '').trim();
         const normalizedReferralName = normalizedSource === 'Referral'
@@ -467,20 +495,20 @@ exports.createCandidate = async (req, res) => {
 
             if (mustHaveSkills && Array.isArray(mustHaveSkills)) {
                 const existingSkills = candidate.mustHaveSkills || [];
-                const skillsChanged = existingSkills.length !== mustHaveSkills.length ||
-                    mustHaveSkills.some((s, idx) =>
+                const skillsChanged = existingSkills.length !== normalizedMustHaveSkills.length ||
+                    normalizedMustHaveSkills.some((s, idx) =>
                         !existingSkills[idx] ||
                         existingSkills[idx].skill !== s.skill ||
                         existingSkills[idx].experience !== s.experience
                     );
 
                 if (skillsChanged) {
-                    candidate.mustHaveSkills = mustHaveSkills;
+                    candidate.mustHaveSkills = normalizedMustHaveSkills;
                     updatedFields.push('Skills');
                 }
             }
             if (niceToHaveSkills && Array.isArray(niceToHaveSkills)) {
-                candidate.niceToHaveSkills = niceToHaveSkills;
+                candidate.niceToHaveSkills = normalizedNiceToHaveSkills;
             }
             if (interviewRounds && Array.isArray(interviewRounds)) {
                 const existingRounds = candidate.interviewRounds || [];
@@ -566,8 +594,8 @@ exports.createCandidate = async (req, res) => {
             decision: req.body.decision || 'None',
             status: legacySafeStatus,
             remark,
-            mustHaveSkills: mustHaveSkills || [],
-            niceToHaveSkills: niceToHaveSkills || [],
+            mustHaveSkills: normalizedMustHaveSkills,
+            niceToHaveSkills: normalizedNiceToHaveSkills,
             interviewRounds: interviewRounds || [],
             statusHistory: legacySafeStatus ? [{
                 status: legacySafeStatus,
@@ -872,6 +900,14 @@ exports.updateCandidate = async (req, res) => {
             (typeof updateData.phase2InterviewerFeedback === 'string' && updateData.phase2InterviewerFeedback.trim())
         ) {
             updateData.profileShared = true;
+        }
+
+        if (updateData.mustHaveSkills !== undefined) {
+            updateData.mustHaveSkills = normalizeSkillList(updateData.mustHaveSkills);
+        }
+
+        if (updateData.niceToHaveSkills !== undefined) {
+            updateData.niceToHaveSkills = normalizeSkillList(updateData.niceToHaveSkills);
         }
 
         allowedUpdates.forEach(field => {
