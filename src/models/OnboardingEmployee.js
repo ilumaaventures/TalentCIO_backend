@@ -187,6 +187,11 @@ const onboardingEmployeeSchema = new mongoose.Schema({
         label: { type: String, required: true },
         emailSentAt: { type: Date }
     }],
+    selectionDraft: {
+        sections: [{ type: String, trim: true }],
+        documents: [{ type: String, trim: true }],
+        updatedAt: { type: Date }
+    },
 
     // --- Audit & Requests ---
     auditLog: [auditEntrySchema],

@@ -238,6 +238,12 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             });
         }
 
+        employee.selectionDraft = {
+            sections: [],
+            documents: [],
+            updatedAt: new Date()
+        };
+
         await employee.save();
 
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
@@ -590,7 +596,7 @@ exports.getOnboardingEmployee = async (req, res) => {
 // --- Update onboarding employee details ---
 exports.updateEmployee = async (req, res) => {
     try {
-        const { firstName, lastName, email, phone, designation, department, joiningDate, offerDate, documentDeadline, workLocation, address, probationPeriod, salary } = req.body;
+        const { firstName, lastName, email, phone, designation, department, joiningDate, offerDate, documentDeadline, workLocation, address, probationPeriod, salary, selectionDraft } = req.body;
 
         const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
@@ -604,12 +610,31 @@ exports.updateEmployee = async (req, res) => {
         if (department) employee.department = department;
         if (joiningDate) employee.joiningDate = joiningDate;
         if (offerDate) employee.offerDate = offerDate;
-        if (documentDeadline) employee.documentDeadline = documentDeadline;
+        if (documentDeadline !== undefined) {
+            employee.documentDeadline = documentDeadline ? new Date(documentDeadline) : undefined;
+            employee.credentialsExpireAt = documentDeadline ? new Date(documentDeadline) : undefined;
+        }
         if (workLocation) employee.workLocation = workLocation;
         if (address) employee.address = address;
         if (probationPeriod) employee.probationPeriod = probationPeriod;
         if (salary) {
             employee.salary = { ...employee.salary.toObject(), ...salary };
+        }
+        if (selectionDraft) {
+            const normalizeLabels = (labels) => [...new Set((Array.isArray(labels) ? labels : [])
+                .map((label) => typeof label === 'string' ? label.trim() : '')
+                .filter(Boolean))];
+
+            employee.selectionDraft = {
+                sections: normalizeLabels(selectionDraft.sections),
+                documents: normalizeLabels(selectionDraft.documents),
+                updatedAt: new Date()
+            };
+
+            employee.auditLog.push({
+                action: 'SELECTION_DRAFT_SAVED',
+                details: `Selection draft saved by ${req.user.firstName || 'Admin'}`
+            });
         }
 
         // Add audit log
