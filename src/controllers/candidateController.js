@@ -31,6 +31,8 @@ const LEGACY_STATUS_VALUES = new Set([
     ''
 ]);
 
+const DEFAULT_LEGACY_CANDIDATE_STATUS = 'Interested';
+
 const normalizeStatusKey = (value) => String(value || '')
     .trim()
     .toLowerCase()
@@ -369,6 +371,9 @@ exports.createCandidate = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
         }
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
+        const normalizedLegacyStatus = isDynamicRequest
+            ? ''
+            : toLegacySafeStatus(hasMeaningfulStatus(status) ? status : DEFAULT_LEGACY_CANDIDATE_STATUS);
 
         // Check for duplicate email or mobile in same hiring request
         let candidate = await Candidate.findOne({
@@ -392,7 +397,7 @@ exports.createCandidate = async (req, res) => {
             console.log('🔄 Existing candidate found, updating fields...');
 
             // Track status change for history
-            const statusChanged = !isDynamicRequest && status && candidate.status !== status;
+            const statusChanged = !isDynamicRequest && normalizedLegacyStatus && candidate.status !== normalizedLegacyStatus;
 
             const updatedFields = [];
             const compareAndUpdate = (field, newValue, label) => {
@@ -440,7 +445,7 @@ exports.createCandidate = async (req, res) => {
                     updatedFields.push('Status');
                 }
             } else {
-                compareAndUpdate('status', status, 'Status');
+                compareAndUpdate('status', normalizedLegacyStatus, 'Status');
             }
             compareAndUpdate('decision', req.body.decision, 'Decision');
             compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
@@ -499,7 +504,7 @@ exports.createCandidate = async (req, res) => {
 
             if (statusChanged) {
                 candidate.statusHistory.push({
-                    status: status,
+                    status: normalizedLegacyStatus,
                     changedBy: req.user._id,
                     changedAt: new Date(),
                     remark: `Updated via Bulk Import: ${remark || ''}`
@@ -523,7 +528,7 @@ exports.createCandidate = async (req, res) => {
         }
 
         // Create mode (original logic continue)
-        const legacySafeStatus = isDynamicRequest ? '' : toLegacySafeStatus(status);
+        const legacySafeStatus = normalizedLegacyStatus;
 
         candidate = new Candidate({
             companyId: req.companyId,
