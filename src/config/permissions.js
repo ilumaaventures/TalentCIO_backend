@@ -385,6 +385,16 @@ module.exports = [
         module: "SYSTEM",
         description: "Permanently delete items from recycle bin"
     },
+    {
+        key: "settings.email.view",
+        module: "SETTINGS",
+        description: "View company email settings"
+    },
+    {
+        key: "settings.email.manage",
+        module: "SETTINGS",
+        description: "Manage company email settings"
+    },
 
     // ONBOARDING
     {
