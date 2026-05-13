@@ -127,6 +127,21 @@ const syncPermissions = async () => {
             console.warn('System Admin role not found. Skipping auto-assignment.');
         }
 
+        const hrAdminRole = await Role.findOne({ name: 'HR Admin' }).select('_id permissions');
+        if (hrAdminRole) {
+            const emailSettingsPermissions = await Permission.find({
+                key: { $in: ['settings.email.view', 'settings.email.manage'] }
+            }).select('_id');
+
+            if (emailSettingsPermissions.length > 0) {
+                await Role.updateOne(
+                    { _id: hrAdminRole._id },
+                    { $addToSet: { permissions: { $each: emailSettingsPermissions.map((permission) => permission._id) } } }
+                );
+                console.log('Updated HR Admin role with email settings permissions.');
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);

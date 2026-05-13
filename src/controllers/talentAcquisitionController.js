@@ -9,7 +9,7 @@ const PhaseTemplate = require('../models/PhaseTemplate');
 const mongoose = require('mongoose');
 const SequenceCounter = require('../models/SequenceCounter');
 const NotificationService = require('../services/notificationService');
-const { sendEmail } = require('../services/emailService');
+const { sendEmailForCompany } = require('../services/companyEmailService');
 const {
     TEMPLATE_PLACEHOLDERS,
     hasHtmlMarkup,
@@ -388,6 +388,7 @@ const sendMassMailForHiringRequest = async ({
     companyId,
     user,
     hiringRequestId,
+    emailAccountId,
     templateId,
     customSubject,
     customHtmlBody,
@@ -449,7 +450,9 @@ const sendMassMailForHiringRequest = async ({
         const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
         const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
 
-        const delivered = await sendEmail({
+        const delivered = await sendEmailForCompany({
+            companyId,
+            emailAccountId,
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,
@@ -1514,6 +1517,7 @@ exports.sendMassMail = async (req, res) => {
             companyId: req.companyId,
             user: req.user,
             hiringRequestId: req.params.id,
+            emailAccountId: req.body?.emailAccountId,
             templateId: req.body?.templateId,
             customSubject: req.body?.customSubject,
             customHtmlBody: req.body?.customHtmlBody,
@@ -1552,6 +1556,7 @@ exports.sendMassMailBulk = async (req, res) => {
                     companyId: req.companyId,
                     user: req.user,
                     hiringRequestId,
+                    emailAccountId: req.body?.emailAccountId,
                     templateId: req.body?.templateId,
                     customSubject: req.body?.customSubject,
                     customHtmlBody: req.body?.customHtmlBody,

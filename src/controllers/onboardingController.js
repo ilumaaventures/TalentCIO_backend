@@ -1,7 +1,7 @@
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
-const { sendEmail } = require('../services/emailService');
+const { sendEmailForCompany } = require('../services/companyEmailService');
 const NotificationService = require('../services/notificationService');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -335,7 +335,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         `;
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-        await sendEmail({
+        await sendEmailForCompany({
+            companyId: employee.companyId,
+            emailAccountId: req.body?.emailAccountId,
             to: employee.email,
             subject: `Action Required: Complete Your Pre-Onboarding – ${employee.tempEmployeeId}`,
             html: emailHtml,
@@ -404,7 +406,9 @@ exports.sendCustomFile = async (req, res) => {
         }));
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-        const sent = await sendEmail({
+        const sent = await sendEmailForCompany({
+            companyId: employee.companyId,
+            emailAccountId: req.body?.emailAccountId,
             to: employee.email,
             subject: `Action Required: New ${files.length > 1 ? 'Documents' : 'Document'} for Your Onboarding`,
             html: emailHtml,
@@ -734,7 +738,8 @@ exports.flagDocument = async (req, res) => {
                 `).join('');
 
                 const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmail({
+                await sendEmailForCompany({
+                    companyId: employee.companyId,
                     to: employee.email,
                     subject: `Action Required: Document Updates Needed for Your Onboarding`,
                     html: `
@@ -804,7 +809,8 @@ exports.approveDocument = async (req, res) => {
                 `).join('');
 
                 const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmail({
+                await sendEmailForCompany({
+                    companyId: employee.companyId,
                     to: employee.email,
                     subject: `Action Required: Document Updates Needed for Your Onboarding`,
                     html: `
@@ -1278,7 +1284,8 @@ exports.submitOnboarding = async (req, res) => {
             // Notify HR via email
             if (employee.createdBy.email) {
                 const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmail({
+                await sendEmailForCompany({
+                    companyId: employee.companyId,
                     to: employee.createdBy.email,
                     subject: `Onboarding Submitted: ${employee.firstName} ${employee.lastName}`,
                     html: `
@@ -2215,7 +2222,8 @@ exports.transferToActiveEmployee = async (req, res) => {
         // 4. Send welcome email
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-        await sendEmail({
+        await sendEmailForCompany({
+            companyId: employee.companyId,
             to: employee.email,
             subject: `Welcome! Your Employee Account is Ready`,
             html: `

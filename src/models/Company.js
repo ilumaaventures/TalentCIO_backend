@@ -30,6 +30,48 @@ const companySchema = new mongoose.Schema({
         careers: {
             enableResourceGatewayPublishing: { type: Boolean, default: false }
         },
+        email: {
+            defaultAccountId: { type: String, default: 'platform' },
+            accounts: [{
+                name: { type: String, default: '' },
+                provider: {
+                    type: String,
+                    enum: ['brevo', 'smtp'],
+                    default: 'brevo'
+                },
+                fromName: { type: String, default: '' },
+                fromAddress: { type: String, default: '' },
+                brevoApiKey: { type: String, default: '' },
+                smtp: {
+                    host: { type: String, default: '' },
+                    port: { type: Number, default: 587 },
+                    secure: { type: Boolean, default: false },
+                    user: { type: String, default: '' },
+                    pass: { type: String, default: '' }
+                },
+                verified: { type: Boolean, default: false },
+                verifiedAt: { type: Date, default: null },
+                testSentAt: { type: Date, default: null }
+            }],
+            fromName: { type: String, default: '' },
+            fromAddress: { type: String, default: '' },
+            provider: {
+                type: String,
+                enum: ['platform', 'brevo', 'smtp'],
+                default: 'platform'
+            },
+            brevoApiKey: { type: String, default: '' },
+            smtp: {
+                host: { type: String, default: '' },
+                port: { type: Number, default: 587 },
+                secure: { type: Boolean, default: false },
+                user: { type: String, default: '' },
+                pass: { type: String, default: '' }
+            },
+            verified: { type: Boolean, default: false },
+            verifiedAt: { type: Date, default: null },
+            testSentAt: { type: Date, default: null }
+        },
         onboarding: {
             offerLetterTemplateUrl: { type: String, default: '' },
             declarationTemplateUrl: { type: String, default: '' },

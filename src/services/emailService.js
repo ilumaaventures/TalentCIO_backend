@@ -168,5 +168,6 @@ const sendOTPEmail = async (to, otp, firstName, branding = {}) => {
 
 module.exports = {
     sendEmail,
-    sendOTPEmail
+    sendOTPEmail,
+    wrapEmailHtmlWithBranding
 };
