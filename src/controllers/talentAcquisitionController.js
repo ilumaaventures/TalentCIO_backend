@@ -456,9 +456,7 @@ const sendMassMailForHiringRequest = async ({
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,
-            text: resolvedText,
-            logoUrl: company?.settings?.logo || undefined,
-            logoAlt: company?.name || 'TalentCIO'
+            text: resolvedText
         });
 
         if (delivered) {

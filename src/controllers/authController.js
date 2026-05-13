@@ -16,18 +16,12 @@ const getAssignedClientNames = (user) => (
 );
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
-    let workspace = company;
-
-    if (!workspace && companyId) {
-        workspace = await require('../models/Company')
-            .findById(companyId)
-            .select('name settings.logo')
-            .lean();
-    }
+    const branding = await emailService.getCompanyBranding(companyId);
 
     return {
-        logoUrl: workspace?.settings?.logo || undefined,
-        logoAlt: workspace?.name || 'TalentCIO'
+        companyId,
+        ...branding,
+        logoAlt: branding.logoAlt || company?.name || 'TalentCIO'
     };
 };
 

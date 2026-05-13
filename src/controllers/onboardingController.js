@@ -2,6 +2,7 @@ const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
 const { sendEmailForCompany } = require('../services/companyEmailService');
+const { getCompanyBranding } = require('../services/emailService');
 const NotificationService = require('../services/notificationService');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -54,17 +55,11 @@ const formatCurrency = (val) => {
 };
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
-    let workspace = company;
-
-    if ((!workspace || !workspace.settings?.logo) && companyId) {
-        workspace = await Company.findById(companyId)
-            .select('name settings.logo')
-            .lean();
-    }
+    const branding = await getCompanyBranding(companyId);
 
     return {
-        logoUrl: workspace?.settings?.logo || undefined,
-        logoAlt: workspace?.name || 'TalentCIO'
+        ...branding,
+        logoAlt: branding.logoAlt || company?.name || 'TalentCIO'
     };
 };
 

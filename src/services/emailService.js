@@ -1,8 +1,10 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
+const Company = require('../models/Company');
 
 const DEFAULT_LOGO_URL = 'https://talentcio.in/navbar-logo.png';
 const DEFAULT_LOGO_LINK = 'https://talentcio.in';
+const DEFAULT_BRAND_COLOR = '#6366f1';
 
 /**
  * Configure the transporter using Brevo SMTP.
@@ -28,6 +30,44 @@ const getTransporter = () => {
 const getEmailLogoUrl = () => process.env.EMAIL_LOGO_URL || process.env.TALENTCIO_LOGO_URL || DEFAULT_LOGO_URL;
 const getEmailLogoLink = () => process.env.EMAIL_LOGO_LINK || process.env.TALENTCIO_WEBSITE_URL || DEFAULT_LOGO_LINK;
 
+const getCompanyBranding = async (companyId) => {
+    if (!companyId) {
+        return {
+            logoUrl: '',
+            brandColor: DEFAULT_BRAND_COLOR,
+            footerText: '',
+            replyTo: '',
+            displayName: 'TalentCIO'
+        };
+    }
+
+    try {
+        const company = await Company.findById(companyId)
+            .select('name settings.emailBranding settings.logo settings.themeColor')
+            .lean();
+        const branding = company?.settings?.emailBranding || {};
+
+        return {
+            logoUrl: branding.logoUrl || company?.settings?.logo || '',
+            brandColor: branding.brandColor || company?.settings?.themeColor || DEFAULT_BRAND_COLOR,
+            footerText: branding.footerText || '',
+            replyTo: branding.replyTo || '',
+            displayName: branding.displayName || company?.name || 'TalentCIO',
+            logoAlt: branding.displayName || company?.name || 'TalentCIO'
+        };
+    } catch (error) {
+        console.warn('[EMAIL] Failed to load company branding:', error.message);
+        return {
+            logoUrl: '',
+            brandColor: DEFAULT_BRAND_COLOR,
+            footerText: '',
+            replyTo: '',
+            displayName: 'TalentCIO',
+            logoAlt: 'TalentCIO'
+        };
+    }
+};
+
 const wrapEmailHtmlWithBranding = (html, branding = {}) => {
     const content = String(html || '').trim();
     if (!content) return html;
@@ -35,20 +75,24 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
     const logoUrl = branding.logoUrl || getEmailLogoUrl();
     const logoLink = branding.logoLink || getEmailLogoLink();
     const logoAlt = branding.logoAlt || 'TalentCIO';
+    const brandColor = branding.brandColor || DEFAULT_BRAND_COLOR;
+    const footerText = branding.footerText || '';
 
     return `
-        <div style="background: #f8fafc; padding: 24px 12px;">
-            <div style="max-width: 680px; margin: 0 auto;">
-                <div style="text-align: center; margin-bottom: 20px;">
-                    <a href="${logoLink}" target="_blank" rel="noopener noreferrer" style="display: inline-block; text-decoration: none;">
-                        <img
-                            src="${logoUrl}"
-                            alt="${logoAlt}"
-                            style="display: inline-block; max-width: 200px; width: auto; height: 48px; object-fit: contain; border: 0; outline: none; text-decoration: none;"
-                        />
-                    </a>
+        <div style="background:#f8fafc;padding:24px 12px;font-family:Arial,sans-serif;">
+            <div style="max-width:640px;margin:0 auto;">
+                <div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:center;">
+                    ${logoUrl
+            ? `<a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="height:44px;max-width:200px;object-fit:contain;display:block;margin:0 auto;" /></a>`
+            : `<span style="color:#fff;font-size:20px;font-weight:bold;">${logoAlt}</span>`
+        }
                 </div>
-                ${content}
+                <div style="background:#ffffff;padding:32px 24px;border:1px solid #e2e8f0;border-top:none;">
+                    ${content}
+                </div>
+                ${footerText
+            ? `<div style="padding:16px 24px;text-align:center;font-size:12px;color:#94a3b8;">${footerText}</div>`
+            : ''}
             </div>
         </div>
     `;
@@ -58,6 +102,7 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
  * Generic function to send an email (Supports Brevo API and SMTP)
  */
 const sendEmail = async ({
+    companyId,
     to,
     subject,
     html,
@@ -66,11 +111,31 @@ const sendEmail = async ({
     brandEmail = true,
     logoUrl,
     logoLink,
-    logoAlt
+    logoAlt,
+    cc,
+    bcc,
+    replyTo
 }) => {
     const apiKey = process.env.BREVO_API_KEY || process.env.EMAIL_PASS;
     const fromEmail = process.env.EMAIL_FROM || 'no-reply@talentcio.in';
-    const brandedHtml = brandEmail ? wrapEmailHtmlWithBranding(html, { logoUrl, logoLink, logoAlt }) : html;
+    let branding = {};
+
+    if (companyId && brandEmail) {
+        const companyBranding = await getCompanyBranding(companyId);
+        branding = {
+            ...companyBranding,
+            logoLink: getEmailLogoLink()
+        };
+    }
+
+    if (logoUrl !== undefined) branding.logoUrl = logoUrl;
+    if (logoLink !== undefined) branding.logoLink = logoLink;
+    if (logoAlt !== undefined) branding.logoAlt = logoAlt;
+    if (replyTo !== undefined) branding.replyTo = replyTo;
+
+    const brandedHtml = brandEmail ? wrapEmailHtmlWithBranding(html, branding) : html;
+    const resolvedReplyTo = branding.replyTo || replyTo || undefined;
+    const senderName = branding.displayName || 'TalentCIO';
 
     // 1. Try Brevo HTTP API first (Most reliable for production/Render)
     if (apiKey && apiKey.startsWith('xkeysib-')) {
@@ -85,12 +150,24 @@ const sendEmail = async ({
             })).filter(att => att.content || att.url);
 
             const payload = {
-                sender: { name: 'TalentCIO', email: fromEmail },
+                sender: { name: senderName, email: fromEmail },
                 to: [{ email: to }],
                 subject: subject,
                 htmlContent: brandedHtml,
                 textContent: text
             };
+
+            if (cc) {
+                payload.cc = [{ email: cc }];
+            }
+
+            if (bcc) {
+                payload.bcc = [{ email: bcc }];
+            }
+
+            if (resolvedReplyTo) {
+                payload.replyTo = { email: resolvedReplyTo };
+            }
 
             if (brevoAttachments.length > 0) {
                 payload.attachment = brevoAttachments;
@@ -119,12 +196,24 @@ const sendEmail = async ({
     try {
         const transporter = getTransporter();
         const mailOptions = {
-            from: `"TalentCIO" <${fromEmail}>`,
+            from: `"${senderName.replace(/"/g, '\\"')}" <${fromEmail}>`,
             to,
             subject,
             html: brandedHtml,
             text
         };
+
+        if (cc) {
+            mailOptions.cc = cc;
+        }
+
+        if (bcc) {
+            mailOptions.bcc = bcc;
+        }
+
+        if (resolvedReplyTo) {
+            mailOptions.replyTo = resolvedReplyTo;
+        }
 
         if (attachments && attachments.length > 0) {
             mailOptions.attachments = attachments;
@@ -169,5 +258,6 @@ const sendOTPEmail = async (to, otp, firstName, branding = {}) => {
 module.exports = {
     sendEmail,
     sendOTPEmail,
-    wrapEmailHtmlWithBranding
+    wrapEmailHtmlWithBranding,
+    getCompanyBranding
 };

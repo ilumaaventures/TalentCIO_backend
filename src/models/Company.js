@@ -20,6 +20,14 @@ const companySchema = new mongoose.Schema({
         // Branding
         logo: { type: String, default: '' },
         themeColor: { type: String, default: '#6366f1' },
+        emailBranding: {
+            displayName: { type: String, default: '' },
+            logoUrl: { type: String, default: '' },
+            logoPublicId: { type: String, default: '' },
+            brandColor: { type: String, default: '#6366f1' },
+            footerText: { type: String, default: '' },
+            replyTo: { type: String, default: '' }
+        },
 
         // HR & General Settings
         leavePolicy: { type: String, default: '' },
