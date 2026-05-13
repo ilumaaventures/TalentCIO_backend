@@ -2,6 +2,26 @@ require('../config/cloudinary');
 const cloudinary = require('cloudinary').v2;
 const Company = require('../models/Company');
 
+const DEFAULT_LOGO_WIDTH = 200;
+const DEFAULT_LOGO_HEIGHT = 44;
+const DEFAULT_LOGO_ALIGNMENT = 'center';
+
+const normalizeDimension = (value, fallback, min, max) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(Math.max(parsed, min), max);
+};
+
+const normalizeAlignment = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['left', 'center', 'right'].includes(normalized)
+        ? normalized
+        : DEFAULT_LOGO_ALIGNMENT;
+};
+
 exports.getEmailBranding = async (req, res) => {
     try {
         const company = await Company.findById(req.companyId)
@@ -17,6 +37,9 @@ exports.getEmailBranding = async (req, res) => {
         return res.json({
             displayName: branding.displayName || company.name || '',
             logoUrl: branding.logoUrl || company?.settings?.logo || '',
+            logoWidth: normalizeDimension(branding.logoWidth, DEFAULT_LOGO_WIDTH, 40, 400),
+            logoHeight: normalizeDimension(branding.logoHeight, DEFAULT_LOGO_HEIGHT, 20, 160),
+            logoAlignment: normalizeAlignment(branding.logoAlignment),
             brandColor: branding.brandColor || company?.settings?.themeColor || '#6366f1',
             footerText: branding.footerText || '',
             replyTo: branding.replyTo || '',
@@ -33,7 +56,7 @@ exports.getEmailBranding = async (req, res) => {
 
 exports.updateEmailBranding = async (req, res) => {
     try {
-        const { displayName, brandColor, footerText, replyTo } = req.body || {};
+        const { displayName, brandColor, footerText, replyTo, logoWidth, logoHeight, logoAlignment } = req.body || {};
         const update = {};
 
         if (displayName !== undefined) {
@@ -47,6 +70,15 @@ exports.updateEmailBranding = async (req, res) => {
         }
         if (replyTo !== undefined) {
             update['settings.emailBranding.replyTo'] = String(replyTo).trim();
+        }
+        if (logoWidth !== undefined) {
+            update['settings.emailBranding.logoWidth'] = normalizeDimension(logoWidth, DEFAULT_LOGO_WIDTH, 40, 400);
+        }
+        if (logoHeight !== undefined) {
+            update['settings.emailBranding.logoHeight'] = normalizeDimension(logoHeight, DEFAULT_LOGO_HEIGHT, 20, 160);
+        }
+        if (logoAlignment !== undefined) {
+            update['settings.emailBranding.logoAlignment'] = normalizeAlignment(logoAlignment);
         }
 
         await Company.findByIdAndUpdate(req.companyId, { $set: update });

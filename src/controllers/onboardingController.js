@@ -1,6 +1,7 @@
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
+const EmailTemplate = require('../models/EmailTemplate');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const { getCompanyBranding } = require('../services/emailService');
 const NotificationService = require('../services/notificationService');
@@ -15,6 +16,12 @@ const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
+const {
+    hasHtmlMarkup,
+    renderTemplateBody,
+    resolveTemplate,
+    validateTemplateSyntax
+} = require('../utils/templateResolver');
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -53,6 +60,58 @@ const formatCurrency = (val) => {
     if (isNaN(num)) return val;
     return '₹ ' + num.toLocaleString('en-IN');
 };
+
+const DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT = 'Action Required: Complete Your Pre-Onboarding';
+const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
+    <p>Hello <strong>{{firstName}}</strong>,</p>
+    <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+`;
+
+const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const buildPreOnboardingTemplateData = ({
+    employee,
+    companyName,
+    recruiterName,
+    portalUrl,
+    deadlineText
+}) => ({
+    candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    firstName: employee.firstName || '',
+    lastName: employee.lastName || '',
+    fullName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    email: employee.email || '',
+    phone: employee.phone || '',
+    workEmail: employee.email || '',
+    mobile: employee.phone || '',
+    phoneNumber: employee.phone || '',
+    jobTitle: employee.designation || '',
+    designation: employee.designation || '',
+    client: '',
+    department: employee.department || '',
+    offerDate: formatDate(employee.offerDate),
+    dateOfOffer: formatDate(employee.offerDate),
+    workLocation: employee.workLocation || '',
+    employmentDetails: [employee.designation || '', employee.department || '', employee.workLocation || '']
+        .filter(Boolean)
+        .join(' | '),
+    location: employee.location || '',
+    managerName: employee.reportingManagerName || '',
+    managerEmail: employee.reportingManagerEmail || '',
+    recruiterName: recruiterName || 'HR Team',
+    companyName: companyName || 'TalentCIO',
+    requestId: employee.tempEmployeeId || '',
+    currentStatus: employee.status || '',
+    interviewDate: '',
+    interviewLink: '',
+    customNote: '',
+    employeeFirstName: employee.firstName || '',
+    employeeFullName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    employeeId: employee.tempEmployeeId || '',
+    joiningDate: formatDate(employee.joiningDate),
+    submissionDeadline: deadlineText || '',
+    portalLink: portalUrl || ''
+});
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
     const branding = await getCompanyBranding(companyId);
@@ -171,7 +230,14 @@ exports.addEmployee = async (req, res) => {
 // --- Send selective pre-onboarding email ---
 exports.sendPreOnboardingEmail = async (req, res) => {
     try {
-        const { sections, documents, submissionDeadline } = req.body;
+        const {
+            sections,
+            documents,
+            submissionDeadline,
+            emailTemplateId,
+            emailSubject,
+            emailHtmlBody
+        } = req.body;
 
         if ((!sections || sections.length === 0) && (!documents || documents.length === 0)) {
             return res.status(400).json({ message: 'Please select at least one section or document' });
@@ -236,6 +302,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         employee.selectionDraft = {
             sections: [],
             documents: [],
+            emailTemplateId: '',
+            emailSubject: '',
+            emailHtmlBody: '',
             updatedAt: new Date()
         };
 
@@ -301,6 +370,58 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
             : 'Not specified';
 
+        let selectedTemplate = null;
+        if (emailTemplateId) {
+            selectedTemplate = await EmailTemplate.findOne({
+                _id: emailTemplateId,
+                companyId: req.companyId,
+                scope: 'general',
+                templateType: 'onboarding',
+                isActive: true
+            }).lean();
+
+            if (!selectedTemplate) {
+                return res.status(404).json({ message: 'Selected onboarding email template was not found.' });
+            }
+        }
+
+        const subjectTemplate = String(
+            emailSubject
+            || selectedTemplate?.subject
+            || DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT
+        ).trim();
+        const bodyTemplate = String(
+            emailHtmlBody
+            || selectedTemplate?.htmlBody
+            || DEFAULT_PRE_ONBOARDING_EMAIL_BODY
+        );
+
+        if (!subjectTemplate || !bodyTemplate.trim()) {
+            return res.status(400).json({ message: 'Email subject and body are required.' });
+        }
+
+        const subjectValidation = validateTemplateSyntax(subjectTemplate);
+        if (!subjectValidation.valid) {
+            return res.status(400).json({ message: `Subject error: ${subjectValidation.message}` });
+        }
+
+        const bodyValidation = validateTemplateSyntax(bodyTemplate);
+        if (!bodyValidation.valid) {
+            return res.status(400).json({ message: `Body error: ${bodyValidation.message}` });
+        }
+
+        const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
+        const recruiterName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const templateData = buildPreOnboardingTemplateData({
+            employee,
+            companyName,
+            recruiterName,
+            portalUrl,
+            deadlineText: deadlineStr
+        });
+        const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
+        const introHtml = renderTemplateBody(bodyTemplate, templateData);
+
         const emailHtml = `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
                 <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
@@ -308,8 +429,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <p style="color: #e0e7ff; margin-top: 8px; font-size: 14px;">Please complete the following items on your portal</p>
                 </div>
                 <div style="padding: 32px;">
-                    <p>Hello <strong>${employee.firstName}</strong>,</p>
-                    <p style="color: #475569;">Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+                    <div style="font-size: 14px; line-height: 1.6;">
+                        ${introHtml}
+                    </div>
 
                     ${credentialsHtml}
                     ${sectionsHtml}
@@ -328,6 +450,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 </div>
             </div>
         `;
+        const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         await sendEmailForCompany({
@@ -336,6 +459,8 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             to: employee.email,
             subject: `Action Required: Complete Your Pre-Onboarding – ${employee.tempEmployeeId}`,
             html: emailHtml,
+            subject: resolvedSubject,
+            text: emailText,
             ...branding
         });
 
@@ -344,7 +469,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             $push: {
                 auditLog: {
                     action: 'PRE_ONBOARD_EMAIL_SENT',
-                    details: `Email sent with ${(sections || []).length} section(s) and ${(documents || []).length} document(s)`
+                    details: `Email sent with ${(sections || []).length} section(s), ${(documents || []).length} document(s), template: ${selectedTemplate?.name || 'Default'}`
                 }
             }
         });
@@ -627,6 +752,9 @@ exports.updateEmployee = async (req, res) => {
             employee.selectionDraft = {
                 sections: normalizeLabels(selectionDraft.sections),
                 documents: normalizeLabels(selectionDraft.documents),
+                emailTemplateId: typeof selectionDraft.emailTemplateId === 'string' ? selectionDraft.emailTemplateId.trim() : '',
+                emailSubject: typeof selectionDraft.emailSubject === 'string' ? selectionDraft.emailSubject : '',
+                emailHtmlBody: typeof selectionDraft.emailHtmlBody === 'string' ? selectionDraft.emailHtmlBody : '',
                 updatedAt: new Date()
             };
 

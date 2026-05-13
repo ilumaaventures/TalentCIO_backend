@@ -5,6 +5,9 @@ const Company = require('../models/Company');
 const DEFAULT_LOGO_URL = 'https://talentcio.in/navbar-logo.png';
 const DEFAULT_LOGO_LINK = 'https://talentcio.in';
 const DEFAULT_BRAND_COLOR = '#6366f1';
+const DEFAULT_LOGO_WIDTH = 200;
+const DEFAULT_LOGO_HEIGHT = 44;
+const DEFAULT_LOGO_ALIGNMENT = 'center';
 
 /**
  * Configure the transporter using Brevo SMTP.
@@ -34,6 +37,9 @@ const getCompanyBranding = async (companyId) => {
     if (!companyId) {
         return {
             logoUrl: '',
+            logoWidth: DEFAULT_LOGO_WIDTH,
+            logoHeight: DEFAULT_LOGO_HEIGHT,
+            logoAlignment: DEFAULT_LOGO_ALIGNMENT,
             brandColor: DEFAULT_BRAND_COLOR,
             footerText: '',
             replyTo: '',
@@ -49,6 +55,11 @@ const getCompanyBranding = async (companyId) => {
 
         return {
             logoUrl: branding.logoUrl || company?.settings?.logo || '',
+            logoWidth: Number.isFinite(Number(branding.logoWidth)) ? Number(branding.logoWidth) : DEFAULT_LOGO_WIDTH,
+            logoHeight: Number.isFinite(Number(branding.logoHeight)) ? Number(branding.logoHeight) : DEFAULT_LOGO_HEIGHT,
+            logoAlignment: ['left', 'center', 'right'].includes(String(branding.logoAlignment || '').toLowerCase())
+                ? String(branding.logoAlignment).toLowerCase()
+                : DEFAULT_LOGO_ALIGNMENT,
             brandColor: branding.brandColor || company?.settings?.themeColor || DEFAULT_BRAND_COLOR,
             footerText: branding.footerText || '',
             replyTo: branding.replyTo || '',
@@ -59,6 +70,9 @@ const getCompanyBranding = async (companyId) => {
         console.warn('[EMAIL] Failed to load company branding:', error.message);
         return {
             logoUrl: '',
+            logoWidth: DEFAULT_LOGO_WIDTH,
+            logoHeight: DEFAULT_LOGO_HEIGHT,
+            logoAlignment: DEFAULT_LOGO_ALIGNMENT,
             brandColor: DEFAULT_BRAND_COLOR,
             footerText: '',
             replyTo: '',
@@ -77,13 +91,18 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
     const logoAlt = branding.logoAlt || 'TalentCIO';
     const brandColor = branding.brandColor || DEFAULT_BRAND_COLOR;
     const footerText = branding.footerText || '';
+    const logoWidth = Number.isFinite(Number(branding.logoWidth)) ? Number(branding.logoWidth) : DEFAULT_LOGO_WIDTH;
+    const logoHeight = Number.isFinite(Number(branding.logoHeight)) ? Number(branding.logoHeight) : DEFAULT_LOGO_HEIGHT;
+    const logoAlignment = ['left', 'center', 'right'].includes(String(branding.logoAlignment || '').toLowerCase())
+        ? String(branding.logoAlignment).toLowerCase()
+        : DEFAULT_LOGO_ALIGNMENT;
 
     return `
         <div style="background:#f8fafc;padding:24px 12px;font-family:Arial,sans-serif;">
             <div style="max-width:640px;margin:0 auto;">
-                <div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:center;">
+                <div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:${logoAlignment};">
                     ${logoUrl
-            ? `<a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="height:44px;max-width:200px;object-fit:contain;display:block;margin:0 auto;" /></a>`
+            ? `<a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="width:${logoWidth}px;height:${logoHeight}px;max-width:100%;object-fit:contain;display:block;margin:0 auto;" /></a>`
             : `<span style="color:#fff;font-size:20px;font-weight:bold;">${logoAlt}</span>`
         }
                 </div>
@@ -110,8 +129,14 @@ const sendEmail = async ({
     attachments = [],
     brandEmail = true,
     logoUrl,
+    logoWidth,
+    logoHeight,
+    logoAlignment,
     logoLink,
     logoAlt,
+    displayName,
+    brandColor,
+    footerText,
     cc,
     bcc,
     replyTo
@@ -129,8 +154,14 @@ const sendEmail = async ({
     }
 
     if (logoUrl !== undefined) branding.logoUrl = logoUrl;
+    if (logoWidth !== undefined) branding.logoWidth = logoWidth;
+    if (logoHeight !== undefined) branding.logoHeight = logoHeight;
+    if (logoAlignment !== undefined) branding.logoAlignment = logoAlignment;
     if (logoLink !== undefined) branding.logoLink = logoLink;
     if (logoAlt !== undefined) branding.logoAlt = logoAlt;
+    if (displayName !== undefined) branding.displayName = displayName;
+    if (brandColor !== undefined) branding.brandColor = brandColor;
+    if (footerText !== undefined) branding.footerText = footerText;
     if (replyTo !== undefined) branding.replyTo = replyTo;
 
     const brandedHtml = brandEmail ? wrapEmailHtmlWithBranding(html, branding) : html;

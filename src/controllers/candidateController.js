@@ -1313,6 +1313,9 @@ exports.addInterviewRound = async (req, res) => {
         candidate.interviewRounds.push(newRound);
         await candidate.save();
 
+        const savedRound = candidate.interviewRounds[candidate.interviewRounds.length - 1];
+        const roundPhase = Number(savedRound?.phase) > 0 ? Number(savedRound.phase) : 1;
+
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('hiringRequestId', 'requestId')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
@@ -1326,10 +1329,12 @@ exports.addInterviewRound = async (req, res) => {
                 title: 'New Interview Assigned',
                 message: `You have been assigned to evaluate ${candidate.candidateName} for the ${levelName} round.`,
                 type: 'Interview',
-                link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view`,
+                link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view?phase=${roundPhase}`,
                 metadata: {
                     candidateId: candidate._id,
-                    roundId: candidate.interviewRounds[candidate.interviewRounds.length - 1]._id
+                    roundId: savedRound?._id,
+                    hiringRequestId: candidate.hiringRequestId._id || candidate.hiringRequestId,
+                    phase: roundPhase
                 }
             }));
             await NotificationService.createManyNotifications(io, notifications);
@@ -1339,7 +1344,7 @@ exports.addInterviewRound = async (req, res) => {
                 NotificationService.emitToUser(io, userId, 'interview_update', {
                     candidateId: candidate._id,
                     candidateName: candidate.candidateName,
-                    roundId: candidate.interviewRounds[candidate.interviewRounds.length - 1]._id
+                    roundId: savedRound?._id
                 });
             });
         }

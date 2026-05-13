@@ -190,6 +190,9 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     selectionDraft: {
         sections: [{ type: String, trim: true }],
         documents: [{ type: String, trim: true }],
+        emailTemplateId: { type: String, default: '' },
+        emailSubject: { type: String, default: '' },
+        emailHtmlBody: { type: String, default: '' },
         updatedAt: { type: Date }
     },
 

@@ -1,17 +1,65 @@
 const TEMPLATE_PLACEHOLDERS = [
     'candidateName',
+    'firstName',
+    'lastName',
+    'fullName',
     'email',
+    'workEmail',
     'mobile',
+    'phoneNumber',
     'jobTitle',
+    'designation',
     'client',
     'department',
+    'location',
+    'managerName',
+    'managerEmail',
     'recruiterName',
     'companyName',
     'requestId',
     'currentStatus',
     'interviewDate',
     'interviewLink',
-    'customNote'
+    'customNote',
+    'employeeFirstName',
+    'employeeFullName',
+    'employeeId',
+    'joiningDate',
+    'submissionDeadline',
+    'portalLink'
+];
+
+const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
+    'firstName',
+    'lastName',
+    'fullName',
+    'email',
+    'workEmail',
+    'mobile',
+    'phoneNumber',
+    'jobTitle',
+    'designation',
+    'department',
+    'location',
+    'managerName',
+    'managerEmail',
+    'companyName'
+];
+
+const ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
+    'firstName',
+    'lastName',
+    'fullName',
+    'email',
+    'phone',
+    'designation',
+    'department',
+    'offerDate',
+    'dateOfOffer',
+    'joiningDate',
+    'workLocation',
+    'submissionDeadline',
+    'portalLink'
 ];
 
 const getSupportedPlaceholderTokens = (placeholders = TEMPLATE_PLACEHOLDERS) => placeholders.map((placeholder) => `{{${placeholder}}}`);
@@ -130,6 +178,8 @@ module.exports = {
     MISSING_OPEN_BRACE_PLACEHOLDER_REGEX,
     SINGLE_BRACE_PLACEHOLDER_REGEX,
     TEMPLATE_PLACEHOLDERS,
+    GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
+    ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     formatTemplateBodyAsHtml,
     getSupportedPlaceholderTokens,
     hasHtmlMarkup,

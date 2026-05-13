@@ -8,19 +8,18 @@ const router = express.Router();
 const canViewTemplates = authorizeAny([
     'settings.email.view',
     'settings.email.manage',
-    'ta.config.manage',
-    'ta.email_template.manage',
-    'ta.edit'
+    'onboarding.manage'
 ]);
 
 const canManageTemplates = authorizeAny([
-    'settings.email.manage',
-    'ta.config.manage',
-    'ta.email_template.manage',
-    'ta.edit'
+    'settings.email.manage'
 ]);
 
 router.use(protect);
+router.use((req, res, next) => {
+    req.templateScope = 'general';
+    next();
+});
 
 router.get('/', canViewTemplates, controller.listEmailTemplates);
 router.get('/:id', canViewTemplates, controller.getEmailTemplateById);
