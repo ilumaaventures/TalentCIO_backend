@@ -259,6 +259,39 @@ const enrichCandidatesWithPublicProfiles = async (candidates, companyId) => {
     return Array.isArray(candidates) ? enriched : enriched[0];
 };
 
+const applyDateRangeFilterToCandidateQuery = (query, rawDateField, rawStartDate, rawEndDate) => {
+    const allowedDateFields = new Set(['createdAt', 'updatedAt']);
+    const dateField = allowedDateFields.has(String(rawDateField || '')) ? String(rawDateField) : '';
+
+    if (!dateField) {
+        return query;
+    }
+
+    const dateFilter = {};
+
+    if (rawStartDate) {
+        const startDate = new Date(rawStartDate);
+        if (!Number.isNaN(startDate.getTime())) {
+            startDate.setHours(0, 0, 0, 0);
+            dateFilter.$gte = startDate;
+        }
+    }
+
+    if (rawEndDate) {
+        const endDate = new Date(rawEndDate);
+        if (!Number.isNaN(endDate.getTime())) {
+            endDate.setHours(23, 59, 59, 999);
+            dateFilter.$lte = endDate;
+        }
+    }
+
+    if (Object.keys(dateFilter).length > 0) {
+        query[dateField] = dateFilter;
+    }
+
+    return query;
+};
+
 // Upload resume to Cloudinary
 exports.uploadResume = async (req, res) => {
     try {
@@ -641,6 +674,7 @@ exports.createCandidate = async (req, res) => {
 exports.getCandidatesByHiringRequest = async (req, res) => {
     try {
         const { hiringRequestId } = req.params;
+        const { dateField, startDate, endDate } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
             return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
@@ -657,12 +691,16 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        const candidates = await Candidate.find(await buildAccessibleCandidateQuery(
+        const candidateQuery = await buildAccessibleCandidateQuery(
             req.companyId,
             req.user,
             { hiringRequestId },
             { capability: TA_CAPABILITIES.VIEW }
-        ))
+        );
+
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+        const candidates = await Candidate.find(candidateQuery)
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('applicantId', APPLICANT_REVIEW_SELECT)

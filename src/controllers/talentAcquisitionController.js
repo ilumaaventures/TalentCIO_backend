@@ -234,6 +234,39 @@ const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyN
     };
 };
 
+const applyDateRangeFilterToCandidateQuery = (query, rawDateField, rawStartDate, rawEndDate) => {
+    const allowedDateFields = new Set(['createdAt', 'updatedAt']);
+    const dateField = allowedDateFields.has(String(rawDateField || '')) ? String(rawDateField) : '';
+
+    if (!dateField) {
+        return query;
+    }
+
+    const dateFilter = {};
+
+    if (rawStartDate) {
+        const startDate = new Date(rawStartDate);
+        if (!Number.isNaN(startDate.getTime())) {
+            startDate.setHours(0, 0, 0, 0);
+            dateFilter.$gte = startDate;
+        }
+    }
+
+    if (rawEndDate) {
+        const endDate = new Date(rawEndDate);
+        if (!Number.isNaN(endDate.getTime())) {
+            endDate.setHours(23, 59, 59, 999);
+            dateFilter.$lte = endDate;
+        }
+    }
+
+    if (Object.keys(dateFilter).length > 0) {
+        query[dateField] = dateFilter;
+    }
+
+    return query;
+};
+
 const createTransferredCandidateClone = async ({ candidate, targetHiringRequestId, performedBy, resetRemark }) => {
     const newCandidateData = candidate.toObject ? candidate.toObject() : { ...candidate };
     delete newCandidateData._id;
@@ -1314,6 +1347,7 @@ exports.toggleJobVisibility = async (req, res) => {
 exports.getPreviousCandidates = async (req, res) => {
     try {
         const { id } = req.params;
+        const { dateField, startDate, endDate } = req.query;
         const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId })
             .select('previousRequestId createdBy ownership approvalChain assignedUsers');
         if (!currentReq) {
@@ -1345,9 +1379,13 @@ exports.getPreviousCandidates = async (req, res) => {
         // Fetch candidates for each requisition and group them
         const groups = await Promise.all(
             legacyRequisitions.map(async (legacyRequisition) => {
-                const candidates = await Candidate.find(await buildAccessibleCandidateQuery(req.companyId, req.user, {
+                const candidateQuery = await buildAccessibleCandidateQuery(req.companyId, req.user, {
                     hiringRequestId: legacyRequisition._id
-                }, { capability: TA_CAPABILITIES.VIEW })).lean();
+                }, { capability: TA_CAPABILITIES.VIEW });
+
+                applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+                const candidates = await Candidate.find(candidateQuery).lean();
                 return {
                     requisition: {
                         _id: legacyRequisition._id,
