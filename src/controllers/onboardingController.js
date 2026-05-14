@@ -18,6 +18,7 @@ const path = require('path');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const {
     hasHtmlMarkup,
+    ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     renderTemplateBody,
     resolveTemplate,
     validateTemplateSyntax
@@ -68,6 +69,28 @@ const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
 `;
 
 const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
+    const trimmedBaseLabel = String(baseLabel || 'Document').trim() || 'Document';
+    const lastDotIndex = trimmedBaseLabel.lastIndexOf('.');
+    const hasExtension = lastDotIndex > 0 && lastDotIndex < trimmedBaseLabel.length - 1;
+    const fileName = hasExtension ? trimmedBaseLabel.slice(0, lastDotIndex) : trimmedBaseLabel;
+    const fileExtension = hasExtension ? trimmedBaseLabel.slice(lastDotIndex) : '';
+
+    const existingLabels = new Set((existingDocs || []).map((doc) => String(doc?.label || '').trim()).filter(Boolean));
+    if (!existingLabels.has(trimmedBaseLabel)) {
+        return trimmedBaseLabel;
+    }
+
+    let counter = 2;
+    let nextLabel = `${fileName} (${counter})${fileExtension}`;
+    while (existingLabels.has(nextLabel)) {
+        counter += 1;
+        nextLabel = `${fileName} (${counter})${fileExtension}`;
+    }
+
+    return nextLabel;
+};
 
 const buildPreOnboardingTemplateData = ({
     employee,
@@ -353,6 +376,10 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             `;
         }
 
+        const selectedCustomDocuments = (employee.documents || []).filter((doc) =>
+            doc.type === 'custom_file' && (documents || []).includes(doc.label) && doc.url
+        );
+
         // Build documents list HTML
         let documentsHtml = '';
         if (documents && documents.length > 0) {
@@ -362,6 +389,19 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <ul style="margin: 0; padding: 0 0 0 20px; color: #334155;">
                         ${documents.map(d => `<li style="padding: 6px 0; font-size: 14px;">${d}</li>`).join('')}
                     </ul>
+                </div>
+            `;
+        }
+
+        let sharedFilesHtml = '';
+        if (selectedCustomDocuments.length > 0) {
+            sharedFilesHtml = `
+                <div style="margin-bottom: 24px;">
+                    <h3 style="color: #1e293b; font-size: 16px; margin: 0 0 12px; border-bottom: 2px solid #0ea5e9; padding-bottom: 8px;">📁 Files Shared by HR</h3>
+                    <ul style="margin: 0; padding: 0 0 0 20px; color: #334155;">
+                        ${selectedCustomDocuments.map((doc) => `<li style="padding: 6px 0; font-size: 14px;">${doc.label}</li>`).join('')}
+                    </ul>
+                    <p style="margin: 10px 0 0; font-size: 12px; color: #0369a1;">These files are attached with this email for your reference.</p>
                 </div>
             `;
         }
@@ -400,12 +440,12 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             return res.status(400).json({ message: 'Email subject and body are required.' });
         }
 
-        const subjectValidation = validateTemplateSyntax(subjectTemplate);
+        const subjectValidation = validateTemplateSyntax(subjectTemplate, ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS);
         if (!subjectValidation.valid) {
             return res.status(400).json({ message: `Subject error: ${subjectValidation.message}` });
         }
 
-        const bodyValidation = validateTemplateSyntax(bodyTemplate);
+        const bodyValidation = validateTemplateSyntax(bodyTemplate, ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS);
         if (!bodyValidation.valid) {
             return res.status(400).json({ message: `Body error: ${bodyValidation.message}` });
         }
@@ -436,6 +476,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     ${credentialsHtml}
                     ${sectionsHtml}
                     ${documentsHtml}
+                    ${sharedFilesHtml}
 
                     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #92400e;">
                         ⏰ <strong>Submission Deadline:</strong> ${deadlineStr}
@@ -451,6 +492,10 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             </div>
         `;
         const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
+        const attachments = selectedCustomDocuments.map((doc) => ({
+            filename: doc.label,
+            path: doc.url
+        }));
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         await sendEmailForCompany({
@@ -461,6 +506,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             html: emailHtml,
             subject: resolvedSubject,
             text: emailText,
+            attachments,
             ...branding
         });
 
@@ -488,6 +534,96 @@ exports.sendPreOnboardingEmail = async (req, res) => {
     } catch (error) {
         console.error('Error sending pre-onboarding email:', error);
         res.status(500).json({ message: 'Failed to send email', error: error.message });
+    }
+};
+
+// --- Send custom file(s) to candidate ---
+exports.addCustomFiles = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const files = req.files || [];
+        if (files.length === 0) {
+            return res.status(400).json({ message: 'No files uploaded' });
+        }
+
+        const uploadedAt = new Date();
+        const createdDocuments = [];
+
+        files.forEach((file) => {
+            const label = getUniqueDocumentLabel(employee.documents, file.originalname || 'Manual Document');
+            const newDocument = {
+                type: 'custom_file',
+                label,
+                url: file.path,
+                publicId: extractPublicIdFromUrl(file.path) || '',
+                status: 'Pending',
+                uploadedAt
+            };
+
+            employee.documents.push(newDocument);
+            createdDocuments.push(newDocument);
+            employee.auditLog.push({
+                action: 'CUSTOM_FILE_ADDED',
+                details: `Custom file "${label}" uploaded by HR`
+            });
+        });
+
+        await employee.save();
+
+        res.status(201).json({
+            message: `${createdDocuments.length} file(s) added to the document list`,
+            employee,
+            createdDocuments: employee.documents
+                .filter((doc) => createdDocuments.some((createdDoc) => createdDoc.label === doc.label))
+                .map((doc) => doc.toObject ? doc.toObject() : doc)
+        });
+    } catch (error) {
+        console.error('Error adding custom file(s):', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.deleteCustomFile = async (req, res) => {
+    try {
+        const { id, docId } = req.params;
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const doc = employee.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Custom file not found' });
+        if (doc.type !== 'custom_file') {
+            return res.status(400).json({ message: 'Only HR shared custom files can be deleted here.' });
+        }
+
+        if (doc.publicId) {
+            try {
+                await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'raw' });
+            } catch (error) {
+                console.error('Failed to delete custom file from Cloudinary:', error.message);
+            }
+        }
+
+        employee.requestedDocuments = (employee.requestedDocuments || []).filter((item) => item.label !== doc.label);
+
+        if (employee.selectionDraft) {
+            employee.selectionDraft.documents = (employee.selectionDraft.documents || []).filter((label) => label !== doc.label);
+        }
+
+        employee.auditLog.push({
+            action: 'CUSTOM_FILE_DELETED',
+            details: `Custom file "${doc.label}" deleted by HR`
+        });
+
+        employee.documents.pull(docId);
+        await employee.save();
+
+        res.json({ message: 'Custom file deleted successfully', employee });
+    } catch (error) {
+        console.error('Error deleting custom file:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
 
@@ -544,9 +680,10 @@ exports.sendCustomFile = async (req, res) => {
 
         // Persist the HR-shared files so they appear in Documents & Requirements.
         files.forEach(f => {
+            const label = getUniqueDocumentLabel(employee.documents, f.originalname || 'Manual Document');
             employee.documents.push({
                 type: 'custom_file',
-                label: f.originalname || `Manual Document ${employee.documents.filter((doc) => doc.type === 'custom_file').length + 1}`,
+                label,
                 url: f.path,
                 publicId: extractPublicIdFromUrl(f.path) || '',
                 status: 'Mail Sent',
@@ -556,7 +693,7 @@ exports.sendCustomFile = async (req, res) => {
 
             employee.auditLog.push({
                 action: 'CUSTOM_FILE_SENT',
-                details: `File "${f.originalname}" sent to candidate's email by HR`
+                details: `File "${label}" sent to candidate's email by HR`
             });
         });
         await employee.save();
@@ -1370,10 +1507,11 @@ exports.submitOnboarding = async (req, res) => {
         for (const doc of employee.documents) {
             const isMandatory = mandatoryDocTypes.includes(doc.type);
             const isRequested = reqDocLabels.includes(doc.label);
+            const isSharedCustomFile = doc.type === 'custom_file';
 
             if (isSelective) {
                 // Modified: Skip validation for 'passport' type even if requested (it is labeled as Optional)
-                if (isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
+                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
                     errors.push(`${doc.label} not uploaded`);
                 }
             } else if (isMandatory) {
