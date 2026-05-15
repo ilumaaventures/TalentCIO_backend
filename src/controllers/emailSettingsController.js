@@ -372,8 +372,8 @@ exports.sendTestEmail = async (req, res) => {
         });
 
         if (!sent) {
-            return res.status(502).json({
-                message: 'Test email failed to send. Check your credentials.'
+            return res.status(400).json({
+                message: 'Test email failed to send. Check the sender credentials and provider settings.'
             });
         }
 
