@@ -582,7 +582,36 @@ exports.getNotificationBootstrap = async (req, res) => {
             })
             : [];
 
-        res.json({ notifications, interviews });
+        const interviewRoundMap = new Map(
+            interviews.map((interview) => [
+                String(interview.roundId),
+                interview
+            ])
+        );
+
+        const hydratedNotifications = notifications.map((notification) => {
+            if (notification.type !== 'Interview') {
+                return notification;
+            }
+
+            const linkedInterview = interviewRoundMap.get(String(notification.metadata?.roundId || ''));
+            if (!linkedInterview) {
+                return notification;
+            }
+
+            return {
+                ...notification,
+                link: `/ta/hiring-request/${linkedInterview.hiringRequestId}/candidate/${linkedInterview.candidateId}/view?phase=${linkedInterview.phase || 1}`,
+                metadata: {
+                    ...notification.metadata,
+                    hiringRequestId: linkedInterview.hiringRequestId,
+                    candidateId: linkedInterview.candidateId,
+                    phase: linkedInterview.phase || 1
+                }
+            };
+        });
+
+        res.json({ notifications: hydratedNotifications, interviews });
     } catch (error) {
         console.error('getNotificationBootstrap error:', error);
         res.status(500).json({ message: 'Server error fetching notification bootstrap' });

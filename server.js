@@ -217,6 +217,8 @@ const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 const binRoutes = require('./src/routes/binRoutes');
 const emailSettingsRoutes = require('./src/routes/emailSettingsRoutes');
+const emailBrandingRoutes = require('./src/routes/emailBrandingRoutes');
+const emailBrandingTemplateRoutes = require('./src/routes/emailBrandingTemplateRoutes');
 
 const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
 const companyRoutes = require('./src/routes/companyRoutes');
@@ -279,6 +281,8 @@ app.use('/api/discussions', discussionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/bin', binRoutes);
 app.use('/api/company/email-settings', emailSettingsRoutes);
+app.use('/api/email-branding', emailBrandingRoutes);
+app.use('/api/email-templates', emailBrandingTemplateRoutes);
 
 app.use('/api/superadmin/auth', superAdminAuthRoutes);
 app.use('/api/superadmin/companies', companyRoutes);

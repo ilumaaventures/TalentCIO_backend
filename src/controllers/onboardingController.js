@@ -1,7 +1,9 @@
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
+const EmailTemplate = require('../models/EmailTemplate');
 const { sendEmailForCompany } = require('../services/companyEmailService');
+const { getCompanyBranding } = require('../services/emailService');
 const NotificationService = require('../services/notificationService');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -14,6 +16,13 @@ const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
+const {
+    hasHtmlMarkup,
+    ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
+    renderTemplateBody,
+    resolveTemplate,
+    validateTemplateSyntax
+} = require('../utils/templateResolver');
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -53,18 +62,86 @@ const formatCurrency = (val) => {
     return '₹ ' + num.toLocaleString('en-IN');
 };
 
-const getCompanyEmailBranding = async (companyId, company = null) => {
-    let workspace = company;
+const DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT = 'Action Required: Complete Your Pre-Onboarding';
+const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
+    <p>Hello <strong>{{firstName}}</strong>,</p>
+    <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+`;
 
-    if ((!workspace || !workspace.settings?.logo) && companyId) {
-        workspace = await Company.findById(companyId)
-            .select('name settings.logo')
-            .lean();
+const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
+    const trimmedBaseLabel = String(baseLabel || 'Document').trim() || 'Document';
+    const lastDotIndex = trimmedBaseLabel.lastIndexOf('.');
+    const hasExtension = lastDotIndex > 0 && lastDotIndex < trimmedBaseLabel.length - 1;
+    const fileName = hasExtension ? trimmedBaseLabel.slice(0, lastDotIndex) : trimmedBaseLabel;
+    const fileExtension = hasExtension ? trimmedBaseLabel.slice(lastDotIndex) : '';
+
+    const existingLabels = new Set((existingDocs || []).map((doc) => String(doc?.label || '').trim()).filter(Boolean));
+    if (!existingLabels.has(trimmedBaseLabel)) {
+        return trimmedBaseLabel;
     }
 
+    let counter = 2;
+    let nextLabel = `${fileName} (${counter})${fileExtension}`;
+    while (existingLabels.has(nextLabel)) {
+        counter += 1;
+        nextLabel = `${fileName} (${counter})${fileExtension}`;
+    }
+
+    return nextLabel;
+};
+
+const buildPreOnboardingTemplateData = ({
+    employee,
+    companyName,
+    recruiterName,
+    portalUrl,
+    deadlineText
+}) => ({
+    candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    firstName: employee.firstName || '',
+    lastName: employee.lastName || '',
+    fullName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    email: employee.email || '',
+    phone: employee.phone || '',
+    workEmail: employee.email || '',
+    mobile: employee.phone || '',
+    phoneNumber: employee.phone || '',
+    jobTitle: employee.designation || '',
+    designation: employee.designation || '',
+    client: '',
+    department: employee.department || '',
+    offerDate: formatDate(employee.offerDate),
+    dateOfOffer: formatDate(employee.offerDate),
+    workLocation: employee.workLocation || '',
+    employmentDetails: [employee.designation || '', employee.department || '', employee.workLocation || '']
+        .filter(Boolean)
+        .join(' | '),
+    location: employee.location || '',
+    managerName: employee.reportingManagerName || '',
+    managerEmail: employee.reportingManagerEmail || '',
+    recruiterName: recruiterName || 'HR Team',
+    companyName: companyName || 'TalentCIO',
+    requestId: employee.tempEmployeeId || '',
+    currentStatus: employee.status || '',
+    interviewDate: '',
+    interviewLink: '',
+    customNote: '',
+    employeeFirstName: employee.firstName || '',
+    employeeFullName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
+    employeeId: employee.tempEmployeeId || '',
+    joiningDate: formatDate(employee.joiningDate),
+    submissionDeadline: deadlineText || '',
+    portalLink: portalUrl || ''
+});
+
+const getCompanyEmailBranding = async (companyId, company = null) => {
+    const branding = await getCompanyBranding(companyId);
+
     return {
-        logoUrl: workspace?.settings?.logo || undefined,
-        logoAlt: workspace?.name || 'TalentCIO'
+        ...branding,
+        logoAlt: branding.logoAlt || company?.name || 'TalentCIO'
     };
 };
 
@@ -176,7 +253,14 @@ exports.addEmployee = async (req, res) => {
 // --- Send selective pre-onboarding email ---
 exports.sendPreOnboardingEmail = async (req, res) => {
     try {
-        const { sections, documents, submissionDeadline } = req.body;
+        const {
+            sections,
+            documents,
+            submissionDeadline,
+            emailTemplateId,
+            emailSubject,
+            emailHtmlBody
+        } = req.body;
 
         if ((!sections || sections.length === 0) && (!documents || documents.length === 0)) {
             return res.status(400).json({ message: 'Please select at least one section or document' });
@@ -241,6 +325,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         employee.selectionDraft = {
             sections: [],
             documents: [],
+            emailTemplateId: '',
+            emailSubject: '',
+            emailHtmlBody: '',
             updatedAt: new Date()
         };
 
@@ -289,6 +376,10 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             `;
         }
 
+        const selectedCustomDocuments = (employee.documents || []).filter((doc) =>
+            doc.type === 'custom_file' && (documents || []).includes(doc.label) && doc.url
+        );
+
         // Build documents list HTML
         let documentsHtml = '';
         if (documents && documents.length > 0) {
@@ -302,9 +393,74 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             `;
         }
 
+        let sharedFilesHtml = '';
+        if (selectedCustomDocuments.length > 0) {
+            sharedFilesHtml = `
+                <div style="margin-bottom: 24px;">
+                    <h3 style="color: #1e293b; font-size: 16px; margin: 0 0 12px; border-bottom: 2px solid #0ea5e9; padding-bottom: 8px;">📁 Files Shared by HR</h3>
+                    <ul style="margin: 0; padding: 0 0 0 20px; color: #334155;">
+                        ${selectedCustomDocuments.map((doc) => `<li style="padding: 6px 0; font-size: 14px;">${doc.label}</li>`).join('')}
+                    </ul>
+                    <p style="margin: 10px 0 0; font-size: 12px; color: #0369a1;">These files are attached with this email for your reference.</p>
+                </div>
+            `;
+        }
+
         const deadlineStr = employee.documentDeadline
             ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
             : 'Not specified';
+
+        let selectedTemplate = null;
+        if (emailTemplateId) {
+            selectedTemplate = await EmailTemplate.findOne({
+                _id: emailTemplateId,
+                companyId: req.companyId,
+                scope: 'general',
+                templateType: 'onboarding',
+                isActive: true
+            }).lean();
+
+            if (!selectedTemplate) {
+                return res.status(404).json({ message: 'Selected onboarding email template was not found.' });
+            }
+        }
+
+        const subjectTemplate = String(
+            emailSubject
+            || selectedTemplate?.subject
+            || DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT
+        ).trim();
+        const bodyTemplate = String(
+            emailHtmlBody
+            || selectedTemplate?.htmlBody
+            || DEFAULT_PRE_ONBOARDING_EMAIL_BODY
+        );
+
+        if (!subjectTemplate || !bodyTemplate.trim()) {
+            return res.status(400).json({ message: 'Email subject and body are required.' });
+        }
+
+        const subjectValidation = validateTemplateSyntax(subjectTemplate, ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS);
+        if (!subjectValidation.valid) {
+            return res.status(400).json({ message: `Subject error: ${subjectValidation.message}` });
+        }
+
+        const bodyValidation = validateTemplateSyntax(bodyTemplate, ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS);
+        if (!bodyValidation.valid) {
+            return res.status(400).json({ message: `Body error: ${bodyValidation.message}` });
+        }
+
+        const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
+        const recruiterName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const templateData = buildPreOnboardingTemplateData({
+            employee,
+            companyName,
+            recruiterName,
+            portalUrl,
+            deadlineText: deadlineStr
+        });
+        const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
+        const introHtml = renderTemplateBody(bodyTemplate, templateData);
 
         const emailHtml = `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
@@ -313,12 +469,14 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <p style="color: #e0e7ff; margin-top: 8px; font-size: 14px;">Please complete the following items on your portal</p>
                 </div>
                 <div style="padding: 32px;">
-                    <p>Hello <strong>${employee.firstName}</strong>,</p>
-                    <p style="color: #475569;">Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+                    <div style="font-size: 14px; line-height: 1.6;">
+                        ${introHtml}
+                    </div>
 
                     ${credentialsHtml}
                     ${sectionsHtml}
                     ${documentsHtml}
+                    ${sharedFilesHtml}
 
                     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #92400e;">
                         ⏰ <strong>Submission Deadline:</strong> ${deadlineStr}
@@ -333,6 +491,11 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 </div>
             </div>
         `;
+        const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
+        const attachments = selectedCustomDocuments.map((doc) => ({
+            filename: doc.label,
+            path: doc.url
+        }));
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
         await sendEmailForCompany({
@@ -341,6 +504,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             to: employee.email,
             subject: `Action Required: Complete Your Pre-Onboarding – ${employee.tempEmployeeId}`,
             html: emailHtml,
+            subject: resolvedSubject,
+            text: emailText,
+            attachments,
             ...branding
         });
 
@@ -349,7 +515,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             $push: {
                 auditLog: {
                     action: 'PRE_ONBOARD_EMAIL_SENT',
-                    details: `Email sent with ${(sections || []).length} section(s) and ${(documents || []).length} document(s)`
+                    details: `Email sent with ${(sections || []).length} section(s), ${(documents || []).length} document(s), template: ${selectedTemplate?.name || 'Default'}`
                 }
             }
         });
@@ -368,6 +534,96 @@ exports.sendPreOnboardingEmail = async (req, res) => {
     } catch (error) {
         console.error('Error sending pre-onboarding email:', error);
         res.status(500).json({ message: 'Failed to send email', error: error.message });
+    }
+};
+
+// --- Send custom file(s) to candidate ---
+exports.addCustomFiles = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const files = req.files || [];
+        if (files.length === 0) {
+            return res.status(400).json({ message: 'No files uploaded' });
+        }
+
+        const uploadedAt = new Date();
+        const createdDocuments = [];
+
+        files.forEach((file) => {
+            const label = getUniqueDocumentLabel(employee.documents, file.originalname || 'Manual Document');
+            const newDocument = {
+                type: 'custom_file',
+                label,
+                url: file.path,
+                publicId: extractPublicIdFromUrl(file.path) || '',
+                status: 'Pending',
+                uploadedAt
+            };
+
+            employee.documents.push(newDocument);
+            createdDocuments.push(newDocument);
+            employee.auditLog.push({
+                action: 'CUSTOM_FILE_ADDED',
+                details: `Custom file "${label}" uploaded by HR`
+            });
+        });
+
+        await employee.save();
+
+        res.status(201).json({
+            message: `${createdDocuments.length} file(s) added to the document list`,
+            employee,
+            createdDocuments: employee.documents
+                .filter((doc) => createdDocuments.some((createdDoc) => createdDoc.label === doc.label))
+                .map((doc) => doc.toObject ? doc.toObject() : doc)
+        });
+    } catch (error) {
+        console.error('Error adding custom file(s):', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.deleteCustomFile = async (req, res) => {
+    try {
+        const { id, docId } = req.params;
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const doc = employee.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Custom file not found' });
+        if (doc.type !== 'custom_file') {
+            return res.status(400).json({ message: 'Only HR shared custom files can be deleted here.' });
+        }
+
+        if (doc.publicId) {
+            try {
+                await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'raw' });
+            } catch (error) {
+                console.error('Failed to delete custom file from Cloudinary:', error.message);
+            }
+        }
+
+        employee.requestedDocuments = (employee.requestedDocuments || []).filter((item) => item.label !== doc.label);
+
+        if (employee.selectionDraft) {
+            employee.selectionDraft.documents = (employee.selectionDraft.documents || []).filter((label) => label !== doc.label);
+        }
+
+        employee.auditLog.push({
+            action: 'CUSTOM_FILE_DELETED',
+            details: `Custom file "${doc.label}" deleted by HR`
+        });
+
+        employee.documents.pull(docId);
+        await employee.save();
+
+        res.json({ message: 'Custom file deleted successfully', employee });
+    } catch (error) {
+        console.error('Error deleting custom file:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
 
@@ -424,9 +680,10 @@ exports.sendCustomFile = async (req, res) => {
 
         // Persist the HR-shared files so they appear in Documents & Requirements.
         files.forEach(f => {
+            const label = getUniqueDocumentLabel(employee.documents, f.originalname || 'Manual Document');
             employee.documents.push({
                 type: 'custom_file',
-                label: f.originalname || `Manual Document ${employee.documents.filter((doc) => doc.type === 'custom_file').length + 1}`,
+                label,
                 url: f.path,
                 publicId: extractPublicIdFromUrl(f.path) || '',
                 status: 'Mail Sent',
@@ -436,7 +693,7 @@ exports.sendCustomFile = async (req, res) => {
 
             employee.auditLog.push({
                 action: 'CUSTOM_FILE_SENT',
-                details: `File "${f.originalname}" sent to candidate's email by HR`
+                details: `File "${label}" sent to candidate's email by HR`
             });
         });
         await employee.save();
@@ -632,6 +889,9 @@ exports.updateEmployee = async (req, res) => {
             employee.selectionDraft = {
                 sections: normalizeLabels(selectionDraft.sections),
                 documents: normalizeLabels(selectionDraft.documents),
+                emailTemplateId: typeof selectionDraft.emailTemplateId === 'string' ? selectionDraft.emailTemplateId.trim() : '',
+                emailSubject: typeof selectionDraft.emailSubject === 'string' ? selectionDraft.emailSubject : '',
+                emailHtmlBody: typeof selectionDraft.emailHtmlBody === 'string' ? selectionDraft.emailHtmlBody : '',
                 updatedAt: new Date()
             };
 
@@ -1247,10 +1507,11 @@ exports.submitOnboarding = async (req, res) => {
         for (const doc of employee.documents) {
             const isMandatory = mandatoryDocTypes.includes(doc.type);
             const isRequested = reqDocLabels.includes(doc.label);
+            const isSharedCustomFile = doc.type === 'custom_file';
 
             if (isSelective) {
                 // Modified: Skip validation for 'passport' type even if requested (it is labeled as Optional)
-                if (isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
+                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
                     errors.push(`${doc.label} not uploaded`);
                 }
             } else if (isMandatory) {

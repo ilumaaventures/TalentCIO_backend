@@ -69,6 +69,8 @@ router.get('/bootstrap', protect, requireOnboarding, getOnboardingBootstrap);
 router.get('/employees', protect, requireOnboarding, onboardingController.getOnboardingList);
 router.get('/employees/:id', protect, requireOnboarding, onboardingController.getOnboardingEmployee);
 router.patch('/employees/:id', protect, requireOnboarding, onboardingController.updateEmployee);
+router.post('/employees/:id/custom-files', protect, requireOnboarding, handleCustomFileUpload, onboardingController.addCustomFiles);
+router.delete('/employees/:id/custom-files/:docId', protect, requireOnboarding, onboardingController.deleteCustomFile);
 router.post('/employees/:id/regenerate-credentials', protect, requireOnboarding, onboardingController.regenerateCredentials);
 router.post('/employees/:id/send-onboarding-email', protect, requireOnboarding, onboardingController.sendPreOnboardingEmail);
 router.post('/employees/:id/send-custom-file', protect, requireOnboarding, handleCustomFileUpload, onboardingController.sendCustomFile);

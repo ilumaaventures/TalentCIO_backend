@@ -2,7 +2,11 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const Company = require('../models/Company');
 const { decrypt } = require('../utils/encryption');
-const { sendEmail, wrapEmailHtmlWithBranding } = require('./emailService');
+const {
+    getCompanyBranding,
+    sendEmail,
+    wrapEmailHtmlWithBranding
+} = require('./emailService');
 
 const EMAIL_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
 const PLATFORM_EMAIL_ACCOUNT_ID = 'platform';
@@ -244,7 +248,8 @@ const sendViaBrevoApi = async ({
     fromName,
     fromAddress,
     brevoApiKey,
-    attachments = []
+    attachments = [],
+    replyTo
 }) => {
     const payload = {
         sender: { name: fromName, email: fromAddress },
@@ -253,6 +258,10 @@ const sendViaBrevoApi = async ({
         htmlContent,
         textContent
     };
+
+    if (replyTo) {
+        payload.replyTo = { email: replyTo };
+    }
 
     const formattedAttachments = mapBrevoAttachments(attachments);
     if (formattedAttachments.length > 0) {
@@ -283,7 +292,8 @@ const sendViaSmtp = async ({
     fromName,
     fromAddress,
     smtpConfig,
-    attachments = []
+    attachments = [],
+    replyTo
 }) => {
     const transporter = getCompanyTransporter({ smtp: smtpConfig });
     const info = await transporter.sendMail({
@@ -292,7 +302,8 @@ const sendViaSmtp = async ({
         subject,
         html,
         text,
-        attachments
+        attachments,
+        ...(replyTo ? { replyTo } : {})
     });
 
     return info.messageId || null;
@@ -309,13 +320,25 @@ const sendEmailForCompany = async ({
     brandEmail = true,
     logoUrl,
     logoLink,
-    logoAlt
+    logoAlt,
+    replyTo
 }) => {
     const settings = await getCompanyEmailSettings(companyId);
     const selection = pickEmailAccount(settings, emailAccountId);
+    const companyBranding = companyId && brandEmail
+        ? await getCompanyBranding(companyId)
+        : {};
+    const resolvedBranding = { ...companyBranding };
+
+    if (logoUrl !== undefined) resolvedBranding.logoUrl = logoUrl;
+    if (logoLink !== undefined) resolvedBranding.logoLink = logoLink;
+    if (logoAlt !== undefined) resolvedBranding.logoAlt = logoAlt;
+    if (replyTo !== undefined) resolvedBranding.replyTo = replyTo;
+
     const brandedHtml = brandEmail
-        ? wrapEmailHtmlWithBranding(html, { logoUrl, logoLink, logoAlt })
+        ? wrapEmailHtmlWithBranding(html, resolvedBranding)
         : html;
+    const resolvedReplyTo = resolvedBranding.replyTo || undefined;
 
     if (selection.mode === 'missing') {
         console.error(`[EMAIL] Selected account ${selection.accountId} not found for company ${companyId}`);
@@ -334,10 +357,11 @@ const sendEmailForCompany = async ({
                 subject,
                 htmlContent: brandedHtml,
                 textContent: text,
-                fromName: selection.account.fromName,
+                fromName: selection.account.fromName || companyBranding.displayName || settings?.companyName || 'TalentCIO',
                 fromAddress: selection.account.fromAddress,
                 brevoApiKey: selection.account.brevoApiKey,
-                attachments
+                attachments,
+                replyTo: resolvedReplyTo
             });
             console.log(`[EMAIL:brevo-company] Success: ${messageId || 'ok'} -> ${to}`);
             return true;
@@ -357,10 +381,11 @@ const sendEmailForCompany = async ({
                 subject,
                 html: brandedHtml,
                 text,
-                fromName: selection.account.fromName,
+                fromName: selection.account.fromName || companyBranding.displayName || settings?.companyName || 'TalentCIO',
                 fromAddress: selection.account.fromAddress,
                 smtpConfig: selection.account.smtp,
-                attachments
+                attachments,
+                replyTo: resolvedReplyTo
             });
             console.log(`[EMAIL:smtp-company] Success: ${messageId || 'ok'} -> ${to}`);
             return true;
@@ -371,12 +396,14 @@ const sendEmailForCompany = async ({
     }
 
     return sendEmail({
+        companyId,
         to,
         subject,
         html: brandedHtml,
         text,
         attachments,
-        brandEmail: false
+        brandEmail: false,
+        replyTo: resolvedReplyTo
     });
 };
 

@@ -201,23 +201,71 @@ const buildCandidateFilterQuery = (filters = {}) => {
     return query;
 };
 
-const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyName, extras = {}) => ({
-    candidateName: candidate.candidateName || '',
-    email: candidate.email || '',
-    mobile: candidate.mobile || '',
-    jobTitle: hiringRequest?.roleDetails?.title || '',
-    client: hiringRequest?.client || '',
-    department: hiringRequest?.roleDetails?.department || '',
-    recruiterName: recruiterUser
-        ? `${recruiterUser.firstName || ''} ${recruiterUser.lastName || ''}`.trim()
-        : (candidate.profilePulledBy || ''),
-    companyName: companyName || '',
-    requestId: hiringRequest?.requestId || '',
-    currentStatus: candidate.status || '',
-    interviewDate: extras.interviewDate || '',
-    interviewLink: extras.interviewLink || '',
-    customNote: extras.customNote || ''
-});
+const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyName, extras = {}) => {
+    const fullName = candidate.candidateName || '';
+    const [firstName = '', ...lastNameParts] = fullName.trim().split(/\s+/).filter(Boolean);
+    const lastName = lastNameParts.join(' ');
+
+    return {
+        candidateName: fullName,
+        firstName,
+        lastName,
+        fullName,
+        email: candidate.email || '',
+        workEmail: candidate.email || '',
+        mobile: candidate.mobile || '',
+        phoneNumber: candidate.mobile || '',
+        jobTitle: hiringRequest?.roleDetails?.title || '',
+        designation: hiringRequest?.roleDetails?.title || '',
+        client: hiringRequest?.client || '',
+        department: hiringRequest?.roleDetails?.department || '',
+        location: hiringRequest?.location || '',
+        managerName: '',
+        managerEmail: '',
+        recruiterName: recruiterUser
+            ? `${recruiterUser.firstName || ''} ${recruiterUser.lastName || ''}`.trim()
+            : (candidate.profilePulledBy || ''),
+        companyName: companyName || '',
+        requestId: hiringRequest?.requestId || '',
+        currentStatus: candidate.status || '',
+        interviewDate: extras.interviewDate || '',
+        interviewLink: extras.interviewLink || '',
+        customNote: extras.customNote || ''
+    };
+};
+
+const applyDateRangeFilterToCandidateQuery = (query, rawDateField, rawStartDate, rawEndDate) => {
+    const allowedDateFields = new Set(['createdAt', 'updatedAt']);
+    const dateField = allowedDateFields.has(String(rawDateField || '')) ? String(rawDateField) : '';
+
+    if (!dateField) {
+        return query;
+    }
+
+    const dateFilter = {};
+
+    if (rawStartDate) {
+        const startDate = new Date(rawStartDate);
+        if (!Number.isNaN(startDate.getTime())) {
+            startDate.setHours(0, 0, 0, 0);
+            dateFilter.$gte = startDate;
+        }
+    }
+
+    if (rawEndDate) {
+        const endDate = new Date(rawEndDate);
+        if (!Number.isNaN(endDate.getTime())) {
+            endDate.setHours(23, 59, 59, 999);
+            dateFilter.$lte = endDate;
+        }
+    }
+
+    if (Object.keys(dateFilter).length > 0) {
+        query[dateField] = dateFilter;
+    }
+
+    return query;
+};
 
 const createTransferredCandidateClone = async ({ candidate, targetHiringRequestId, performedBy, resetRemark }) => {
     const newCandidateData = candidate.toObject ? candidate.toObject() : { ...candidate };
@@ -324,6 +372,7 @@ const resolveMassMailTemplate = async ({ companyId, templateId, customSubject, c
         const template = await EmailTemplate.findOne({
             _id: templateId,
             companyId,
+            $or: [{ scope: 'ta' }, { scope: { $exists: false } }],
             isActive: true
         }).lean();
 
@@ -456,9 +505,7 @@ const sendMassMailForHiringRequest = async ({
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,
-            text: resolvedText,
-            logoUrl: company?.settings?.logo || undefined,
-            logoAlt: company?.name || 'TalentCIO'
+            text: resolvedText
         });
 
         if (delivered) {
@@ -1300,6 +1347,7 @@ exports.toggleJobVisibility = async (req, res) => {
 exports.getPreviousCandidates = async (req, res) => {
     try {
         const { id } = req.params;
+        const { dateField, startDate, endDate } = req.query;
         const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId })
             .select('previousRequestId createdBy ownership approvalChain assignedUsers');
         if (!currentReq) {
@@ -1331,9 +1379,13 @@ exports.getPreviousCandidates = async (req, res) => {
         // Fetch candidates for each requisition and group them
         const groups = await Promise.all(
             legacyRequisitions.map(async (legacyRequisition) => {
-                const candidates = await Candidate.find(await buildAccessibleCandidateQuery(req.companyId, req.user, {
+                const candidateQuery = await buildAccessibleCandidateQuery(req.companyId, req.user, {
                     hiringRequestId: legacyRequisition._id
-                }, { capability: TA_CAPABILITIES.VIEW })).lean();
+                }, { capability: TA_CAPABILITIES.VIEW });
+
+                applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+                const candidates = await Candidate.find(candidateQuery).lean();
                 return {
                     requisition: {
                         _id: legacyRequisition._id,

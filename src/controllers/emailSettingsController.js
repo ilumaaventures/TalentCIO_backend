@@ -368,9 +368,7 @@ exports.sendTestEmail = async (req, res) => {
             subject: `[Test] Email Configuration - ${company.name}`,
             html,
             text: `Test email from ${company.name}. Your custom email sender is working correctly.`,
-            brandEmail: true,
-            logoUrl: company?.settings?.logo || undefined,
-            logoAlt: company?.name || 'TalentCIO'
+            brandEmail: true
         });
 
         if (!sent) {

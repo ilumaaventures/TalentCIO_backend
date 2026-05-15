@@ -8,6 +8,10 @@ const router = express.Router();
 
 router.use(protect);
 router.use(requireModule('talentAcquisition'));
+router.use((req, res, next) => {
+    req.templateScope = 'ta';
+    next();
+});
 
 router.post('/', authorizeAny(['ta.config.manage', 'ta.email_template.manage', 'ta.edit']), controller.createEmailTemplate);
 router.get('/', controller.listEmailTemplates);
