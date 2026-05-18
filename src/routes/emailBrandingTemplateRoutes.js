@@ -8,6 +8,11 @@ const router = express.Router();
 const canViewTemplates = authorizeAny([
     'settings.email.view',
     'settings.email.manage',
+    'onboarding.view',
+    'onboarding.document.review',
+    'onboarding.document.request',
+    'onboarding.credential.manage',
+    'onboarding.complete',
     'onboarding.manage'
 ]);
 

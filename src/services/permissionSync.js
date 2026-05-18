@@ -7,7 +7,11 @@ const LEGACY_PERMISSION_REPLACEMENTS = {
     'ta.application.update': 'ta.candidate.manage.assigned',
     'ta.application.delete': 'ta.candidate.manage.assigned',
     'ta.application.manage.assigned': 'ta.candidate.manage.assigned',
-    'ta.application.manage.all': 'ta.candidate.manage.all'
+    'ta.application.manage.all': 'ta.candidate.manage.all',
+    'ta.candidate.view.client_name': 'ta.client.confidential.view',
+    'ta.candidate.view.pii': 'ta.candidate.sensitive.view',
+    'ta.candidate.evaluate_round': 'ta.interview.evaluate',
+    'ta.config.manage': 'ta.config.edit'
 };
 
 const LEGACY_REMOVED_PERMISSION_KEYS = [

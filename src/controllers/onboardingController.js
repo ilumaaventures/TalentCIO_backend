@@ -30,7 +30,10 @@ const {
 const syncTADecision = async (employee, decision) => {
     if (!employee.sourcedFromTA || !employee.candidateId) return;
     try {
-        await Candidate.findByIdAndUpdate(employee.candidateId, { phase3Decision: decision });
+        await Candidate.findOneAndUpdate(
+            { _id: employee.candidateId, companyId: employee.companyId },
+            { phase3Decision: decision }
+        );
     } catch (err) {
         console.error('[syncTADecision] Failed to sync TA decision:', err.message);
     }
@@ -2593,8 +2596,12 @@ exports.requestCredentialRegeneration = async (req, res) => {
             return res.status(400).json({ message: 'Employee ID is required' });
         }
 
-        // Allow looking up without auth since they are locked out
-        const employee = await OnboardingEmployee.findOne({ tempEmployeeId });
+        if (!req.companyId) {
+            return res.status(400).json({ message: 'Workspace context is required' });
+        }
+
+        // Allow looking up without auth since they are locked out, but never across tenants
+        const employee = await OnboardingEmployee.findOne({ tempEmployeeId, companyId: req.companyId });
         if (!employee) {
             return res.status(404).json({ message: 'Employee not found' });
         }

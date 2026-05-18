@@ -29,6 +29,11 @@ router.get(
     authorizeAny([
         'settings.email.view',
         'settings.email.manage',
+        'onboarding.view',
+        'onboarding.document.review',
+        'onboarding.document.request',
+        'onboarding.credential.manage',
+        'onboarding.complete',
         'onboarding.manage',
         'ta.mass_mail',
         'ta.edit',

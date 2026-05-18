@@ -8,6 +8,11 @@ const { authorizeAny } = require('../middlewares/authorize');
 const { upload } = require('../config/cloudinary');
 const multer = require('multer');
 const memoryUpload = multer({ storage: multer.memoryStorage() });
+const candidateEditPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit'];
+const candidateDecisionPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision'];
+const candidateTransferPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer'];
+const interviewSchedulingPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit'];
+const interviewEvaluationPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.interview.evaluate', 'ta.super_approve'];
 
 router.use(protect);
 router.use(requireModule('talentAcquisition'));
@@ -30,30 +35,30 @@ router.post('/', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.cand
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
 router.get('/candidate/:id', protect, candidateController.getCandidateById);
-router.put('/:id', protect, candidateController.updateCandidate);
-router.delete('/:id', protect, candidateController.deleteCandidate);
+router.put('/:id', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidate);
+router.delete('/:id', protect, authorizeAny([...candidateEditPermissions, 'ta.delete']), candidateController.deleteCandidate);
 
 // Status update
-router.patch('/:id/status', protect, candidateController.updateCandidateStatus);
-router.patch('/:id/remark', protect, candidateController.updateCandidateRemark);
-router.patch('/:id/internal-remark', protect, candidateController.updateCandidateInternalRemark);
-router.patch('/:id/decision', protect, candidateController.updateCandidateDecision);
-router.patch('/:id/phase2-decision', protect, candidateController.updatePhase2Decision);
-router.patch('/:id/phase3-decision', protect, candidateController.updatePhase3Decision);
-router.post('/:id/transfer-to-onboarding', protect, candidateController.transferToOnboarding);
+router.patch('/:id/status', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidateStatus);
+router.patch('/:id/remark', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidateRemark);
+router.patch('/:id/internal-remark', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidateInternalRemark);
+router.patch('/:id/decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updateCandidateDecision);
+router.patch('/:id/phase2-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updatePhase2Decision);
+router.patch('/:id/phase3-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updatePhase3Decision);
+router.post('/:id/transfer-to-onboarding', protect, authorizeAny(candidateTransferPermissions), candidateController.transferToOnboarding);
 
 // Current User's Scheduled Interviews
-router.get('/my/interviews', protect, candidateController.getMyScheduledInterviews);
+router.get('/my/interviews', protect, authorizeAny(['ta.interview.evaluate', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all']), candidateController.getMyScheduledInterviews);
 
 // Interview Rounds
-router.post('/:id/rounds', protect, candidateController.addInterviewRound);
-router.put('/:id/rounds/:roundId', protect, candidateController.updateInterviewRound);
-router.delete('/:id/rounds/:roundId', protect, candidateController.deleteInterviewRound);
-router.patch('/:id/rounds/:roundId/evaluate', protect, candidateController.evaluateInterviewRound);
+router.post('/:id/rounds', protect, authorizeAny(interviewSchedulingPermissions), candidateController.addInterviewRound);
+router.put('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.updateInterviewRound);
+router.delete('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.deleteInterviewRound);
+router.patch('/:id/rounds/:roundId/evaluate', protect, authorizeAny(interviewEvaluationPermissions), candidateController.evaluateInterviewRound);
 
 // Skill Ratings
-router.put('/:id/skill-ratings', protect, candidateController.updateSkillRatings);
-router.post('/:id/skill-ratings', protect, candidateController.addSkillRating);
-router.delete('/:id/skill-ratings/:skillId', protect, candidateController.deleteSkillRating);
+router.put('/:id/skill-ratings', protect, authorizeAny(candidateEditPermissions), candidateController.updateSkillRatings);
+router.post('/:id/skill-ratings', protect, authorizeAny(candidateEditPermissions), candidateController.addSkillRating);
+router.delete('/:id/skill-ratings/:skillId', protect, authorizeAny(candidateEditPermissions), candidateController.deleteSkillRating);
 
 module.exports = router;

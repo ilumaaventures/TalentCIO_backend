@@ -1,6 +1,7 @@
 const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 const User = require('../models/User');
+const { validateRoleInheritanceGraph } = require('../utils/permissionResolver');
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
 
@@ -16,7 +17,9 @@ const isVisiblePermission = (permission) =>
 const getRoles = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
-        const roles = await Role.find({ companyId: req.companyId }).populate('permissions');
+        const roles = await Role.find({ companyId: req.companyId })
+            .populate('permissions')
+            .populate('inheritsFrom', 'name isSystem');
         const sanitizedRoles = roles.map(role => ({
             ...role.toObject(),
             permissions: (role.permissions || []).filter(isVisiblePermission)
@@ -32,13 +35,19 @@ const getRoles = async (req, res) => {
 // @route   POST /api/roles
 // @access  Private (Admin)
 const createRole = async (req, res) => {
-    const { name, permissions } = req.body; // permissions = array of permission IDs
+    const { name, permissions, inheritsFrom = [] } = req.body; // permissions = array of permission IDs
 
     try {
+        const validatedParentRoleIds = await validateRoleInheritanceGraph({
+            inheritsFrom,
+            companyId: req.companyId
+        });
+
         const role = await Role.create({
             companyId: req.companyId,
             name,
             permissions,
+            inheritsFrom: validatedParentRoleIds,
             isSystem: false
         });
         res.status(201).json(role);
@@ -65,6 +74,13 @@ const updateRole = async (req, res) => {
 
         role.name = req.body.name || role.name;
         role.permissions = req.body.permissions || role.permissions;
+        if (req.body.inheritsFrom !== undefined) {
+            role.inheritsFrom = await validateRoleInheritanceGraph({
+                roleId: role._id,
+                inheritsFrom: req.body.inheritsFrom,
+                companyId: req.companyId
+            });
+        }
 
         const updatedRole = await role.save();
 
@@ -75,7 +91,10 @@ const updateRole = async (req, res) => {
         );
 
         // Return populated role for the frontend
-        const populated = await Role.findById(updatedRole._id).populate('permissions').lean();
+        const populated = await Role.findById(updatedRole._id)
+            .populate('permissions')
+            .populate('inheritsFrom', 'name isSystem')
+            .lean();
         res.json(populated);
     } catch (error) {
         console.error('UPDATE ROLE ERROR:', error);
@@ -106,6 +125,7 @@ const getPermissions = async (req, res) => {
             else if (curr.key.startsWith('timesheet.')) groupName = 'TIMESHEETS';
             else if (curr.key.startsWith('attendance.')) groupName = 'ATTENDANCE';
             else if (curr.key.startsWith('ta.')) groupName = 'TALENT ACQUISITION';
+            else if (curr.key.startsWith('onboarding.')) groupName = 'ONBOARDING';
             else if (curr.key.startsWith('helpdesk.')) groupName = 'HELP DESK';
             else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
             else if (curr.key.startsWith('dossier.')) groupName = 'EMPLOYEE DOSSIER';

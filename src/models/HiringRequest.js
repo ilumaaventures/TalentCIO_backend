@@ -220,8 +220,19 @@ HiringRequestSchema.plugin(softDeletePlugin);
 // Audit Logs for this specific request
 const HRRAuditLogSchema = new mongoose.Schema({
     hiringRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringRequest' },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', index: true },
     action: String,
     performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    resourceType: { type: String, default: 'HiringRequest' },
+    resourceId: { type: mongoose.Schema.Types.ObjectId },
+    candidateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate' },
+    permissionKey: { type: String, default: '' },
+    scope: { type: String, default: 'tenant' },
+    before: { type: mongoose.Schema.Types.Mixed, default: null },
+    after: { type: mongoose.Schema.Types.Mixed, default: null },
+    ipAddress: { type: String, default: '' },
+    correlationId: { type: String, default: '' },
+    delegation: { type: mongoose.Schema.Types.Mixed, default: null },
     details: Object,
     timestamp: { type: Date, default: Date.now }
 });

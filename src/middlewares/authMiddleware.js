@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { resolveRolesWithInheritance } = require('../utils/permissionResolver');
 //check
 const AUTH_CACHE_TTL_MS = 5000;
 const authUserCache = new Map();
@@ -10,7 +11,9 @@ const cloneCachedUser = (user) => ({
     ...user,
     roles: Array.isArray(user.roles) ? user.roles.map(role => ({
         ...role,
-        permissions: Array.isArray(role.permissions) ? role.permissions.map(permission => ({ ...permission })) : []
+        permissions: Array.isArray(role.permissions) ? role.permissions.map(permission => ({ ...permission })) : [],
+        directPermissions: Array.isArray(role.directPermissions) ? role.directPermissions.map(permission => ({ ...permission })) : [],
+        inheritsFrom: Array.isArray(role.inheritsFrom) ? role.inheritsFrom.map(parentRole => ({ ...parentRole })) : []
     })) : [],
     reportingManagers: Array.isArray(user.reportingManagers)
         ? user.reportingManagers.map(manager => ({ ...manager }))
@@ -42,27 +45,19 @@ const protect = async (req, res, next) => {
                 // Keep auth hydration minimal because every protected API pays this cost.
                 req.user = await User.findById(decoded.id)
                     .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients')
-                    .populate({
-                        path: 'roles',
-                        select: 'name isSystem permissions',
-                        populate: {
-                            path: 'permissions',
-                            select: 'key'
-                        }
-                    })
                     .lean();
 
                 if (!req.user) {
                     return res.status(401).json({ message: 'Not authorized, user not found' });
                 }
 
-                if (req.user && req.user.roles) {
-                    req.user.permissions = [...new Set(
-                        req.user.roles.flatMap(role => 
-                            (role.permissions || []).map(p => typeof p === 'object' ? p.key : p)
-                        )
-                    )];
-                }
+                const resolvedRoleContext = await resolveRolesWithInheritance({
+                    roleIds: Array.isArray(req.user.roles) ? req.user.roles : [],
+                    companyId: req.user.companyId || req.companyId
+                });
+
+                req.user.roles = resolvedRoleContext.roles;
+                req.user.permissions = resolvedRoleContext.permissionKeys;
 
                 // Ensure roles is always an array
                 if (req.user && !req.user.roles) {

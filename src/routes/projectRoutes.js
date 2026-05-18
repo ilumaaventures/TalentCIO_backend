@@ -2,7 +2,7 @@ const express = require('express');
 const { requireModule } = require('../middlewares/moduleGuard');
 const router = express.Router();
 const { protect } = require('../middlewares/authMiddleware');
-const { authorize } = require('../middlewares/authorize');
+const { authorize, authorizeAny } = require('../middlewares/authorize');
 const {
     getBusinessUnits, createBusinessUnit, updateBusinessUnit,
     getClients, createClient, updateClient,
@@ -25,7 +25,7 @@ router.post('/business-units', authorize('business_unit.create'), requireModule(
 router.put('/business-units/:id', authorize('business_unit.update'), requireModule('projectManagement'), updateBusinessUnit);
 
 // Clients
-router.get('/clients', requireModule(['projectManagement', 'timesheet', 'attendance']), getClients);
+router.get('/clients', authorizeAny(['client.read', 'client.create', 'client.update']), requireModule(['projectManagement', 'timesheet', 'attendance']), getClients);
 router.post('/clients', authorize('client.create'), requireModule('projectManagement'), createClient);
 router.put('/clients/:id', authorize('client.update'), requireModule('projectManagement'), updateClient);
 

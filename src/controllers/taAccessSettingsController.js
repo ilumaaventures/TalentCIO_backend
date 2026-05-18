@@ -17,15 +17,21 @@ const hasAnyPermission = (user, permissionKeys = []) => {
     return permissionKeys.some((key) => userPermissions.includes(key));
 };
 
+const canViewTAAccess = (user) => {
+    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
+    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
+        || hasAnyPermission(user, ['*', 'ta.config.view', 'ta.config.edit']);
+};
+
 const canManageTAAccess = (user) => {
     const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
     return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
-        || hasAnyPermission(user, ['*', 'ta.config.manage', 'ta.edit', 'role.update', 'role.create']);
+        || hasAnyPermission(user, ['*', 'ta.config.edit']);
 };
 
-const getTAPermissions = async () => (
+const getTAAccessPermissions = async () => (
     Permission.find({
-        key: { $regex: /^ta\./i },
+        key: { $regex: /^(ta\.|onboarding\.)/i },
         isDeprecated: { $ne: true }
     })
         .select('key module description isSystem')
@@ -90,12 +96,12 @@ const buildRequestResponse = (request, candidateSummary = {}, roundAssigneeIds =
 
 exports.getOverview = async (req, res) => {
     try {
-        if (!canManageTAAccess(req.user)) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to manage TA access settings' });
+        if (!canViewTAAccess(req.user)) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view TA or onboarding access settings' });
         }
 
         const [taPermissions, roles, users, requests, candidates] = await Promise.all([
-            getTAPermissions(),
+            getTAAccessPermissions(),
             Role.find({ companyId: req.companyId, isActive: true })
                 .populate('permissions', 'key description isDeprecated')
                 .sort({ name: 1 })
@@ -238,7 +244,7 @@ exports.getOverview = async (req, res) => {
 exports.updateRolePermissions = async (req, res) => {
     try {
         if (!canManageTAAccess(req.user)) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA role access' });
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA or onboarding role access' });
         }
 
         const role = await Role.findOne({ _id: req.params.roleId, companyId: req.companyId }).populate('permissions', 'key description');
@@ -254,12 +260,12 @@ exports.updateRolePermissions = async (req, res) => {
             ? req.body.permissionIds.map((permissionId) => String(permissionId)).filter(Boolean)
             : [];
 
-        const taPermissions = await getTAPermissions();
+        const taPermissions = await getTAAccessPermissions();
         const taPermissionIds = new Set(taPermissions.map((permission) => String(permission._id)));
 
         const invalidSelection = selectedPermissionIds.some((permissionId) => !taPermissionIds.has(permissionId));
         if (invalidSelection) {
-            return res.status(400).json({ message: 'One or more selected permissions are not valid TA permissions' });
+            return res.status(400).json({ message: 'One or more selected permissions are not valid TA or onboarding permissions' });
         }
 
         const existingPermissionIds = Array.isArray(role.permissions)
@@ -278,7 +284,7 @@ exports.updateRolePermissions = async (req, res) => {
         const updatedRole = await Role.findById(role._id).populate('permissions', 'key description isDeprecated').lean();
 
         res.status(200).json({
-            message: 'TA role permissions updated successfully',
+            message: 'TA and onboarding role permissions updated successfully',
             role: buildRoleResponse(updatedRole, taPermissionIds)
         });
     } catch (error) {

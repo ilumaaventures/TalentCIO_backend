@@ -21,6 +21,7 @@ const {
     isInterviewerOnlyView,
     sanitizeCandidateForInterviewer
 } = require('../utils/candidateAccess');
+const { serializeCandidateForViewer } = require('../utils/taVisibility');
 
 const LEGACY_STATUS_VALUES = new Set([
     'Interested',
@@ -304,7 +305,7 @@ exports.uploadResume = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
-        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        const canManageHiringRequest = await canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT, req.companyId);
         if (!canManageHiringRequest) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to upload candidates for this requisition' });
         }
@@ -427,7 +428,7 @@ exports.createCandidate = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
-        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        const canManageHiringRequest = await canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT, req.companyId);
         if (!canManageHiringRequest) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
         }
@@ -479,9 +480,6 @@ exports.createCandidate = async (req, res) => {
             compareAndUpdate('rate', rate, 'Rate');
             compareAndUpdate('currentCTC', currentCTC, 'Current CTC');
             compareAndUpdate('expectedCTC', expectedCTC, 'Expected CTC');
-            if (req.body.profileShared !== undefined) {
-                compareAndUpdate('profileShared', Boolean(profileShared), 'Profile Shared');
-            }
             compareAndUpdate('inHandOffer', normalizedInHandOffer, 'Offer in Hand');
             compareAndUpdate('offerCompany', offerCompany, 'Offer Company');
             compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
@@ -508,17 +506,7 @@ exports.createCandidate = async (req, res) => {
             } else {
                 compareAndUpdate('status', normalizedLegacyStatus, 'Status');
             }
-            compareAndUpdate('decision', req.body.decision, 'Decision');
-            compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
-            compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
             compareAndUpdate('remark', remark, 'Remark');
-
-            if (
-                (phase2Decision && phase2Decision !== 'None') ||
-                (typeof phase2InterviewerFeedback === 'string' && phase2InterviewerFeedback.trim())
-            ) {
-                compareAndUpdate('profileShared', true, 'Profile Shared');
-            }
 
             if (hasRealResume(resumeUrl) && !hasRealResume(candidate.resumeUrl)) {
                 candidate.resumeUrl = resumeUrl;
@@ -685,7 +673,7 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
@@ -710,10 +698,15 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             .lean();
 
         const enrichedCandidates = await enrichCandidatesWithPublicProfiles(candidates, req.companyId);
+        const serializedCandidates = enrichedCandidates.map((candidate) => serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest
+        }));
 
         res.status(200).json({
-            count: enrichedCandidates.length,
-            candidates: enrichedCandidates
+            count: serializedCandidates.length,
+            candidates: serializedCandidates
         });
 
     } catch (error) {
@@ -740,7 +733,7 @@ exports.getShortlistedCandidates = async (req, res) => {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
@@ -766,11 +759,17 @@ exports.getShortlistedCandidates = async (req, res) => {
             .limit(limit)
             .lean();
 
+        const serializedCandidates = candidates.map((candidate) => serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest
+        }));
+
         res.status(200).json({
             count: totalOptions,
             totalPages: Math.ceil(totalOptions / limit),
             currentPage: page,
-            candidates
+            candidates: serializedCandidates
         });
 
     } catch (error) {
@@ -845,7 +844,7 @@ exports.getCandidateById = async (req, res) => {
 
         let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             const interviewerOnly = await isInterviewerOnlyView({
@@ -862,7 +861,12 @@ exports.getCandidateById = async (req, res) => {
             candidate = sanitizeCandidateForInterviewer(candidate);
         }
 
-        res.status(200).json(candidate);
+        res.status(200).json(serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest,
+            interviewerOnly: !hasHiringRequestAccess
+        }));
 
     } catch (error) {
         console.error('Error fetching candidate:', error);
@@ -910,7 +914,7 @@ exports.updateCandidate = async (req, res) => {
             'profilePulledBy', 'calledBy', 'rate', 'currentCTC', 'expectedCTC', 'inHandOffer', 'offerCompany', 'offerCTC', 'offerJoiningDate',
             'preference', 'totalExperience', 'qualification', 'currentCompany', 'pastExperience',
             'currentLocation', 'preferredLocation', 'tatToJoin', 'noticePeriod',
-            'status', 'remark', 'decision', 'profileShared', 'phase2Decision', 'phase2InterviewerFeedback', 'phase3Decision', 'lastWorkingDay', 'resumeUrl', 'resumePublicId',
+            'status', 'remark', 'lastWorkingDay',
             'mustHaveSkills', 'niceToHaveSkills'
         ];
 
@@ -924,21 +928,10 @@ exports.updateCandidate = async (req, res) => {
                 : '';
         }
 
-        if (updateData.profileShared !== undefined) {
-            updateData.profileShared = Boolean(updateData.profileShared);
-        }
-
         updateData.inHandOffer = Boolean(updateData.inHandOffer) ||
             hasMeaningfulOfferValue(updateData.offerCompany) ||
             hasMeaningfulOfferValue(updateData.offerCTC) ||
             hasMeaningfulOfferValue(updateData.offerJoiningDate);
-
-        if (
-            (updateData.phase2Decision && updateData.phase2Decision !== 'None') ||
-            (typeof updateData.phase2InterviewerFeedback === 'string' && updateData.phase2InterviewerFeedback.trim())
-        ) {
-            updateData.profileShared = true;
-        }
 
         if (updateData.mustHaveSkills !== undefined) {
             updateData.mustHaveSkills = normalizeSkillList(updateData.mustHaveSkills);

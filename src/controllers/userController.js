@@ -374,7 +374,7 @@ const getMyself = async (req, res) => {
             directReports: subordinates,
             directReportsCount,
             isTAParticipant: taCount > 0 || isInterviewer,
-            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('*'),
             company: company  // Always includes enabledModules
         });
     } catch (error) {

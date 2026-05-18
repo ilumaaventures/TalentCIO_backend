@@ -230,7 +230,7 @@ const loginUser = async (req, res) => {
             hasAllPermissions: hasAllPermissions,
             directReportsCount: directReportsCount,
             isTAParticipant: taCount > 0 || isInterviewer,
-            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('*'),
             company: company, // Full configuration for the frontend
             token: generateToken(user._id, user.tokenVersion)
         });

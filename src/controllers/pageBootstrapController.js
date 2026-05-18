@@ -793,6 +793,7 @@ exports.getRoleBootstrap = async (req, res) => {
                 else if (curr.key.startsWith('timesheet.')) groupName = 'TIMESHEETS';
                 else if (curr.key.startsWith('attendance.')) groupName = 'ATTENDANCE';
                 else if (curr.key.startsWith('ta.')) groupName = 'TALENT ACQUISITION';
+                else if (curr.key.startsWith('onboarding.')) groupName = 'ONBOARDING';
                 else if (curr.key.startsWith('helpdesk.')) groupName = 'HELP DESK';
                 else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
                 else if (curr.key.startsWith('dossier.')) groupName = 'EMPLOYEE DOSSIER';
