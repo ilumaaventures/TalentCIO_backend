@@ -266,7 +266,7 @@ const candidateSchema = new mongoose.Schema({
         },
         scheduledDate: Date,
         feedback: String,
-        rating: { // Numeric rating out of 10 (only for Passed rounds)
+        rating: { // Numeric rating out of 10 when evaluators provide one
             type: Number,
             min: 1,
             max: 10
@@ -303,6 +303,12 @@ const candidateSchema = new mongoose.Schema({
     phase2InterviewerFeedback: {
         type: String,
         trim: true
+    },
+
+    phase2InterviewStatus: {
+        type: String,
+        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'None', ''],
+        default: 'None'
     },
 
     // Phase 3 Offer & Onboarding Decision

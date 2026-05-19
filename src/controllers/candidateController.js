@@ -113,6 +113,27 @@ const applyDynamicImportedStatus = (candidate, hiringRequest, rawStatus) => {
     return true;
 };
 
+const normalizePhase2InterviewStatus = (rawStatus) => {
+    const normalized = String(rawStatus || '').trim().toLowerCase();
+    if (!normalized || normalized === 'none') {
+        return 'None';
+    }
+
+    if (normalized === 'scheduled') {
+        return 'Scheduled';
+    }
+
+    if (normalized === 'rejected') {
+        return 'Rejected';
+    }
+
+    if (normalized === 'shortlisted') {
+        return 'Shortlisted';
+    }
+
+    return null;
+};
+
 const toLegacySafeStatus = (rawStatus) => {
     const normalizedStatus = String(rawStatus || '').trim();
     return LEGACY_STATUS_VALUES.has(normalizedStatus) ? normalizedStatus : '';
@@ -391,6 +412,7 @@ exports.createCandidate = async (req, res) => {
             profileShared,
             phase2Decision,
             phase2InterviewerFeedback,
+            phase2InterviewStatus,
             inHandOffer,
             offerCompany,
             offerCTC,
@@ -418,10 +440,18 @@ exports.createCandidate = async (req, res) => {
         const normalizedReferralName = normalizedSource === 'Referral'
             ? String(referralName || '').trim()
             : '';
+        const normalizedPhase2InterviewStatus = phase2InterviewStatus === undefined
+            ? undefined
+            : normalizePhase2InterviewStatus(phase2InterviewStatus);
+        const shouldMarkProfileSharedForPhase2 = normalizedPhase2InterviewStatus && normalizedPhase2InterviewStatus !== 'None';
         const normalizedInHandOffer = Boolean(inHandOffer) ||
             hasMeaningfulOfferValue(offerCompany) ||
             hasMeaningfulOfferValue(offerCTC) ||
             hasMeaningfulOfferValue(offerJoiningDate);
+
+        if (phase2InterviewStatus !== undefined && normalizedPhase2InterviewStatus === null) {
+            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+        }
 
         // Verify hiring request exists
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
@@ -506,7 +536,20 @@ exports.createCandidate = async (req, res) => {
             } else {
                 compareAndUpdate('status', normalizedLegacyStatus, 'Status');
             }
+            compareAndUpdate('decision', req.body.decision, 'Decision');
+            compareAndUpdate('profileShared', profileShared, 'Profile Shared');
+            compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
             compareAndUpdate('remark', remark, 'Remark');
+            if (phase2InterviewerFeedback !== undefined) {
+                compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
+            }
+            if (normalizedPhase2InterviewStatus !== undefined) {
+                compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
+            }
+            if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
+                candidate.profileShared = true;
+                updatedFields.push('Profile Shared');
+            }
 
             if (hasRealResume(resumeUrl) && !hasRealResume(candidate.resumeUrl)) {
                 candidate.resumeUrl = resumeUrl;
@@ -595,9 +638,10 @@ exports.createCandidate = async (req, res) => {
             rate,
             currentCTC,
             expectedCTC,
-            profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()),
+            profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()) || Boolean(shouldMarkProfileSharedForPhase2),
             phase2Decision: phase2Decision || 'None',
             phase2InterviewerFeedback,
+            phase2InterviewStatus: normalizedPhase2InterviewStatus || 'None',
             inHandOffer: normalizedInHandOffer,
             offerCompany,
             offerCTC,
@@ -753,7 +797,7 @@ exports.getShortlistedCandidates = async (req, res) => {
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName') // only pull what is necessary
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
-            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings')
+            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings phase2Decision phase2InterviewerFeedback phase2InterviewStatus')
             .sort({ uploadedAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -915,7 +959,8 @@ exports.updateCandidate = async (req, res) => {
             'preference', 'totalExperience', 'qualification', 'currentCompany', 'pastExperience',
             'currentLocation', 'preferredLocation', 'tatToJoin', 'noticePeriod',
             'status', 'remark', 'lastWorkingDay',
-            'mustHaveSkills', 'niceToHaveSkills'
+            'mustHaveSkills', 'niceToHaveSkills',
+            'phase2InterviewerFeedback', 'phase2InterviewStatus'
         ];
 
         if (updateData.source !== undefined) {
@@ -941,11 +986,25 @@ exports.updateCandidate = async (req, res) => {
             updateData.niceToHaveSkills = normalizeSkillList(updateData.niceToHaveSkills);
         }
 
+        if (updateData.phase2InterviewStatus !== undefined) {
+            updateData.phase2InterviewStatus = normalizePhase2InterviewStatus(updateData.phase2InterviewStatus);
+            if (updateData.phase2InterviewStatus === null) {
+                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+            }
+        }
+
         allowedUpdates.forEach(field => {
             if (updateData[field] !== undefined) {
                 candidate[field] = updateData[field];
             }
         });
+
+        if (
+            (updateData.phase2InterviewStatus && updateData.phase2InterviewStatus !== 'None')
+            || Boolean(String(updateData.phase2InterviewerFeedback || '').trim())
+        ) {
+            candidate.profileShared = true;
+        }
 
         await candidate.save();
 
@@ -1165,6 +1224,11 @@ exports.updatePhase2Decision = async (req, res) => {
         candidate.phase2Decision = phase2Decision;
         if (phase2Decision === 'Shortlisted' || phase2Decision === 'Selected') {
             candidate.profileShared = true;
+            candidate.phase2InterviewStatus = 'Shortlisted';
+        } else if (phase2Decision === 'Rejected') {
+            candidate.phase2InterviewStatus = 'Rejected';
+        } else if (!phase2Decision || phase2Decision === 'None') {
+            candidate.phase2InterviewStatus = 'None';
         }
         await candidate.save();
 
@@ -1658,7 +1722,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
 exports.evaluateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 (for Passed)
+        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 when provided
 
         if (!['Passed', 'Failed'].includes(status)) {
             return res.status(400).json({ message: 'Status must be Passed or Failed' });
@@ -1705,14 +1769,14 @@ exports.evaluateInterviewRound = async (req, res) => {
         round.evaluatedBy = req.user._id;
         round.evaluatedAt = new Date();
 
-        // Save rating only when the round is Passed
-        if (status === 'Passed' && rating !== undefined && rating !== null && rating !== '') {
+        // Save rating whenever a valid score is provided, regardless of pass/fail.
+        if (rating !== undefined && rating !== null && rating !== '') {
             const parsedRating = parseInt(rating, 10);
             if (parsedRating >= 1 && parsedRating <= 10) {
                 round.rating = parsedRating;
             }
-        } else if (status === 'Failed') {
-            round.rating = undefined; // Clear rating if changed to Failed
+        } else {
+            round.rating = undefined;
         }
 
         // Save round-specific skill ratings and update global ones
