@@ -44,6 +44,7 @@ router.patch('/:id/remark', protect, authorizeAny(candidateEditPermissions), can
 router.patch('/:id/internal-remark', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidateInternalRemark);
 router.patch('/:id/decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updateCandidateDecision);
 router.patch('/:id/phase2-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updatePhase2Decision);
+router.patch('/:id/move-back-phase', protect, authorizeAny(candidateEditPermissions), candidateController.moveCandidateToPreviousPhase);
 router.patch('/:id/phase3-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updatePhase3Decision);
 router.post('/:id/transfer-to-onboarding', protect, authorizeAny(candidateTransferPermissions), candidateController.transferToOnboarding);
 

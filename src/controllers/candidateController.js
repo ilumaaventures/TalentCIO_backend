@@ -134,6 +134,18 @@ const normalizePhase2InterviewStatus = (rawStatus) => {
     return null;
 };
 
+const hasCandidateMovedToPhase2 = (candidate = {}) => {
+    const phase2Decision = String(candidate?.phase2Decision || '').trim();
+    const phase2InterviewStatus = String(candidate?.phase2InterviewStatus || '').trim();
+    const phase2InterviewerFeedback = String(candidate?.phase2InterviewerFeedback || '').trim();
+
+    return candidate?.profileShared === true
+        || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+        || Boolean(phase2Decision && phase2Decision !== 'None')
+        || Boolean(phase2InterviewStatus && phase2InterviewStatus !== 'None')
+        || Boolean(phase2InterviewerFeedback);
+};
+
 const toLegacySafeStatus = (rawStatus) => {
     const normalizedStatus = String(rawStatus || '').trim();
     return LEGACY_STATUS_VALUES.has(normalizedStatus) ? normalizedStatus : '';
@@ -490,6 +502,7 @@ exports.createCandidate = async (req, res) => {
 
             // Track status change for history
             const statusChanged = !isDynamicRequest && normalizedLegacyStatus && candidate.status !== normalizedLegacyStatus;
+            const phase1Locked = hasCandidateMovedToPhase2(candidate);
 
             const updatedFields = [];
             const compareAndUpdate = (field, newValue, label) => {
@@ -536,8 +549,12 @@ exports.createCandidate = async (req, res) => {
             } else {
                 compareAndUpdate('status', normalizedLegacyStatus, 'Status');
             }
-            compareAndUpdate('decision', req.body.decision, 'Decision');
-            compareAndUpdate('profileShared', profileShared, 'Profile Shared');
+            if (!phase1Locked) {
+                compareAndUpdate('decision', req.body.decision, 'Decision');
+            }
+            if (!phase1Locked || profileShared !== false) {
+                compareAndUpdate('profileShared', profileShared, 'Profile Shared');
+            }
             compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
             compareAndUpdate('remark', remark, 'Remark');
             if (phase2InterviewerFeedback !== undefined) {
@@ -999,6 +1016,16 @@ exports.updateCandidate = async (req, res) => {
             }
         });
 
+        if (updateData.profileShared !== undefined) {
+            if (Boolean(updateData.profileShared)) {
+                candidate.profileShared = true;
+            } else if (hasCandidateMovedToPhase2(candidate)) {
+                return res.status(400).json({ message: 'Phase 2 candidates cannot be removed from the next phase using this action' });
+            } else {
+                candidate.profileShared = false;
+            }
+        }
+
         if (
             (updateData.phase2InterviewStatus && updateData.phase2InterviewStatus !== 'None')
             || Boolean(String(updateData.phase2InterviewerFeedback || '').trim())
@@ -1180,6 +1207,10 @@ exports.updateCandidateDecision = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        if (hasCandidateMovedToPhase2(candidate)) {
+            return res.status(400).json({ message: 'Phase 1 decision cannot be changed after the candidate has moved to Phase 2' });
+        }
+
         candidate.decision = decision;
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);
@@ -1243,6 +1274,66 @@ exports.updatePhase2Decision = async (req, res) => {
 
     } catch (error) {
         console.error('Error updating Phase 2 decision:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// Move candidate back from Phase 2 to Phase 1
+exports.moveCandidateToPreviousPhase = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId: req.companyId });
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        if (isDynamicHiringRequest(hiringRequest)) {
+            return res.status(400).json({ message: 'Move back to previous phase is only available for the legacy phase flow' });
+        }
+
+        if (!hasCandidateMovedToPhase2(candidate)) {
+            return res.status(400).json({ message: 'Candidate is not currently in Phase 2' });
+        }
+
+        if (candidate.phase3Decision && candidate.phase3Decision !== 'None') {
+            return res.status(400).json({ message: 'Candidate cannot be moved back after progressing to Phase 3' });
+        }
+
+        if (candidate.isTransferredToOnboarding) {
+            return res.status(400).json({ message: 'Candidate cannot be moved back after being transferred to onboarding' });
+        }
+
+        candidate.profileShared = false;
+        candidate.phase2Decision = 'None';
+        candidate.phase2InterviewerFeedback = '';
+        candidate.phase2InterviewStatus = 'None';
+        candidate.interviewRounds = (candidate.interviewRounds || []).filter((round) => Number(round?.phase || 1) !== 2);
+
+        await candidate.save();
+
+        const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+            .populate('uploadedBy', 'firstName lastName email')
+            .populate('hiringRequestId', 'requestId roleDetails')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+        res.status(200).json({
+            message: 'Candidate moved back to Phase 1 successfully',
+            candidate: updatedCandidate
+        });
+    } catch (error) {
+        console.error('Error moving candidate back to previous phase:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
