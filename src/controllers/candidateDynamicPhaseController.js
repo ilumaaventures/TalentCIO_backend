@@ -29,6 +29,12 @@ const buildActor = (req) => ({
     email: req.user?.email || ''
 });
 
+const getInitialDynamicPhaseAssignees = (hiringRequest) => (
+    Array.isArray(hiringRequest?.assignedUsers) && hiringRequest.assignedUsers.length > 0
+        ? hiringRequest.assignedUsers
+        : []
+);
+
 const createDynamicPhaseActivity = async (req, candidate, action, details = {}) => {
     await ActivityLog.create({
         action,
@@ -48,9 +54,15 @@ const createDynamicPhaseActivity = async (req, candidate, action, details = {}) 
 const notifyDynamicPhaseStakeholders = async (req, hiringRequest, title, message, metadata = {}) => {
     const recipientIds = new Set([
         hiringRequest?.createdBy,
-        hiringRequest?.ownership?.hiringManager,
-        hiringRequest?.ownership?.recruiter
+        hiringRequest?.ownership?.hiringManager
     ].filter(Boolean).map((value) => String(value)));
+
+    (hiringRequest?.assignedUsers || []).forEach((userId) => {
+        const normalizedUserId = String(userId || '');
+        if (normalizedUserId) {
+            recipientIds.add(normalizedUserId);
+        }
+    });
 
     recipientIds.delete(String(req.user?._id || ''));
 
@@ -81,7 +93,7 @@ const getCandidateContext = async (candidateId, companyId, user, capability = TA
     const hiringRequest = await HiringRequest.findOne({
         _id: candidate.hiringRequestId,
         companyId
-    }).select('requestId roleDetails.title useDynamicPhases phases ownership createdBy');
+    }).select('requestId roleDetails.title useDynamicPhases phases ownership createdBy assignedUsers');
 
     if (!hiringRequest) {
         const error = new Error('Hiring request not found');
@@ -104,7 +116,7 @@ const getCandidateContext = async (candidateId, companyId, user, capability = TA
     if (!candidate.phaseHistory?.length) {
         const fallbackState = buildInitialDynamicPhaseState(
             hiringRequest,
-            hiringRequest.ownership?.recruiter ? [hiringRequest.ownership.recruiter] : []
+            getInitialDynamicPhaseAssignees(hiringRequest)
         );
 
         if (fallbackState.phaseHistory?.length) {

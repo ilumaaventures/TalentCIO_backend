@@ -98,7 +98,7 @@ const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
 const buildPreOnboardingTemplateData = ({
     employee,
     companyName,
-    recruiterName,
+    taContactName,
     portalUrl,
     deadlineText
 }) => ({
@@ -124,7 +124,7 @@ const buildPreOnboardingTemplateData = ({
     location: employee.location || '',
     managerName: employee.reportingManagerName || '',
     managerEmail: employee.reportingManagerEmail || '',
-    recruiterName: recruiterName || 'HR Team',
+    recruiterName: taContactName || 'HR Team',
     companyName: companyName || 'TalentCIO',
     requestId: employee.tempEmployeeId || '',
     currentStatus: employee.status || '',
@@ -454,11 +454,11 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         }
 
         const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
-        const recruiterName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const taContactName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
         const templateData = buildPreOnboardingTemplateData({
             employee,
             companyName,
-            recruiterName,
+            taContactName,
             portalUrl,
             deadlineText: deadlineStr
         });

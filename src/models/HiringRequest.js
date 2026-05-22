@@ -117,7 +117,6 @@ const HiringRequestSchema = new mongoose.Schema({
     // 5. Ownership
     ownership: {
         hiringManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-        recruiter: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         interviewPanel: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Optional at this stage
     },
     assignedUsers: [{

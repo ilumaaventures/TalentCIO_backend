@@ -102,8 +102,24 @@ const getEntityConflictQuery = (entity, item) => {
         };
     }
 
-    if (entityKey === 'candidate' && item.hiringRequestId && item.email) {
-        return { ...baseQuery, hiringRequestId: item.hiringRequestId, email: item.email };
+    if (entityKey === 'candidate' && item.hiringRequestId) {
+        const candidateDuplicateConditions = [];
+        if (item.email) {
+            candidateDuplicateConditions.push({ email: item.email });
+        }
+        if (item.mobile) {
+            candidateDuplicateConditions.push({ mobile: item.mobile });
+        }
+
+        if (!candidateDuplicateConditions.length) {
+            return null;
+        }
+
+        return {
+            ...baseQuery,
+            hiringRequestId: item.hiringRequestId,
+            $or: candidateDuplicateConditions
+        };
     }
 
     if (entityKey === 'hiringrequest' && item.requestId) {

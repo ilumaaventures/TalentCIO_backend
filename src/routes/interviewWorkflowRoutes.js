@@ -5,6 +5,7 @@ const { protect } = require('../middlewares/authMiddleware');
 const { authorizeAny } = require('../middlewares/authorize');
 const { requireModule } = require('../middlewares/moduleGuard');
 const workflowViewPermissions = [
+    'ta.manage',
     'ta.config.view',
     'ta.config.edit',
     'ta.requisition.create',
@@ -12,7 +13,7 @@ const workflowViewPermissions = [
     'ta.requisition.manage.assigned',
     'ta.requisition.manage.all'
 ];
-const workflowEditPermissions = ['ta.config.edit'];
+const workflowEditPermissions = ['ta.manage', 'ta.config.edit'];
 
 router.use(protect);
 router.use(requireModule('talentAcquisition'));

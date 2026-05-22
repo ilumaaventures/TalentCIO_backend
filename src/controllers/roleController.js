@@ -3,13 +3,21 @@ const Permission = require('../models/Permission');
 const User = require('../models/User');
 const { validateRoleInheritanceGraph } = require('../utils/permissionResolver');
 
-const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
+const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
+    'ta.analytics.requisition',
+    'ta.client.confidential.view',
+    'ta.offer.create',
+    'ta.offer.view',
+    'ta.offer.approve',
+    'ta.offer.revoke'
+]);
 
 const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
+    !permission.key.startsWith('onboarding.');
 
 // @desc    Get All Roles
 // @route   GET /api/roles

@@ -6,6 +6,7 @@ const { buildTABacHiringRequestConstraint, getTABacActionForCapability, matchesT
 const TA_CAPABILITIES = {
     VIEW: 'candidate.view',
     EDIT: 'candidate.edit',
+    SCHEDULE_INTERVIEW: 'candidate.schedule_interview',
     EVALUATE_ROUND: 'candidate.evaluate_round',
     MAKE_DECISION: 'candidate.make_decision',
     TRANSFER: 'candidate.transfer',
@@ -15,6 +16,7 @@ const TA_CAPABILITIES = {
 const GLOBAL_CAPABILITY_PERMISSION_MAP = {
     [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.all', 'ta.view'],
     [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.all', 'ta.edit'],
+    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.all', 'ta.edit'],
     [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.all', 'ta.interview.evaluate'],
     [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.all'],
     [TA_CAPABILITIES.TRANSFER]: ['ta.candidate.manage.all', 'ta.bulk_transfer'],
@@ -24,6 +26,7 @@ const GLOBAL_CAPABILITY_PERMISSION_MAP = {
 const ASSIGNED_CAPABILITY_PERMISSION_MAP = {
     [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.view'],
     [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
+    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
     [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.assigned', 'ta.interview.evaluate', 'ta.candidate.edit'],
     [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.assigned', 'ta.candidate.make_decision', 'ta.candidate.edit'],
     [TA_CAPABILITIES.TRANSFER]: ['ta.candidate.manage.assigned', 'ta.candidate.transfer']
@@ -49,6 +52,108 @@ const MINIMUM_INTERVIEWER_CANDIDATE_FIELDS = [
 ];
 
 const normalizeId = (value) => String(value?._id || value || '');
+
+const isCandidateOwnedByUser = (candidate, user) => (
+    normalizeId(candidate?.uploadedBy) === normalizeId(user?._id)
+);
+
+const isAssignedCandidateRestrictedActor = (actors, capability = TA_CAPABILITIES.VIEW) => {
+    if (!actors.isAssignedUser || actors.isOwner || actors.isHiringManager || actors.isAnalyticsViewer) {
+        return false;
+    }
+
+    if (capability === TA_CAPABILITIES.VIEW && actors.isInterviewPanel) {
+        return false;
+    }
+
+    return true;
+};
+
+const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
+    const permissions = getUserPermissionKeys(user);
+    if (permissions.includes('*')) {
+        return true;
+    }
+
+    if (capability === TA_CAPABILITIES.CONFIG_ACCESS) {
+        return false;
+    }
+
+    return permissions.includes('ta.candidate.manage.all');
+};
+
+const findAccessibleHiringRequestIds = async ({
+    companyId,
+    user,
+    capability,
+    requestOr = [],
+    includeAssignedClients = false
+}) => {
+    if (!requestOr.length) {
+        return [];
+    }
+
+    const requestMatch = {
+        companyId,
+        $or: [...requestOr]
+    };
+
+    if (includeAssignedClients) {
+        const assignedClientNames = getAssignedClientNames(user);
+        if (assignedClientNames.length > 0) {
+            requestMatch.$or.push({ client: { $in: assignedClientNames } });
+        }
+    }
+
+    const abacConstraint = await buildTABacHiringRequestConstraint({
+        companyId,
+        user,
+        action: getTABacActionForCapability(capability)
+    });
+
+    if (abacConstraint) {
+        requestMatch.$and = Array.isArray(requestMatch.$and) ? requestMatch.$and : [];
+        requestMatch.$and.push(abacConstraint);
+    }
+
+    return HiringRequest.find(requestMatch).distinct('_id');
+};
+
+const findRestrictedAssignedHiringRequestIds = async ({
+    companyId,
+    user,
+    capability
+}) => {
+    const assignedClientNames = getAssignedClientNames(user);
+    const restrictedQuery = {
+        companyId,
+        assignedUsers: user._id,
+        createdBy: { $ne: user._id },
+        'ownership.hiringManager': { $ne: user._id },
+        analyticsViewers: { $ne: user._id }
+    };
+
+    if (capability === TA_CAPABILITIES.VIEW) {
+        restrictedQuery['ownership.interviewPanel'] = { $ne: user._id };
+    }
+
+    if (assignedClientNames.length > 0) {
+        restrictedQuery.client = { $nin: assignedClientNames };
+    }
+
+    const abacConstraint = await buildTABacHiringRequestConstraint({
+        companyId,
+        user,
+        action: getTABacActionForCapability(capability)
+    });
+
+    if (abacConstraint) {
+        restrictedQuery.$and = Array.isArray(restrictedQuery.$and) ? restrictedQuery.$and : [];
+        restrictedQuery.$and.push(abacConstraint);
+    }
+
+    return HiringRequest.find(restrictedQuery).distinct('_id');
+};
 
 const hasGlobalCapabilityPermission = (user, capability) => {
     const permissions = getUserPermissionKeys(user);
@@ -85,7 +190,6 @@ const getHiringRequestActorState = (hiringRequest, user) => {
     return {
         isOwner: normalizeId(hiringRequest?.createdBy) === userId,
         isHiringManager: normalizeId(hiringRequest?.ownership?.hiringManager) === userId,
-        isAssignedRecruiter: normalizeId(hiringRequest?.ownership?.recruiter) === userId,
         isAssignedUser: assignedUserIds.includes(userId),
         isAnalyticsViewer: analyticsViewerIds.includes(userId),
         isInterviewPanel: interviewPanelIds.includes(userId),
@@ -110,7 +214,7 @@ const canAccessHiringRequestForCapability = async (hiringRequest, user, capabili
         return false;
     }
 
-    if (isHiringRequestAdmin(user) || hasGlobalCapabilityPermission(user, capability)) {
+    if (isHiringRequestAdmin(user) || hasUnrestrictedCandidateCapabilityPermission(user, capability)) {
         return matchesTABacHiringRequest({
             companyId: companyId || hiringRequest.companyId,
             user,
@@ -126,7 +230,7 @@ const canAccessHiringRequestForCapability = async (hiringRequest, user, capabili
         case TA_CAPABILITIES.VIEW:
             hasBaseAccess = actors.isOwner
                 || actors.isHiringManager
-                || actors.isAssignedRecruiter
+                || actors.isAnalyticsViewer
                 || actors.isAssignedUser
                 || actors.isInterviewPanel
                 || actors.isClientAssigned;
@@ -134,20 +238,25 @@ const canAccessHiringRequestForCapability = async (hiringRequest, user, capabili
         case TA_CAPABILITIES.EDIT:
             hasBaseAccess = actors.isOwner
                 || actors.isHiringManager
-                || actors.isAssignedRecruiter
+                || actors.isAnalyticsViewer
+                || actors.isAssignedUser
+                || actors.isClientAssigned;
+            break;
+        case TA_CAPABILITIES.SCHEDULE_INTERVIEW:
+            hasBaseAccess = actors.isOwner
+                || actors.isHiringManager
+                || actors.isAnalyticsViewer
                 || actors.isAssignedUser
                 || actors.isClientAssigned;
             break;
         case TA_CAPABILITIES.MAKE_DECISION:
             hasBaseAccess = actors.isOwner
                 || actors.isHiringManager
-                || actors.isAssignedRecruiter
                 || actors.isClientAssigned;
             break;
         case TA_CAPABILITIES.TRANSFER:
             hasBaseAccess = actors.isOwner
                 || actors.isHiringManager
-                || actors.isAssignedRecruiter
                 || actors.isAssignedUser
                 || actors.isClientAssigned;
             break;
@@ -206,11 +315,16 @@ const canAccessCandidateThroughHiringRequest = async ({
             && await canAccessHiringRequestForCapability(resolvedHiringRequest, user, TA_CAPABILITIES.EDIT, companyId);
     }
 
-    if (hasGlobalCapabilityPermission(user, capability)) {
+    if (capability === TA_CAPABILITIES.VIEW && isCandidateRoundAssignee(candidate, user, roundId)) {
         return true;
     }
 
-    if (capability === TA_CAPABILITIES.VIEW && isCandidateRoundAssignee(candidate, user, roundId)) {
+    const actorState = getHiringRequestActorState(resolvedHiringRequest, user);
+    if (isAssignedCandidateRestrictedActor(actorState, capability) && !isCandidateOwnedByUser(candidate, user)) {
+        return false;
+    }
+
+    if (hasUnrestrictedCandidateCapabilityPermission(user, capability) || hasGlobalCapabilityPermission(user, capability)) {
         return true;
     }
 
@@ -237,63 +351,123 @@ const buildAccessibleCandidateQueryForCapability = async (
         };
     }
 
-    if (isHiringRequestAdmin(user) || hasGlobalCapabilityPermission(user, capability)) {
+    if (isHiringRequestAdmin(user) || hasUnrestrictedCandidateCapabilityPermission(user, capability)) {
         return baseQuery;
     }
 
-    const requestMatch = { companyId };
-    const assignedClientNames = getAssignedClientNames(user);
+    if (hasGlobalCapabilityPermission(user, capability)) {
+        const restrictedAssignedRequestIds = await findRestrictedAssignedHiringRequestIds({
+            companyId,
+            user,
+            capability
+        });
+
+        if (!restrictedAssignedRequestIds.length) {
+            return baseQuery;
+        }
+
+        const globalAccessOr = [
+            { hiringRequestId: { $nin: restrictedAssignedRequestIds } },
+            {
+                hiringRequestId: { $in: restrictedAssignedRequestIds },
+                uploadedBy: user._id
+            }
+        ];
+
+        if (capability === TA_CAPABILITIES.VIEW) {
+            globalAccessOr.push({ 'interviewRounds.assignedTo': user._id });
+        }
+
+        return {
+            $and: [
+                baseQuery,
+                { $or: globalAccessOr }
+            ]
+        };
+    }
+
+    const broadActorRequestOr = [];
+    const assignedRequestOr = [];
+    const clientAssignedNames = getAssignedClientNames(user);
+
     if (capability === TA_CAPABILITIES.VIEW) {
-        requestMatch.$or = [
+        broadActorRequestOr.push(
             { createdBy: user._id },
             { 'ownership.hiringManager': user._id },
-            { 'ownership.recruiter': user._id },
-            { assignedUsers: user._id },
+            { analyticsViewers: user._id },
             { 'ownership.interviewPanel': user._id }
-        ];
+        );
+        assignedRequestOr.push({ assignedUsers: user._id });
     } else if (capability === TA_CAPABILITIES.EDIT) {
-        requestMatch.$or = [
+        broadActorRequestOr.push(
             { createdBy: user._id },
             { 'ownership.hiringManager': user._id },
-            { 'ownership.recruiter': user._id },
-            { assignedUsers: user._id }
-        ];
+            { analyticsViewers: user._id }
+        );
+        assignedRequestOr.push({ assignedUsers: user._id });
+    } else if (capability === TA_CAPABILITIES.SCHEDULE_INTERVIEW) {
+        broadActorRequestOr.push(
+            { createdBy: user._id },
+            { 'ownership.hiringManager': user._id },
+            { analyticsViewers: user._id }
+        );
+        assignedRequestOr.push({ assignedUsers: user._id });
     } else if (capability === TA_CAPABILITIES.MAKE_DECISION) {
-        requestMatch.$or = [
+        broadActorRequestOr.push(
             { createdBy: user._id },
-            { 'ownership.hiringManager': user._id },
-            { 'ownership.recruiter': user._id }
-        ];
+            { 'ownership.hiringManager': user._id }
+        );
     } else if (capability === TA_CAPABILITIES.TRANSFER) {
-        requestMatch.$or = [
+        broadActorRequestOr.push(
             { createdBy: user._id },
             { 'ownership.hiringManager': user._id },
-            { 'ownership.recruiter': user._id },
-            { assignedUsers: user._id }
-        ];
+            { analyticsViewers: user._id }
+        );
+        assignedRequestOr.push({ assignedUsers: user._id });
     }
-    if (requestMatch.$or && assignedClientNames.length > 0) {
-        requestMatch.$or.push({ client: { $in: assignedClientNames } });
-    }
-
-    const abacConstraint = await buildTABacHiringRequestConstraint({
-        companyId,
-        user,
-        action: getTABacActionForCapability(capability)
-    });
-
-    if (abacConstraint) {
-        requestMatch.$and = Array.isArray(requestMatch.$and) ? requestMatch.$and : [];
-        requestMatch.$and.push(abacConstraint);
-    }
-
-    const accessibleRequestIds = requestMatch.$or
-        ? await HiringRequest.find(requestMatch).distinct('_id')
-        : [];
 
     const accessOr = [];
-    if (accessibleRequestIds.length > 0) {
-        accessOr.push({ hiringRequestId: { $in: accessibleRequestIds } });
+    const broadActorRequestIds = await findAccessibleHiringRequestIds({
+        companyId,
+        user,
+        capability,
+        requestOr: broadActorRequestOr,
+        includeAssignedClients: false
+    });
+    if (broadActorRequestIds.length > 0) {
+        accessOr.push({ hiringRequestId: { $in: broadActorRequestIds } });
+    }
+
+    const assignedRequestIds = await findAccessibleHiringRequestIds({
+        companyId,
+        user,
+        capability,
+        requestOr: assignedRequestOr,
+        includeAssignedClients: false
+    });
+    if (assignedRequestIds.length > 0) {
+        accessOr.push({
+            hiringRequestId: { $in: assignedRequestIds },
+            uploadedBy: user._id
+        });
+    }
+
+    if (clientAssignedNames.length > 0) {
+        const clientAssignedRequestIds = await findAccessibleHiringRequestIds({
+            companyId,
+            user,
+            capability,
+            requestOr: [{ client: { $in: clientAssignedNames } }],
+            includeAssignedClients: false
+        });
+
+        const unrestrictedClientRequestIds = clientAssignedRequestIds.filter(
+            (requestId) => !assignedRequestIds.some((assignedId) => normalizeId(assignedId) === normalizeId(requestId))
+        );
+
+        if (unrestrictedClientRequestIds.length > 0) {
+            accessOr.push({ hiringRequestId: { $in: unrestrictedClientRequestIds } });
+        }
     }
 
     if (capability === TA_CAPABILITIES.VIEW) {

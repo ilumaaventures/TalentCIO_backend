@@ -10,6 +10,7 @@ const authorizeHiringRequestApproval = async (req, res, next) => {
         const permissions = getUserPermissionKeys(req.user);
         if (
             permissions.includes('*')
+            || permissions.includes('ta.manage')
             || permissions.includes('ta.hiring_request.manage')
             || permissions.includes('ta.super_approve')
         ) {
@@ -19,7 +20,7 @@ const authorizeHiringRequestApproval = async (req, res, next) => {
         const { allowed } = await canUseDelegatedPermission({
             companyId: req.companyId,
             delegateUserId: req.user._id,
-            permissionKeys: ['ta.hiring_request.manage', 'ta.super_approve'],
+            permissionKeys: ['ta.manage', 'ta.hiring_request.manage', 'ta.super_approve'],
             resourceType: 'hiringRequest',
             resourceId: req.params.id
         });

@@ -38,6 +38,7 @@ const omitFields = (value, fieldNames = []) => {
 const canViewConfidentialClient = (user) => {
     const permissions = getUserPermissionKeys(user);
     return isHiringRequestAdmin(user)
+        || permissions.includes('ta.requisition.view.client_name')
         || permissions.includes('ta.client.confidential.view')
         || permissions.includes('*');
 };
@@ -59,6 +60,35 @@ const canDownloadResume = (user) => {
     return isHiringRequestAdmin(user) || permissions.includes('ta.resume.download') || permissions.includes('*');
 };
 
+const canViewOfferDetails = (user) => {
+    const permissions = getUserPermissionKeys(user);
+    return isHiringRequestAdmin(user)
+        || permissions.includes('ta.candidate.make_decision')
+        || permissions.includes('ta.candidate.manage.assigned')
+        || permissions.includes('ta.candidate.manage.all')
+        || permissions.includes('*');
+};
+
+const canViewAllInterviewFeedback = (user) => {
+    const permissions = getUserPermissionKeys(user);
+    return isHiringRequestAdmin(user)
+        || permissions.includes('ta.interview.feedback.view_all')
+        || permissions.includes('ta.candidate.manage.all')
+        || permissions.includes('*');
+};
+
+const normalizeId = (value) => String(value?._id || value || '');
+
+const canViewRoundFeedback = (round, user) => {
+    const userId = normalizeId(user?._id);
+    if (!userId || !round) {
+        return false;
+    }
+
+    const assignedToIds = Array.isArray(round.assignedTo) ? round.assignedTo.map(normalizeId) : [];
+    return assignedToIds.includes(userId) || normalizeId(round.evaluatedBy) === userId;
+};
+
 const serializeHiringRequestForViewer = (request, user) => {
     if (!request) return request;
 
@@ -71,7 +101,7 @@ const serializeHiringRequestForViewer = (request, user) => {
         serialized.client = CONFIDENTIAL_CLIENT_LABEL;
     }
 
-    if (serialized.hiringDetails?.budgetRange && serialized.hiringDetails.budgetRange.isOpen === false && !canViewBudget(user)) {
+    if (serialized.hiringDetails?.budgetRange && !canViewBudget(user)) {
         serialized.hiringDetails = {
             ...serialized.hiringDetails,
             budgetRange: {
@@ -79,6 +109,7 @@ const serializeHiringRequestForViewer = (request, user) => {
                 min: null,
                 max: null,
                 currency: null,
+                isOpen: false,
                 isHidden: true
             }
         };
@@ -117,6 +148,38 @@ const serializeCandidateForViewer = ({
 
     if (!canDownloadResume(user)) {
         serialized = omitFields(serialized, ['resumeUrl', 'resumePublicId']);
+    }
+
+    if (!canViewOfferDetails(user)) {
+        serialized = {
+            ...serialized,
+            offerCompany: undefined,
+            offerCTC: undefined,
+            offerJoiningDate: undefined
+        };
+    }
+
+    if (!canViewAllInterviewFeedback(user)) {
+        if (Array.isArray(serialized.interviewRounds)) {
+            serialized.interviewRounds = serialized.interviewRounds.map((round) => {
+                if (canViewRoundFeedback(round, user)) {
+                    return round;
+                }
+
+                return {
+                    ...round,
+                    feedback: '',
+                    rating: undefined,
+                    evaluatedBy: undefined,
+                    evaluatedAt: undefined,
+                    skillRatings: []
+                };
+            });
+        }
+
+        if (serialized.phase2InterviewerFeedback !== undefined) {
+            serialized.phase2InterviewerFeedback = '';
+        }
     }
 
     if (serialized.hiringRequestId && typeof serialized.hiringRequestId === 'object') {

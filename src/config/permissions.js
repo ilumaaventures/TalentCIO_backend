@@ -295,9 +295,9 @@ module.exports = [
         description: "View candidates through requisition or interviewer access rules"
     },
     {
-        key: "ta.client.confidential.view",
+        key: "ta.requisition.view.client_name",
         module: "TA",
-        description: "View confidential client names on accessible TA records"
+        description: "View confidential client names on TA requisitions"
     },
     {
         key: "ta.candidate.sensitive.view",
@@ -350,11 +350,6 @@ module.exports = [
         description: "Download candidate resumes for accessible requisitions"
     },
     {
-        key: "ta.interview.schedule",
-        module: "TA",
-        description: "Schedule, reschedule, and manage interview rounds"
-    },
-    {
         key: "ta.interview.feedback.view_all",
         module: "TA",
         description: "View all interviewer feedback on accessible candidates"
@@ -398,26 +393,6 @@ module.exports = [
         key: "ta.requisition.manage.all",
         module: "TA",
         description: "Manage all TA requisitions with workspace-wide access"
-    },
-    {
-        key: "ta.offer.create",
-        module: "TA",
-        description: "Create and release offer details for accessible candidates"
-    },
-    {
-        key: "ta.offer.view",
-        module: "TA",
-        description: "View offer details for accessible candidates"
-    },
-    {
-        key: "ta.offer.approve",
-        module: "TA",
-        description: "Approve or countersign offer details for accessible candidates"
-    },
-    {
-        key: "ta.offer.revoke",
-        module: "TA",
-        description: "Revoke or rescind issued offers"
     },
     // DISCUSSIONS
     {

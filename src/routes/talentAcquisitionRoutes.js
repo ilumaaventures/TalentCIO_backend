@@ -50,8 +50,8 @@ const APPLICANT_REVIEW_SELECT = [
     'updatedAt'
 ].join(' ');
 
-const taAccessSettingsViewPermissions = ['ta.config.view', 'ta.config.edit'];
-const taAccessSettingsEditPermissions = ['ta.config.edit'];
+const taAccessSettingsViewPermissions = ['ta.manage', 'ta.config.view', 'ta.config.edit'];
+const taAccessSettingsEditPermissions = ['ta.manage', 'ta.config.edit'];
 const requireTAAnalyticsAccess = async (req, res, next) => {
     try {
         if (hasAssignedTAAnalyticsAccess(req.user)) {
@@ -86,9 +86,10 @@ router.get('/hiring-request', protect, taController.getHiringRequests);
 router.get('/hiring-requests/:id/phases', protect, taController.getHiringRequestPhases);
 router.get('/hiring-request/:id', protect, taController.getHiringRequestById);
 router.put('/hiring-request/:id', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit']), taController.updateHiringRequest);
+router.delete('/hiring-request/:id', protect, authorizeAny(['ta.requisition.delete', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.delete']), taController.deleteHiringRequest);
 router.patch('/hiring-request/:id/approve', protect, authorizeHiringRequestApproval, taController.approveHiringRequest);
 router.patch('/hiring-request/:id/reject', protect, authorizeHiringRequestApproval, taController.rejectHiringRequest);
-router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.hiring_request.manage']), taController.closeHiringRequest);
+router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.manage', 'ta.hiring_request.manage']), taController.closeHiringRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
@@ -232,14 +233,24 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
             return res.status(404).json({ message: 'Target hiring request not found or not active' });
         }
 
-        const existing = await Candidate.findOne({
-            hiringRequestId: targetRequestId,
-            email: app.email,
-            companyId: req.companyId
-        });
+        const duplicateCandidateConditions = [];
+        if (app.email) {
+            duplicateCandidateConditions.push({ email: String(app.email).trim().toLowerCase() });
+        }
+        if (app.mobile) {
+            duplicateCandidateConditions.push({ mobile: String(app.mobile).trim() });
+        }
+
+        const existing = duplicateCandidateConditions.length
+            ? await Candidate.findOne({
+                companyId: req.companyId,
+                hiringRequestId: targetRequestId,
+                $or: duplicateCandidateConditions
+            })
+            : null;
 
         if (existing) {
-            return res.status(409).json({ message: `${app.email} already exists as a candidate in that request.` });
+            return res.status(409).json({ message: 'This candidate already exists in the system.' });
         }
 
         const candidate = new Candidate({
@@ -252,8 +263,8 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
             resumePublicId: app.resumePublicId,
             uploadedBy: req.user._id,
             candidateName: app.candidateName,
-            email: app.email,
-            mobile: app.mobile,
+            email: String(app.email || '').trim().toLowerCase(),
+            mobile: String(app.mobile || '').trim(),
             source: 'Public Job Board',
             profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
             currentCTC: app.currentCTC,
@@ -283,7 +294,7 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         });
     } catch (err) {
         if (err.code === 11000) {
-            return res.status(409).json({ message: 'This applicant already exists as a candidate in that request.' });
+            return res.status(409).json({ message: 'This candidate already exists in the system.' });
         }
 
         console.error(err);
@@ -291,6 +302,6 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
     }
 });
 
-router.patch('/hiring-request/:id/visibility', protect, authorizeAny(['ta.config.edit', 'ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all']), taController.toggleJobVisibility);
+router.patch('/hiring-request/:id/visibility', protect, authorizeAny(['ta.manage', 'ta.config.edit', 'ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all']), taController.toggleJobVisibility);
 
 module.exports = router;

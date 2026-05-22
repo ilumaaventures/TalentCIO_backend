@@ -22,7 +22,7 @@ const hasAnyPermission = (req, permissionKeys = []) => {
 };
 
 const canEditPhaseTemplates = (req) => (
-    isAdminUser(req) || hasAnyPermission(req, ['ta.config.edit'])
+    isAdminUser(req) || hasAnyPermission(req, ['ta.manage', 'ta.config.edit'])
 );
 
 const ensureTemplateEditor = (req, res) => {

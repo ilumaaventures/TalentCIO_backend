@@ -20,18 +20,24 @@ const hasAnyPermission = (user, permissionKeys = []) => {
 const canViewTAAccess = (user) => {
     const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
     return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
-        || hasAnyPermission(user, ['*', 'ta.config.view', 'ta.config.edit']);
+        || hasAnyPermission(user, ['*', 'ta.config.view', 'ta.config.edit', 'ta.manage']);
 };
 
 const canManageTAAccess = (user) => {
     const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
     return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
-        || hasAnyPermission(user, ['*', 'ta.config.edit']);
+        || hasAnyPermission(user, ['*', 'ta.config.edit', 'ta.manage']);
+};
+
+const canManageTARolePermissions = (user) => {
+    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
+    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
+        || hasAnyPermission(user, ['*', 'ta.manage']);
 };
 
 const getTAAccessPermissions = async () => (
     Permission.find({
-        key: { $regex: /^(ta\.|onboarding\.)/i },
+        key: { $regex: /^ta\./i },
         isDeprecated: { $ne: true }
     })
         .select('key module description isSystem')
@@ -69,7 +75,6 @@ const buildUserResponse = (user, requestStats = {}, interviewerStats = {}) => {
         taAssignedClients: Array.isArray(user.taAssignedClients) ? user.taAssignedClients : [],
         assignedRequests: requestStats.assignedRequests || 0,
         clientAssignments: requestStats.clientAssignments || 0,
-        recruiterOn: requestStats.recruiterOn || 0,
         hiringManagerOn: requestStats.hiringManagerOn || 0,
         analyticsViewerOn: requestStats.analyticsViewerOn || 0,
         interviewRoundsAssigned: interviewerStats.interviewRoundsAssigned || 0
@@ -84,7 +89,6 @@ const buildRequestResponse = (request, candidateSummary = {}, roundAssigneeIds =
     status: request.status || '',
     ownership: {
         hiringManager: request.ownership?.hiringManager || null,
-        recruiter: request.ownership?.recruiter || null,
         interviewPanel: Array.isArray(request.ownership?.interviewPanel) ? request.ownership.interviewPanel : []
     },
     assignedUsers: Array.isArray(request.assignedUsers) ? request.assignedUsers : [],
@@ -97,7 +101,7 @@ const buildRequestResponse = (request, candidateSummary = {}, roundAssigneeIds =
 exports.getOverview = async (req, res) => {
     try {
         if (!canViewTAAccess(req.user)) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to view TA or onboarding access settings' });
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view TA access settings' });
         }
 
         const [taPermissions, roles, users, requests, candidates] = await Promise.all([
@@ -114,7 +118,6 @@ exports.getOverview = async (req, res) => {
             HiringRequest.find({ companyId: req.companyId })
                 .select('requestId client status roleDetails.title ownership assignedUsers analyticsViewers')
                 .populate('ownership.hiringManager', 'firstName lastName email employeeCode')
-                .populate('ownership.recruiter', 'firstName lastName email employeeCode')
                 .populate('ownership.interviewPanel', 'firstName lastName email employeeCode')
                 .populate('assignedUsers', 'firstName lastName email employeeCode')
                 .populate('analyticsViewers', 'firstName lastName email employeeCode')
@@ -169,7 +172,6 @@ exports.getOverview = async (req, res) => {
 
                 const current = requestSummaryByUser.get(normalizedUserId) || {
                     assignedRequests: 0,
-                    recruiterOn: 0,
                     hiringManagerOn: 0,
                     analyticsViewerOn: 0
                 };
@@ -178,7 +180,6 @@ exports.getOverview = async (req, res) => {
             };
 
             register(request.ownership?.hiringManager?._id || request.ownership?.hiringManager, 'hiringManagerOn');
-            register(request.ownership?.recruiter?._id || request.ownership?.recruiter, 'recruiterOn');
 
             (request.assignedUsers || []).forEach((user) => {
                 register(user?._id || user, 'assignedRequests');
@@ -192,7 +193,6 @@ exports.getOverview = async (req, res) => {
             const normalizedUserId = String(user._id);
             const current = requestSummaryByUser.get(normalizedUserId) || {
                 assignedRequests: 0,
-                recruiterOn: 0,
                 hiringManagerOn: 0,
                 analyticsViewerOn: 0,
                 clientAssignments: 0
@@ -243,8 +243,8 @@ exports.getOverview = async (req, res) => {
 
 exports.updateRolePermissions = async (req, res) => {
     try {
-        if (!canManageTAAccess(req.user)) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA or onboarding role access' });
+        if (!canManageTARolePermissions(req.user)) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update TA role access' });
         }
 
         const role = await Role.findOne({ _id: req.params.roleId, companyId: req.companyId }).populate('permissions', 'key description');
@@ -265,7 +265,7 @@ exports.updateRolePermissions = async (req, res) => {
 
         const invalidSelection = selectedPermissionIds.some((permissionId) => !taPermissionIds.has(permissionId));
         if (invalidSelection) {
-            return res.status(400).json({ message: 'One or more selected permissions are not valid TA or onboarding permissions' });
+            return res.status(400).json({ message: 'One or more selected permissions are not valid TA permissions' });
         }
 
         const existingPermissionIds = Array.isArray(role.permissions)
@@ -284,7 +284,7 @@ exports.updateRolePermissions = async (req, res) => {
         const updatedRole = await Role.findById(role._id).populate('permissions', 'key description isDeprecated').lean();
 
         res.status(200).json({
-            message: 'TA and onboarding role permissions updated successfully',
+            message: 'TA role permissions updated successfully',
             role: buildRoleResponse(updatedRole, taPermissionIds)
         });
     } catch (error) {
@@ -313,13 +313,11 @@ exports.updateRequisitionAccess = async (req, res) => {
         const interviewPanel = Array.isArray(req.body?.interviewPanel)
             ? [...new Set(req.body.interviewPanel.map((userId) => String(userId)).filter(Boolean))]
             : [];
-        const recruiterId = req.body?.recruiterId ? String(req.body.recruiterId) : '';
 
         request.assignedUsers = assignedUsers;
         request.analyticsViewers = analyticsViewers;
         request.ownership = {
             ...(request.ownership?.toObject ? request.ownership.toObject() : request.ownership),
-            recruiter: recruiterId || undefined,
             interviewPanel
         };
 
@@ -328,7 +326,6 @@ exports.updateRequisitionAccess = async (req, res) => {
         const updatedRequest = await HiringRequest.findById(request._id)
             .select('requestId client status roleDetails.title ownership assignedUsers analyticsViewers')
             .populate('ownership.hiringManager', 'firstName lastName email employeeCode')
-            .populate('ownership.recruiter', 'firstName lastName email employeeCode')
             .populate('ownership.interviewPanel', 'firstName lastName email employeeCode')
             .populate('assignedUsers', 'firstName lastName email employeeCode')
             .populate('analyticsViewers', 'firstName lastName email employeeCode')

@@ -4,6 +4,7 @@ const { protect } = require('../middlewares/authMiddleware');
 const { authorizeAny } = require('../middlewares/authorize');
 const phaseTemplateController = require('../controllers/phaseTemplateController');
 const configViewPermissions = [
+    'ta.manage',
     'ta.config.view',
     'ta.config.edit',
     'ta.requisition.create',
@@ -11,7 +12,7 @@ const configViewPermissions = [
     'ta.requisition.manage.assigned',
     'ta.requisition.manage.all'
 ];
-const configEditPermissions = ['ta.config.edit'];
+const configEditPermissions = ['ta.manage', 'ta.config.edit'];
 
 const router = express.Router();
 

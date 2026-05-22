@@ -186,7 +186,7 @@ const resolveApprovalDelegation = async ({ request, req }) => {
         companyId: req.companyId,
         delegateUserId: req.user._id,
         delegatorUserIds: approverIds,
-        permissionKeys: ['ta.hiring_request.manage', 'ta.super_approve'],
+        permissionKeys: ['ta.manage', 'ta.hiring_request.manage', 'ta.super_approve'],
         resourceType: 'hiringRequest',
         resourceId: request._id
     });
@@ -195,7 +195,6 @@ const resolveApprovalDelegation = async ({ request, req }) => {
 const buildHiringRequestDetailsQuery = (companyId, requestId) => (
     HiringRequest.findOne({ _id: requestId, companyId })
         .populate('ownership.hiringManager', 'firstName lastName email')
-        .populate('ownership.recruiter', 'firstName lastName email')
         .populate('assignedUsers', 'firstName lastName email employeeCode')
         .populate('analyticsViewers', 'firstName lastName email employeeCode')
         .populate('roleDetails.reportingManager', 'firstName lastName')
@@ -238,10 +237,14 @@ const buildCandidateFilterQuery = (filters = {}) => {
     return query;
 };
 
-const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyName, extras = {}) => {
+const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {}) => {
     const fullName = candidate.candidateName || '';
     const [firstName = '', ...lastNameParts] = fullName.trim().split(/\s+/).filter(Boolean);
     const lastName = lastNameParts.join(' ');
+    const taOwner = hiringRequest?.ownership?.hiringManager;
+    const taOwnerName = taOwner
+        ? `${taOwner.firstName || ''} ${taOwner.lastName || ''}`.trim()
+        : '';
 
     return {
         candidateName: fullName,
@@ -259,9 +262,7 @@ const buildCandidateDataMap = (candidate, hiringRequest, recruiterUser, companyN
         location: hiringRequest?.location || '',
         managerName: '',
         managerEmail: '',
-        recruiterName: recruiterUser
-            ? `${recruiterUser.firstName || ''} ${recruiterUser.lastName || ''}`.trim()
-            : (candidate.profilePulledBy || ''),
+        recruiterName: candidate.profilePulledBy || taOwnerName || 'Talent Acquisition Team',
         companyName: companyName || '',
         requestId: hiringRequest?.requestId || '',
         currentStatus: candidate.status || '',
@@ -490,7 +491,7 @@ const sendMassMailForHiringRequest = async ({
     }
 
     const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId })
-        .populate('ownership.recruiter', 'firstName lastName email')
+        .populate('ownership.hiringManager', 'firstName lastName email')
         .lean();
 
     if (!hiringRequest) {
@@ -527,7 +528,6 @@ const sendMassMailForHiringRequest = async ({
         const dataMap = buildCandidateDataMap(
             candidate,
             hiringRequest,
-            hiringRequest.ownership?.recruiter,
             company?.name,
             { customNote }
         );
@@ -782,7 +782,6 @@ exports.getHiringRequests = async (req, res) => {
 
         const requests = await HiringRequest.find(query)
             .populate('ownership.hiringManager', 'firstName lastName')
-            .populate('ownership.recruiter', 'firstName lastName')
             .populate('assignedUsers', 'firstName lastName email employeeCode')
             .populate('analyticsViewers', 'firstName lastName email employeeCode')
             .sort({ createdAt: -1 })
@@ -965,6 +964,30 @@ exports.updateHiringRequest = async (req, res) => {
     }
 };
 
+// --- deleteHiringRequest ---
+exports.deleteHiringRequest = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const request = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
+        if (!request) {
+            return res.status(404).json({ message: 'Not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user, { action: 'delete' });
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to delete this request' });
+        }
+
+        await request.softDelete(req.user._id);
+
+        res.status(200).json({ message: 'Hiring request moved to bin' });
+    } catch (error) {
+        console.error('Error deleting hiring request:', error);
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
 // --- approveHiringRequest ---
 exports.approveHiringRequest = async (req, res) => {
     try {
@@ -1008,13 +1031,16 @@ exports.approveHiringRequest = async (req, res) => {
             });
 
             const userPermissions = getUserPermissionKeys(req.user);
-            const hasSuperApprove = userPermissions.includes('ta.super_approve') || userPermissions.includes('*');
-            const delegatedApproval = !isAuthorized && !hasSuperApprove
+            const hasManageOverride = userPermissions.includes('ta.manage')
+                || userPermissions.includes('ta.hiring_request.manage')
+                || userPermissions.includes('ta.super_approve')
+                || userPermissions.includes('*');
+            const delegatedApproval = !isAuthorized && !hasManageOverride
                 ? await resolveApprovalDelegation({ request, req })
                 : { allowed: false, delegation: null };
             approvalDelegation = delegatedApproval.delegation || null;
 
-            if (!isAuthorized && !hasSuperApprove && !delegatedApproval.allowed) {
+            if (!isAuthorized && !hasManageOverride && !delegatedApproval.allowed) {
                 return res.status(403).json({
                     message: 'You are not authorized to approve this level',
                     currentLevel: request.currentApprovalLevel,
@@ -1106,7 +1132,9 @@ exports.approveHiringRequest = async (req, res) => {
             companyId: approvalAuditMeta.companyId,
             action: `APPROVED_LEVEL_${request.currentApprovalLevel || level}`,
             performedBy: approvalAuditMeta.performedBy,
-            permissionKey: approvalDelegation ? 'ta.hiring_request.manage (delegated)' : 'ta.hiring_request.manage',
+            permissionKey: approvalDelegation
+                ? 'ta.hiring_request.manage (delegated)'
+                : (getUserPermissionKeys(req.user).includes('ta.manage') ? 'ta.manage' : 'ta.hiring_request.manage'),
             scope: approvalDelegation ? 'delegated-resource' : 'resource',
             after: {
                 status: request.status,
@@ -1160,13 +1188,16 @@ exports.rejectHiringRequest = async (req, res) => {
                 });
 
                 const userPermissions = getUserPermissionKeys(req.user);
-                const hasSuperApprove = userPermissions.includes('ta.super_approve') || userPermissions.includes('*');
-                const delegatedApproval = !isAuthorized && !hasSuperApprove
+                const hasManageOverride = userPermissions.includes('ta.manage')
+                    || userPermissions.includes('ta.hiring_request.manage')
+                    || userPermissions.includes('ta.super_approve')
+                    || userPermissions.includes('*');
+                const delegatedApproval = !isAuthorized && !hasManageOverride
                     ? await resolveApprovalDelegation({ request, req })
                     : { allowed: false, delegation: null };
                 rejectionDelegation = delegatedApproval.delegation || null;
 
-                if (!isAuthorized && !hasSuperApprove && !delegatedApproval.allowed) {
+                if (!isAuthorized && !hasManageOverride && !delegatedApproval.allowed) {
                     return res.status(403).json({
                         message: 'You are not authorized to reject this level',
                         currentLevel: request.currentApprovalLevel,
@@ -1198,7 +1229,9 @@ exports.rejectHiringRequest = async (req, res) => {
             companyId: rejectionAuditMeta.companyId,
             action: 'REJECTED',
             performedBy: rejectionAuditMeta.performedBy,
-            permissionKey: rejectionDelegation ? 'ta.hiring_request.manage (delegated)' : 'ta.hiring_request.manage',
+            permissionKey: rejectionDelegation
+                ? 'ta.hiring_request.manage (delegated)'
+                : (getUserPermissionKeys(req.user).includes('ta.manage') ? 'ta.manage' : 'ta.hiring_request.manage'),
             scope: rejectionDelegation ? 'delegated-resource' : 'resource',
             after: {
                 status: request.status,
@@ -1232,7 +1265,7 @@ exports.closeHiringRequest = async (req, res) => {
         const existingRequest = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
         if (!existingRequest) return res.status(404).json({ message: 'Not found' });
 
-        const hasAccess = await canAccessHiringRequest(existingRequest, req.companyId, req.user, { action: 'edit' });
+        const hasAccess = await canAccessHiringRequest(existingRequest, req.companyId, req.user, { action: 'manage' });
         if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to close this request' });
         }
@@ -1300,7 +1333,7 @@ exports.closeHiringRequest = async (req, res) => {
             companyId: closeAuditMeta.companyId,
             action: shouldFullyClose ? 'CLOSED' : 'POSITIONS_PARTIALLY_CLOSED',
             performedBy: closeAuditMeta.performedBy,
-            permissionKey: 'ta.hiring_request.manage',
+            permissionKey: getUserPermissionKeys(req.user).includes('ta.manage') ? 'ta.manage' : 'ta.hiring_request.manage',
             scope: 'resource',
             after: {
                 status: existingRequest.status,
@@ -1344,8 +1377,9 @@ exports.toggleJobVisibility = async (req, res) => {
         }
 
         const userPermissions = getUserPermissionKeys(req.user);
-        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user, { action: 'edit' });
+        const hasAccess = await canAccessHiringRequest(request, req.companyId, req.user, { action: 'manage' });
         const canManageVisibility = hasAccess
+            || userPermissions.includes('ta.manage')
             || userPermissions.includes('ta.config.edit')
             || userPermissions.includes('*');
 
@@ -1417,7 +1451,9 @@ exports.toggleJobVisibility = async (req, res) => {
                 performedBy: visibilityAuditMeta.performedBy,
                 resourceType: 'HiringRequest',
                 resourceId: request._id,
-                permissionKey: userPermissions.includes('ta.config.edit') ? 'ta.config.edit' : 'ta.requisition.update',
+                permissionKey: userPermissions.includes('ta.manage')
+                    ? 'ta.manage'
+                    : (userPermissions.includes('ta.config.edit') ? 'ta.config.edit' : 'ta.requisition.update'),
                 scope: 'resource',
                 ipAddress: visibilityAuditMeta.ipAddress,
                 correlationId: visibilityAuditMeta.correlationId,
@@ -1761,7 +1797,7 @@ exports.getClientAnalytics = async (req, res) => {
 
         clientName = decodeURIComponent(clientName);
 
-        const accessibleHiringRequestQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
+        const accessibleHiringRequestQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
 
         // Fetch all hiring requests for this client mainly to build the dropdown list
         const allClientReqs = await HiringRequest.find({
@@ -1944,7 +1980,6 @@ exports.getGlobalAnalytics = async (req, res) => {
             client,
             department,
             position,
-            recruiter,
             pulledBy,
             uploadedBy,
             calledBy,
@@ -1953,12 +1988,12 @@ exports.getGlobalAnalytics = async (req, res) => {
             phase,
             requisitionId
         } = req.query;
-        const pulledByFilter = String(pulledBy || recruiter || '').trim();
+        const pulledByFilter = String(pulledBy || '').trim();
         const uploadedByFilter = String(uploadedBy || '').trim();
         const calledByFilter = String(calledBy || '').trim();
         const hasCandidateOwnerFilter = Boolean(pulledByFilter || uploadedByFilter || calledByFilter);
 
-        const accessibleHiringRequestQuery = buildAnalyticsHiringRequestQuery(req.companyId, req.user);
+        const accessibleHiringRequestQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
         const filteredHiringRequestQuery = { ...accessibleHiringRequestQuery };
 
         if (client) filteredHiringRequestQuery.client = new RegExp(client, 'i');
@@ -2024,8 +2059,8 @@ exports.getGlobalAnalytics = async (req, res) => {
                 .lean();
         })();
 
-        // Process Recruiter names correctly for filtering and display
-        const getCandidateRecruiterName = (c) => {
+        // Process candidate sourcing owner names correctly for filtering and display
+        const getCandidatePulledByName = (c) => {
             if (c.profilePulledBy) return c.profilePulledBy;
             if (c.uploadedBy) return `${c.uploadedBy.firstName || ''} ${c.uploadedBy.lastName || ''}`.trim();
             return 'Self/Other';
@@ -2040,11 +2075,11 @@ exports.getGlobalAnalytics = async (req, res) => {
         const normalizeAnalyticsValue = (value) => String(value || '').trim().toLowerCase();
 
         let filteredCandidates = candidates.filter((candidateDoc) => {
-            const recruiterName = normalizeAnalyticsValue(getCandidateRecruiterName(candidateDoc));
+            const pulledByName = normalizeAnalyticsValue(getCandidatePulledByName(candidateDoc));
             const uploadedByName = normalizeAnalyticsValue(getCandidateUploadedByName(candidateDoc));
             const calledByName = normalizeAnalyticsValue(candidateDoc.calledBy);
 
-            const matchesPulledBy = !pulledByFilter || recruiterName === normalizeAnalyticsValue(pulledByFilter);
+            const matchesPulledBy = !pulledByFilter || pulledByName === normalizeAnalyticsValue(pulledByFilter);
             const matchesUploadedBy = !uploadedByFilter || uploadedByName === normalizeAnalyticsValue(uploadedByFilter);
             const matchesCalledBy = !calledByFilter || calledByName === normalizeAnalyticsValue(calledByFilter);
 
@@ -2077,7 +2112,7 @@ exports.getGlobalAnalytics = async (req, res) => {
         const funnel = { interested: 0, interview: 0, offer: 0 };
         const deptAnalysis = {};
         const clientAnalysis = {};
-        const recruiterPerf = {};
+        const sourcingPerf = {};
         const positionPerf = {};
         const sourceAnalysis = {};
         const monthlyTrend = {};
@@ -2129,7 +2164,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             const dept = hrInfo.roleDetails?.department || 'General';
             const clientName = hrInfo.client || 'General';
             const reqId = hrInfo._id?.toString() || 'Unknown';
-            const recName = getCandidateRecruiterName(c);
+            const recName = getCandidatePulledByName(c);
             const src = c.source || 'Direct';
 
             const monthObj = new Date(c.createdAt || new Date());
@@ -2143,13 +2178,13 @@ exports.getGlobalAnalytics = async (req, res) => {
 
             if (!deptAnalysis[dept]) deptAnalysis[dept] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
             if (!clientAnalysis[clientName]) clientAnalysis[clientName] = { sourced: 0, interviewed: 0, offered: 0, joined: 0 };
-            if (!recruiterPerf[recName]) recruiterPerf[recName] = { sourced: 0, interviews: 0, offers: 0, joined: 0 };
+            if (!sourcingPerf[recName]) sourcingPerf[recName] = { sourced: 0, interviews: 0, offers: 0, joined: 0 };
             if (!sourceAnalysis[src]) sourceAnalysis[src] = { sourced: 0, joined: 0 };
             if (!positionPerf[reqId]) positionPerf[reqId] = { title: hrInfo.roleDetails?.title || 'Unknown', client: clientName, open: hrInfo.hiringDetails?.openPositions || 1, sourced: 0, interviewed: 0, offered: 0, joined: 0 };
 
             deptAnalysis[dept].sourced++;
             clientAnalysis[clientName].sourced++;
-            recruiterPerf[recName].sourced++;
+            sourcingPerf[recName].sourced++;
             sourceAnalysis[src].sourced++;
             positionPerf[reqId].sourced++;
 
@@ -2175,7 +2210,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 funnel.interview++;
                 deptAnalysis[dept].interviewed++;
                 clientAnalysis[clientName].interviewed++;
-                recruiterPerf[recName].interviews++;
+                sourcingPerf[recName].interviews++;
                 positionPerf[reqId].interviewed++;
                 monthlyTrend[month].interviews++;
 
@@ -2200,7 +2235,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 offersReleased++;
                 deptAnalysis[dept].offered++;
                 clientAnalysis[clientName].offered++;
-                recruiterPerf[recName].offers++;
+                sourcingPerf[recName].offers++;
                 positionPerf[reqId].offered++;
                 monthlyTrend[month].offers++;
 
@@ -2220,7 +2255,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 totalJoined++;
                 deptAnalysis[dept].joined++;
                 clientAnalysis[clientName].joined++;
-                recruiterPerf[recName].joined++;
+                sourcingPerf[recName].joined++;
                 sourceAnalysis[src].joined++;
                 positionPerf[reqId].joined++;
                 monthlyTrend[month].joined++;
@@ -2403,8 +2438,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             clients: [...new Set(accessibleHiringRequests.map(hr => hr.client).filter(Boolean))].sort(),
             departments: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.department).filter(Boolean))].sort(),
             positions: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.title).filter(Boolean))].sort(),
-            recruiters: [...new Set(candidates.map(c => getCandidateRecruiterName(c)).filter(Boolean))].sort(),
-            pulledBys: [...new Set(candidates.map(c => getCandidateRecruiterName(c)).filter(Boolean))].sort(),
+            pulledBys: [...new Set(candidates.map(c => getCandidatePulledByName(c)).filter(Boolean))].sort(),
             uploadedBys: [...new Set(candidates.map(c => getCandidateUploadedByName(c)).filter(Boolean))].sort(),
             calledBys: [...new Set(candidates.map(c => String(c.calledBy || '').trim()).filter(Boolean))].sort(),
             requisitions: requisitionsList
@@ -2427,11 +2461,11 @@ exports.getGlobalAnalytics = async (req, res) => {
                 ],
                 departmentAnalysis: Object.keys(deptAnalysis).map(d => ({ name: d, ...deptAnalysis[d] })),
                 clientAnalysis: Object.keys(clientAnalysis).map(c => ({ name: c, ...clientAnalysis[c] })),
-                recruiterPerformance: Object.keys(recruiterPerf)
+                sourcingPerformance: Object.keys(sourcingPerf)
                     .map(r => ({
                         name: r,
-                        ...recruiterPerf[r],
-                        conversion: recruiterPerf[r].sourced > 0 ? ((recruiterPerf[r].joined / recruiterPerf[r].sourced) * 100).toFixed(1) : 0
+                        ...sourcingPerf[r],
+                        conversion: sourcingPerf[r].sourced > 0 ? ((sourcingPerf[r].joined / sourcingPerf[r].sourced) * 100).toFixed(1) : 0
                     }))
                     .sort((a, b) => b.joined - a.joined),
                 positionPerformance: Object.keys(positionPerf).map(id => ({ id, ...positionPerf[id] })),

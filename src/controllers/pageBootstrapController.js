@@ -24,13 +24,21 @@ const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
 const { buildTimesheetPeriodRange } = require('../utils/timesheetPeriod');
 
-const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
+const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
+    'ta.analytics.requisition',
+    'ta.client.confidential.view',
+    'ta.offer.create',
+    'ta.offer.view',
+    'ta.offer.approve',
+    'ta.offer.revoke'
+]);
 
 const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
+    !permission.key.startsWith('onboarding.');
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
