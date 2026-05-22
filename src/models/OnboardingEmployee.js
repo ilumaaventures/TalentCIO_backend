@@ -43,6 +43,11 @@ const onboardingEmployeeSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    pendingCredentialPassword: {
+        type: String,
+        default: '',
+        select: false
+    },
     isPasswordChanged: {
         type: Boolean,
         default: false
