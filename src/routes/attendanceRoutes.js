@@ -13,6 +13,7 @@ const {
     getPendingRequests,
 
     updateAttendance,
+    deleteAttendance,
     createAttendance,
     getTeamAttendanceReport,
     exportTeamAttendanceExcel,
@@ -43,5 +44,6 @@ router.patch('/regularize/:id', processRegularizationRequest);
 router.put('/:id/approve', approveAttendance);
 router.post('/', createAttendance);
 router.put('/:id', updateAttendance);
+router.delete('/:id', deleteAttendance);
 
 module.exports = router;

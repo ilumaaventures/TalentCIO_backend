@@ -12,7 +12,7 @@ const attendanceRegularizationSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['IN', 'OUT', 'BOTH'],
+        enum: ['IN', 'OUT', 'BOTH', 'PRESENT'],
         required: true
     },
     requestedClockIn: {

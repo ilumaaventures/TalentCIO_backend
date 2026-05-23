@@ -218,7 +218,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
     }
 
     const fullUser = await User.findOne({ _id: targetUserId, companyId })
-        .select('firstName lastName email employeeCode joiningDate reportingManagers')
+        .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode')
         .populate('reportingManagers', 'firstName lastName email')
         .lean();
 
@@ -250,7 +250,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
             companyId,
             date: { $gte: start, $lte: end }
         })
-            .select('date clockInIST clockOutIST duration clockIn clockOut status approvalStatus')
+            .select('date clockInIST clockOutIST duration clockIn clockOut status approvalStatus attendanceMode maxWorkingHours')
             .lean()
     ]);
 

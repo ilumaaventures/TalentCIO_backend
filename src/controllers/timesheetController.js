@@ -10,6 +10,15 @@ const NotificationService = require('../services/notificationService');
 const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
 const { parseDateAsIST } = require('../utils/attendancePolicy');
 
+const canUpdateFutureRecords = (user) => (
+    user?.roles?.some(r =>
+        (typeof r === 'string' && r === 'Admin') ||
+        (typeof r === 'object' && r.name === 'Admin')
+    ) ||
+    user?.permissions?.includes('*') ||
+    user?.permissions?.includes('attendance.update_future')
+);
+
 // @desc    Get Current Month Timesheet
 // @route   GET /api/timesheet/current
 // @access  Private
@@ -41,7 +50,7 @@ const getCurrentTimesheet = async (req, res) => {
 
         try {
             fullUser = await User.findById(req.user._id)
-                .select('firstName lastName email employeeCode joiningDate')
+                .select('firstName lastName email employeeCode joiningDate attendanceMode')
                 .populate('reportingManagers', 'firstName lastName email')
                 .lean();
         } catch (err) {
@@ -74,7 +83,7 @@ const getCurrentTimesheet = async (req, res) => {
                 user: req.user._id,
                 companyId: req.companyId,
                 date: { $gte: start, $lte: end }
-            }).select('date clockInIST clockOutIST duration clockIn clockOut').lean()
+            }).select('date clockInIST clockOutIST duration clockIn clockOut attendanceMode maxWorkingHours').lean()
         ]);
 
         const entries = workLogs.map(log => ({
@@ -134,6 +143,9 @@ const addEntry = async (req, res) => {
             return res.status(400).json({ message: 'Valid work log date is required' });
         }
         const normalizedEntryDate = parseDateAsIST(parsedEntryDate);
+        if (normalizedEntryDate > parseDateAsIST(new Date()) && !canUpdateFutureRecords(req.user)) {
+            return res.status(403).json({ message: 'Not authorized to add work logs for future dates' });
+        }
 
         const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
         const periodId = getTimesheetPeriodIdForDate(normalizedEntryDate, cycle);
@@ -399,9 +411,9 @@ const getUserTimesheet = async (req, res) => {
                 user: targetUserId,
                 companyId: req.companyId,
                 date: { $gte: start, $lte: end }
-            }).select('date clockInIST clockOutIST clockIn clockOut duration').lean(),
+            }).select('date clockInIST clockOutIST clockIn clockOut duration attendanceMode maxWorkingHours').lean(),
             User.findOne({ _id: targetUserId, companyId: req.companyId })
-                .select('firstName lastName email employeeCode')
+                .select('firstName lastName email employeeCode attendanceMode')
                 .populate('reportingManagers', 'firstName lastName email')
                 .lean()
         ]);
@@ -661,6 +673,10 @@ const updateEntry = async (req, res) => {
 
         if (timesheet && (timesheet.status === 'SUBMITTED' || timesheet.status === 'APPROVED')) {
             return res.status(400).json({ message: 'Cannot edit submitted/approved timesheets' });
+        }
+
+        if (parseDateAsIST(workLog.date) > parseDateAsIST(new Date()) && !canUpdateFutureRecords(req.user)) {
+            return res.status(403).json({ message: 'Not authorized to update work logs for future dates' });
         }
 
         // Check Joining Date
