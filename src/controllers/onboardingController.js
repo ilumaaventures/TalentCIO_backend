@@ -67,9 +67,40 @@ const formatCurrency = (val) => {
 
 const DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT = 'Action Required: Complete Your Pre-Onboarding';
 const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
-    <p>Hello <strong>{{firstName}}</strong>,</p>
-    <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 22px;">Pre-Onboarding Action Required</h1>
+            <p style="color: #e0e7ff; margin-top: 8px; font-size: 14px;">Please complete the following items on your portal</p>
+        </div>
+        <div style="padding: 32px;">
+            <div style="font-size: 14px; line-height: 1.6;">
+                <p>Hello <strong>{{firstName}}</strong>,</p>
+                <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+            </div>
+            {{credentialsSection}}
+            {{requestedSectionsBlock}}
+            {{requestedDocumentsBlock}}
+            {{sharedFilesBlock}}
+            {{deadlineBlock}}
+            <div style="text-align: center; margin: 28px 0;">
+                {{portalButton}}
+            </div>
+        </div>
+        <div style="background: #f1f5f9; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">
+            &copy; {{currentYear}} TalentCio. All rights reserved.
+        </div>
+    </div>
 `;
+
+const ONBOARDING_LAYOUT_PLACEHOLDERS = [
+    'credentialsSection',
+    'requestedSectionsBlock',
+    'requestedDocumentsBlock',
+    'sharedFilesBlock',
+    'deadlineBlock',
+    'portalButton',
+    'currentYear'
+];
 
 const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -100,7 +131,14 @@ const buildPreOnboardingTemplateData = ({
     companyName,
     taContactName,
     portalUrl,
-    deadlineText
+    deadlineText,
+    credentialsSection = '',
+    requestedSectionsBlock = '',
+    requestedDocumentsBlock = '',
+    sharedFilesBlock = '',
+    deadlineBlock = '',
+    portalButton = '',
+    currentYear = String(new Date().getFullYear())
 }) => ({
     candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
     firstName: employee.firstName || '',
@@ -136,7 +174,14 @@ const buildPreOnboardingTemplateData = ({
     employeeId: employee.tempEmployeeId || '',
     joiningDate: formatDate(employee.joiningDate),
     submissionDeadline: deadlineText || '',
-    portalLink: portalUrl || ''
+    portalLink: portalUrl || '',
+    credentialsSection,
+    requestedSectionsBlock,
+    requestedDocumentsBlock,
+    sharedFilesBlock,
+    deadlineBlock,
+    portalButton,
+    currentYear
 });
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
@@ -461,17 +506,32 @@ exports.sendPreOnboardingEmail = async (req, res) => {
 
         const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
         const taContactName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const deadlineBlock = `
+            <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #92400e;">
+                <strong>Submission Deadline:</strong> ${deadlineStr}
+            </div>
+        `;
+        const portalButton = `<a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Pre-Onboarding Portal</a>`;
         const templateData = buildPreOnboardingTemplateData({
             employee,
             companyName,
             taContactName,
             portalUrl,
-            deadlineText: deadlineStr
+            deadlineText: deadlineStr,
+            credentialsSection: credentialsHtml,
+            requestedSectionsBlock: sectionsHtml,
+            requestedDocumentsBlock: documentsHtml,
+            sharedFilesBlock: sharedFilesHtml,
+            deadlineBlock,
+            portalButton
         });
         const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
+        const usesFullTemplateLayout = ONBOARDING_LAYOUT_PLACEHOLDERS.some((placeholder) =>
+            new RegExp(`\\{\\{\\s*${placeholder}\\s*\\}\\}`).test(bodyTemplate)
+        );
         const introHtml = renderTemplateBody(bodyTemplate, templateData);
 
-        const emailHtml = `
+        let emailHtml = `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
                 <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
                     <h1 style="color: white; margin: 0; font-size: 22px;">Pre-Onboarding Action Required</h1>
@@ -500,6 +560,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 </div>
             </div>
         `;
+        if (usesFullTemplateLayout) {
+            emailHtml = renderTemplateBody(bodyTemplate, templateData);
+        }
         const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
         const attachments = selectedCustomDocuments.map((doc) => ({
             filename: doc.label,
