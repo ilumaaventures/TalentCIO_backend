@@ -266,7 +266,7 @@ const candidateSchema = new mongoose.Schema({
         },
         scheduledDate: Date,
         feedback: String,
-        rating: { // Numeric rating out of 10 (only for Passed rounds)
+        rating: { // Numeric rating out of 10 when evaluators provide one
             type: Number,
             min: 1,
             max: 10
@@ -303,6 +303,12 @@ const candidateSchema = new mongoose.Schema({
     phase2InterviewerFeedback: {
         type: String,
         trim: true
+    },
+
+    phase2InterviewStatus: {
+        type: String,
+        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'None', ''],
+        default: 'None'
     },
 
     // Phase 3 Offer & Onboarding Decision
@@ -358,8 +364,16 @@ const candidateSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Compound index to ensure unique email per hiring request
-candidateSchema.index({ hiringRequestId: 1, email: 1 }, { unique: true });
+// Only active candidates should participate in requisition-level duplicate enforcement.
+candidateSchema.index(
+    { hiringRequestId: 1, email: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            isDeleted: { $ne: true }
+        }
+    }
+);
 
 // Performance Indexes
 candidateSchema.index({ hiringRequestId: 1, status: 1 });
@@ -388,7 +402,7 @@ candidateSchema.pre('save', async function candidatePreSave() {
     const hiringRequest = await HiringRequest.findOne({
         _id: this.hiringRequestId,
         companyId: this.companyId
-    }).select('useDynamicPhases phases ownership');
+    }).select('useDynamicPhases phases assignedUsers');
 
     if (!hiringRequest) {
         return;
@@ -396,7 +410,7 @@ candidateSchema.pre('save', async function candidatePreSave() {
 
     const initialDynamicState = buildInitialDynamicPhaseState(
         hiringRequest,
-        hiringRequest.ownership?.recruiter ? [hiringRequest.ownership.recruiter] : []
+        Array.isArray(hiringRequest.assignedUsers) ? hiringRequest.assignedUsers : []
     );
 
     if (initialDynamicState.phaseHistory?.length) {

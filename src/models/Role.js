@@ -15,6 +15,10 @@ const roleSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Permission'
     }],
+    inheritsFrom: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Role'
+    }],
     isSystem: {
         type: Boolean,
         default: false
@@ -29,6 +33,7 @@ const roleSchema = new mongoose.Schema({
 // Ensure role names are unique per company
 roleSchema.index({ name: 1, companyId: 1 }, { unique: true });
 roleSchema.index({ companyId: 1, isDeleted: 1 });
+roleSchema.index({ companyId: 1, inheritsFrom: 1 });
 
 roleSchema.plugin(softDeletePlugin);
 

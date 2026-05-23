@@ -16,9 +16,18 @@ const isAdminUser = (req) => (
     ) || (req.user?.permissions || []).includes('*')
 );
 
-const ensureAdminUser = (req, res) => {
-    if (!isAdminUser(req)) {
-        res.status(403).json({ message: 'Forbidden: Only admins can manage phase templates' });
+const hasAnyPermission = (req, permissionKeys = []) => {
+    const userPermissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+    return permissionKeys.some((key) => userPermissions.includes(key));
+};
+
+const canEditPhaseTemplates = (req) => (
+    isAdminUser(req) || hasAnyPermission(req, ['ta.manage', 'ta.config.edit'])
+);
+
+const ensureTemplateEditor = (req, res) => {
+    if (!canEditPhaseTemplates(req)) {
+        res.status(403).json({ message: 'Forbidden: You do not have permission to manage phase templates' });
         return false;
     }
 
@@ -79,7 +88,7 @@ const buildTemplateResponse = (template, usage = {}) => ({
 });
 
 exports.createTemplate = async (req, res) => {
-    if (!ensureAdminUser(req, res)) return;
+    if (!ensureTemplateEditor(req, res)) return;
 
     try {
         const name = normalizeLabel(req.body?.name);
@@ -171,7 +180,7 @@ exports.getTemplateById = async (req, res) => {
 };
 
 exports.updateTemplate = async (req, res) => {
-    if (!ensureAdminUser(req, res)) return;
+    if (!ensureTemplateEditor(req, res)) return;
 
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -242,7 +251,7 @@ exports.updateTemplate = async (req, res) => {
 };
 
 exports.deleteTemplate = async (req, res) => {
-    if (!ensureAdminUser(req, res)) return;
+    if (!ensureTemplateEditor(req, res)) return;
 
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -277,7 +286,7 @@ exports.deleteTemplate = async (req, res) => {
 };
 
 exports.setDefault = async (req, res) => {
-    if (!ensureAdminUser(req, res)) return;
+    if (!ensureTemplateEditor(req, res)) return;
 
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -314,7 +323,7 @@ exports.setDefault = async (req, res) => {
 };
 
 exports.cloneTemplate = async (req, res) => {
-    if (!ensureAdminUser(req, res)) return;
+    if (!ensureTemplateEditor(req, res)) return;
 
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {

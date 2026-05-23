@@ -12,7 +12,7 @@ const {
     buildInitialDynamicPhaseState,
     isDynamicHiringRequest
 } = require('../utils/phaseTemplateUtils');
-const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
+const { canAccessHiringRequest, getUserPermissionKeys } = require('../utils/hiringRequestAccess');
 const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
@@ -21,6 +21,7 @@ const {
     isInterviewerOnlyView,
     sanitizeCandidateForInterviewer
 } = require('../utils/candidateAccess');
+const { serializeCandidateForViewer } = require('../utils/taVisibility');
 
 const LEGACY_STATUS_VALUES = new Set([
     'Interested',
@@ -32,11 +33,89 @@ const LEGACY_STATUS_VALUES = new Set([
 ]);
 
 const DEFAULT_LEGACY_CANDIDATE_STATUS = 'Interested';
+const DUPLICATE_CANDIDATE_MESSAGE = 'This candidate already exists in the system.';
 
 const normalizeStatusKey = (value) => String(value || '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '_');
+
+const normalizeCandidateEmail = (value) => String(value || '').trim().toLowerCase();
+const normalizeCandidateMobile = (value) => String(value || '').trim();
+const normalizeEntityId = (value) => String(value?._id || value || '');
+
+const getUserDisplayName = (user) => {
+    if (!user) return '';
+
+    const fullName = [user.firstName, user.lastName]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean)
+        .join(' ');
+
+    return fullName || String(user.email || '').trim();
+};
+
+const buildDuplicateCandidateQuery = ({ companyId, hiringRequestId = null, email, mobile, excludeCandidateId = null }) => {
+    const duplicateConditions = [];
+    const normalizedEmail = normalizeCandidateEmail(email);
+    const normalizedMobile = normalizeCandidateMobile(mobile);
+
+    if (normalizedEmail) {
+        duplicateConditions.push({ email: normalizedEmail });
+    }
+
+    if (normalizedMobile) {
+        duplicateConditions.push({ mobile: normalizedMobile });
+    }
+
+    if (!duplicateConditions.length) {
+        return null;
+    }
+
+    const duplicateQuery = {
+        companyId,
+        $or: duplicateConditions
+    };
+
+    if (hiringRequestId) {
+        duplicateQuery.hiringRequestId = hiringRequestId;
+    }
+
+    if (excludeCandidateId) {
+        duplicateQuery._id = { $ne: excludeCandidateId };
+    }
+
+    return duplicateQuery;
+};
+
+const findDuplicateCandidateInCompany = async ({ companyId, hiringRequestId = null, email, mobile, excludeCandidateId = null }) => {
+    const duplicateQuery = buildDuplicateCandidateQuery({ companyId, hiringRequestId, email, mobile, excludeCandidateId });
+    if (!duplicateQuery) {
+        return null;
+    }
+
+    return Candidate.findOne(duplicateQuery)
+        .select('_id candidateName hiringRequestId email mobile uploadedBy')
+        .populate('uploadedBy', 'firstName lastName email')
+        .lean();
+};
+
+const isCandidateOwnedByUser = (candidate, userId) => (
+    normalizeEntityId(candidate?.uploadedBy) === normalizeEntityId(userId)
+);
+
+const buildDuplicateCandidateMessage = (candidate, userId, allowOwnedDuplicateUpdate = false) => {
+    if (isCandidateOwnedByUser(candidate, userId)) {
+        return allowOwnedDuplicateUpdate
+            ? 'Candidate already exists. Your bulk import will update the existing record.'
+            : 'Candidate already exists. Open the existing record to update it.';
+    }
+
+    const uploaderName = getUserDisplayName(candidate?.uploadedBy);
+    return uploaderName
+        ? `Candidate already exists and was uploaded by ${uploaderName}.`
+        : DUPLICATE_CANDIDATE_MESSAGE;
+};
 
 const resolveDynamicStatusOption = (phase, rawStatus) => {
     const normalizedTarget = normalizeStatusKey(rawStatus);
@@ -49,6 +128,12 @@ const resolveDynamicStatusOption = (phase, rawStatus) => {
         normalizeStatusKey(option?.label) === normalizedTarget
     )) || null;
 };
+
+const getInitialDynamicPhaseAssignees = (hiringRequest) => (
+    Array.isArray(hiringRequest?.assignedUsers) && hiringRequest.assignedUsers.length > 0
+        ? hiringRequest.assignedUsers
+        : []
+);
 
 const applyDynamicImportedStatus = (candidate, hiringRequest, rawStatus) => {
     if (!isDynamicHiringRequest(hiringRequest)) {
@@ -63,7 +148,7 @@ const applyDynamicImportedStatus = (candidate, hiringRequest, rawStatus) => {
     if (!Array.isArray(candidate.phaseHistory) || candidate.phaseHistory.length === 0) {
         const initialDynamicState = buildInitialDynamicPhaseState(
             hiringRequest,
-            hiringRequest.ownership?.recruiter ? [hiringRequest.ownership.recruiter] : []
+            getInitialDynamicPhaseAssignees(hiringRequest)
         );
 
         if (initialDynamicState.phaseHistory?.length) {
@@ -110,6 +195,39 @@ const applyDynamicImportedStatus = (candidate, hiringRequest, rawStatus) => {
     candidate.currentPhaseName = currentPhaseEntry.phaseName;
 
     return true;
+};
+
+const normalizePhase2InterviewStatus = (rawStatus) => {
+    const normalized = String(rawStatus || '').trim().toLowerCase();
+    if (!normalized || normalized === 'none') {
+        return 'None';
+    }
+
+    if (normalized === 'scheduled') {
+        return 'Scheduled';
+    }
+
+    if (normalized === 'rejected') {
+        return 'Rejected';
+    }
+
+    if (normalized === 'shortlisted') {
+        return 'Shortlisted';
+    }
+
+    return null;
+};
+
+const hasCandidateMovedToPhase2 = (candidate = {}) => {
+    const phase2Decision = String(candidate?.phase2Decision || '').trim();
+    const phase2InterviewStatus = String(candidate?.phase2InterviewStatus || '').trim();
+    const phase2InterviewerFeedback = String(candidate?.phase2InterviewerFeedback || '').trim();
+
+    return candidate?.profileShared === true
+        || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+        || Boolean(phase2Decision && phase2Decision !== 'None')
+        || Boolean(phase2InterviewStatus && phase2InterviewStatus !== 'None')
+        || Boolean(phase2InterviewerFeedback);
 };
 
 const toLegacySafeStatus = (rawStatus) => {
@@ -304,7 +422,7 @@ exports.uploadResume = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
-        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        const canManageHiringRequest = await canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT, req.companyId);
         if (!canManageHiringRequest) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to upload candidates for this requisition' });
         }
@@ -370,6 +488,57 @@ exports.parseResume = async (req, res) => {
     }
 };
 
+exports.checkDuplicateCandidate = async (req, res) => {
+    try {
+        const { hiringRequestId, email, mobile, allowOwnedDuplicateUpdate } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const canManageHiringRequest = await canAccessHiringRequestForCapability(
+            hiringRequest,
+            req.user,
+            TA_CAPABILITIES.EDIT,
+            req.companyId
+        );
+
+        if (!canManageHiringRequest) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
+        }
+
+        const duplicateCandidate = await findDuplicateCandidateInCompany({
+            companyId: req.companyId,
+            hiringRequestId,
+            email,
+            mobile
+        });
+
+        const ownedByCurrentUser = duplicateCandidate
+            ? isCandidateOwnedByUser(duplicateCandidate, req.user?._id)
+            : false;
+        const canAutoUpdate = Boolean(allowOwnedDuplicateUpdate) && ownedByCurrentUser;
+
+        return res.status(200).json({
+            exists: Boolean(duplicateCandidate),
+            canAutoUpdate,
+            ownedByCurrentUser,
+            uploadedByName: getUserDisplayName(duplicateCandidate?.uploadedBy),
+            message: duplicateCandidate
+                ? buildDuplicateCandidateMessage(duplicateCandidate, req.user?._id, canAutoUpdate)
+                : ''
+        });
+    } catch (error) {
+        console.error('Error checking duplicate candidate:', error);
+        return res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
 // Create new candidate
 exports.createCandidate = async (req, res) => {
     try {
@@ -390,6 +559,7 @@ exports.createCandidate = async (req, res) => {
             profileShared,
             phase2Decision,
             phase2InterviewerFeedback,
+            phase2InterviewStatus,
             inHandOffer,
             offerCompany,
             offerCTC,
@@ -417,17 +587,26 @@ exports.createCandidate = async (req, res) => {
         const normalizedReferralName = normalizedSource === 'Referral'
             ? String(referralName || '').trim()
             : '';
+        const normalizedPhase2InterviewStatus = phase2InterviewStatus === undefined
+            ? undefined
+            : normalizePhase2InterviewStatus(phase2InterviewStatus);
+        const shouldMarkProfileSharedForPhase2 = normalizedPhase2InterviewStatus && normalizedPhase2InterviewStatus !== 'None';
         const normalizedInHandOffer = Boolean(inHandOffer) ||
             hasMeaningfulOfferValue(offerCompany) ||
             hasMeaningfulOfferValue(offerCTC) ||
             hasMeaningfulOfferValue(offerJoiningDate);
+        const allowOwnedDuplicateUpdate = Boolean(req.body.allowOwnedDuplicateUpdate);
+
+        if (phase2InterviewStatus !== undefined && normalizedPhase2InterviewStatus === null) {
+            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+        }
 
         // Verify hiring request exists
         const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
-        const canManageHiringRequest = canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT);
+        const canManageHiringRequest = await canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT, req.companyId);
         if (!canManageHiringRequest) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
         }
@@ -436,14 +615,23 @@ exports.createCandidate = async (req, res) => {
             ? ''
             : toLegacySafeStatus(hasMeaningfulStatus(status) ? status : DEFAULT_LEGACY_CANDIDATE_STATUS);
 
-        // Check for duplicate email or mobile in same hiring request
         let candidate = await Candidate.findOne({
             hiringRequestId,
             $or: [{ email: email.toLowerCase().trim() }, { mobile: mobile.trim() }],
             companyId: req.companyId
-        });
+        }).populate('uploadedBy', 'firstName lastName email');
 
         if (candidate) {
+            const ownedByCurrentUser = isCandidateOwnedByUser(candidate, req.user?._id);
+            if (!allowOwnedDuplicateUpdate || !ownedByCurrentUser) {
+                return res.status(409).json({
+                    message: buildDuplicateCandidateMessage(candidate, req.user?._id, allowOwnedDuplicateUpdate && ownedByCurrentUser),
+                    ownedByCurrentUser,
+                    canAutoUpdate: allowOwnedDuplicateUpdate && ownedByCurrentUser,
+                    uploadedByName: getUserDisplayName(candidate.uploadedBy)
+                });
+            }
+
             const { hasAccess } = await ensureCandidateCapability(
                 candidate,
                 req.companyId,
@@ -459,10 +647,15 @@ exports.createCandidate = async (req, res) => {
 
             // Track status change for history
             const statusChanged = !isDynamicRequest && normalizedLegacyStatus && candidate.status !== normalizedLegacyStatus;
-
             const updatedFields = [];
             const compareAndUpdate = (field, newValue, label) => {
                 if (newValue !== undefined && newValue !== null && newValue !== '' && candidate[field] !== newValue) {
+                    candidate[field] = newValue;
+                    updatedFields.push(label || field);
+                }
+            };
+            const forceUpdateField = (field, newValue, label) => {
+                if (candidate[field] !== newValue) {
                     candidate[field] = newValue;
                     updatedFields.push(label || field);
                 }
@@ -479,9 +672,6 @@ exports.createCandidate = async (req, res) => {
             compareAndUpdate('rate', rate, 'Rate');
             compareAndUpdate('currentCTC', currentCTC, 'Current CTC');
             compareAndUpdate('expectedCTC', expectedCTC, 'Expected CTC');
-            if (req.body.profileShared !== undefined) {
-                compareAndUpdate('profileShared', Boolean(profileShared), 'Profile Shared');
-            }
             compareAndUpdate('inHandOffer', normalizedInHandOffer, 'Offer in Hand');
             compareAndUpdate('offerCompany', offerCompany, 'Offer Company');
             compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
@@ -508,16 +698,30 @@ exports.createCandidate = async (req, res) => {
             } else {
                 compareAndUpdate('status', normalizedLegacyStatus, 'Status');
             }
-            compareAndUpdate('decision', req.body.decision, 'Decision');
+            if (allowOwnedDuplicateUpdate) {
+                const importedDecision = String(req.body.decision || '').trim() || 'None';
+                forceUpdateField('decision', importedDecision, 'Decision');
+                forceUpdateField('profileShared', Boolean(profileShared), 'Profile Shared');
+            } else {
+                const phase1Locked = hasCandidateMovedToPhase2(candidate);
+                if (!phase1Locked) {
+                    compareAndUpdate('decision', req.body.decision, 'Decision');
+                }
+                if (!phase1Locked || profileShared !== false) {
+                    compareAndUpdate('profileShared', profileShared, 'Profile Shared');
+                }
+            }
             compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
-            compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
             compareAndUpdate('remark', remark, 'Remark');
-
-            if (
-                (phase2Decision && phase2Decision !== 'None') ||
-                (typeof phase2InterviewerFeedback === 'string' && phase2InterviewerFeedback.trim())
-            ) {
-                compareAndUpdate('profileShared', true, 'Profile Shared');
+            if (phase2InterviewerFeedback !== undefined) {
+                compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
+            }
+            if (normalizedPhase2InterviewStatus !== undefined) {
+                compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
+            }
+            if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
+                candidate.profileShared = true;
+                updatedFields.push('Profile Shared');
             }
 
             if (hasRealResume(resumeUrl) && !hasRealResume(candidate.resumeUrl)) {
@@ -598,8 +802,8 @@ exports.createCandidate = async (req, res) => {
             resumePublicId,
             uploadedBy: req.user._id,
             candidateName,
-            email,
-            mobile,
+            email: normalizeCandidateEmail(email),
+            mobile: normalizeCandidateMobile(mobile),
             source: normalizedSource,
             referralName: normalizedReferralName,
             profilePulledBy,
@@ -607,9 +811,10 @@ exports.createCandidate = async (req, res) => {
             rate,
             currentCTC,
             expectedCTC,
-            profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()),
+            profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()) || Boolean(shouldMarkProfileSharedForPhase2),
             phase2Decision: phase2Decision || 'None',
             phase2InterviewerFeedback,
+            phase2InterviewStatus: normalizedPhase2InterviewStatus || 'None',
             inHandOffer: normalizedInHandOffer,
             offerCompany,
             offerCTC,
@@ -664,7 +869,7 @@ exports.createCandidate = async (req, res) => {
     } catch (error) {
         console.error('Error creating candidate:', error);
         if (error.code === 11000) {
-            return res.status(400).json({ message: 'A candidate with this email is already added to this hiring request' });
+            return res.status(409).json({ message: DUPLICATE_CANDIDATE_MESSAGE });
         }
         res.status(500).json({ message: 'Server error', error: error.message });
     }
@@ -685,7 +890,7 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
@@ -710,10 +915,15 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             .lean();
 
         const enrichedCandidates = await enrichCandidatesWithPublicProfiles(candidates, req.companyId);
+        const serializedCandidates = enrichedCandidates.map((candidate) => serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest
+        }));
 
         res.status(200).json({
-            count: enrichedCandidates.length,
-            candidates: enrichedCandidates
+            count: serializedCandidates.length,
+            candidates: serializedCandidates
         });
 
     } catch (error) {
@@ -740,7 +950,7 @@ exports.getShortlistedCandidates = async (req, res) => {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
@@ -760,17 +970,23 @@ exports.getShortlistedCandidates = async (req, res) => {
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName') // only pull what is necessary
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
-            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings')
+            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings phase2Decision phase2InterviewerFeedback phase2InterviewStatus')
             .sort({ uploadedAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
+        const serializedCandidates = candidates.map((candidate) => serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest
+        }));
+
         res.status(200).json({
             count: totalOptions,
             totalPages: Math.ceil(totalOptions / limit),
             currentPage: page,
-            candidates
+            candidates: serializedCandidates
         });
 
     } catch (error) {
@@ -845,7 +1061,7 @@ exports.getCandidateById = async (req, res) => {
 
         let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
 
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user);
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
         if (!hasHiringRequestAccess) {
             const interviewerOnly = await isInterviewerOnlyView({
@@ -862,7 +1078,12 @@ exports.getCandidateById = async (req, res) => {
             candidate = sanitizeCandidateForInterviewer(candidate);
         }
 
-        res.status(200).json(candidate);
+        res.status(200).json(serializeCandidateForViewer({
+            candidate,
+            user: req.user,
+            hiringRequest,
+            interviewerOnly: !hasHiringRequestAccess
+        }));
 
     } catch (error) {
         console.error('Error fetching candidate:', error);
@@ -910,8 +1131,9 @@ exports.updateCandidate = async (req, res) => {
             'profilePulledBy', 'calledBy', 'rate', 'currentCTC', 'expectedCTC', 'inHandOffer', 'offerCompany', 'offerCTC', 'offerJoiningDate',
             'preference', 'totalExperience', 'qualification', 'currentCompany', 'pastExperience',
             'currentLocation', 'preferredLocation', 'tatToJoin', 'noticePeriod',
-            'status', 'remark', 'decision', 'profileShared', 'phase2Decision', 'phase2InterviewerFeedback', 'phase3Decision', 'lastWorkingDay', 'resumeUrl', 'resumePublicId',
-            'mustHaveSkills', 'niceToHaveSkills'
+            'status', 'remark', 'lastWorkingDay',
+            'mustHaveSkills', 'niceToHaveSkills',
+            'phase2InterviewerFeedback', 'phase2InterviewStatus'
         ];
 
         if (updateData.source !== undefined) {
@@ -924,21 +1146,10 @@ exports.updateCandidate = async (req, res) => {
                 : '';
         }
 
-        if (updateData.profileShared !== undefined) {
-            updateData.profileShared = Boolean(updateData.profileShared);
-        }
-
         updateData.inHandOffer = Boolean(updateData.inHandOffer) ||
             hasMeaningfulOfferValue(updateData.offerCompany) ||
             hasMeaningfulOfferValue(updateData.offerCTC) ||
             hasMeaningfulOfferValue(updateData.offerJoiningDate);
-
-        if (
-            (updateData.phase2Decision && updateData.phase2Decision !== 'None') ||
-            (typeof updateData.phase2InterviewerFeedback === 'string' && updateData.phase2InterviewerFeedback.trim())
-        ) {
-            updateData.profileShared = true;
-        }
 
         if (updateData.mustHaveSkills !== undefined) {
             updateData.mustHaveSkills = normalizeSkillList(updateData.mustHaveSkills);
@@ -948,11 +1159,35 @@ exports.updateCandidate = async (req, res) => {
             updateData.niceToHaveSkills = normalizeSkillList(updateData.niceToHaveSkills);
         }
 
+        if (updateData.phase2InterviewStatus !== undefined) {
+            updateData.phase2InterviewStatus = normalizePhase2InterviewStatus(updateData.phase2InterviewStatus);
+            if (updateData.phase2InterviewStatus === null) {
+                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+            }
+        }
+
         allowedUpdates.forEach(field => {
             if (updateData[field] !== undefined) {
                 candidate[field] = updateData[field];
             }
         });
+
+        if (updateData.profileShared !== undefined) {
+            if (Boolean(updateData.profileShared)) {
+                candidate.profileShared = true;
+            } else if (hasCandidateMovedToPhase2(candidate)) {
+                return res.status(400).json({ message: 'Phase 2 candidates cannot be removed from the next phase using this action' });
+            } else {
+                candidate.profileShared = false;
+            }
+        }
+
+        if (
+            (updateData.phase2InterviewStatus && updateData.phase2InterviewStatus !== 'None')
+            || Boolean(String(updateData.phase2InterviewerFeedback || '').trim())
+        ) {
+            candidate.profileShared = true;
+        }
 
         await candidate.save();
 
@@ -1128,6 +1363,10 @@ exports.updateCandidateDecision = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        if (hasCandidateMovedToPhase2(candidate)) {
+            return res.status(400).json({ message: 'Phase 1 decision cannot be changed after the candidate has moved to Phase 2' });
+        }
+
         candidate.decision = decision;
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);
@@ -1172,6 +1411,11 @@ exports.updatePhase2Decision = async (req, res) => {
         candidate.phase2Decision = phase2Decision;
         if (phase2Decision === 'Shortlisted' || phase2Decision === 'Selected') {
             candidate.profileShared = true;
+            candidate.phase2InterviewStatus = 'Shortlisted';
+        } else if (phase2Decision === 'Rejected') {
+            candidate.phase2InterviewStatus = 'Rejected';
+        } else if (!phase2Decision || phase2Decision === 'None') {
+            candidate.phase2InterviewStatus = 'None';
         }
         await candidate.save();
 
@@ -1186,6 +1430,66 @@ exports.updatePhase2Decision = async (req, res) => {
 
     } catch (error) {
         console.error('Error updating Phase 2 decision:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// Move candidate back from Phase 2 to Phase 1
+exports.moveCandidateToPreviousPhase = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.SCHEDULE_INTERVIEW);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId: req.companyId });
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        if (isDynamicHiringRequest(hiringRequest)) {
+            return res.status(400).json({ message: 'Move back to previous phase is only available for the legacy phase flow' });
+        }
+
+        if (!hasCandidateMovedToPhase2(candidate)) {
+            return res.status(400).json({ message: 'Candidate is not currently in Phase 2' });
+        }
+
+        if (candidate.phase3Decision && candidate.phase3Decision !== 'None') {
+            return res.status(400).json({ message: 'Candidate cannot be moved back after progressing to Phase 3' });
+        }
+
+        if (candidate.isTransferredToOnboarding) {
+            return res.status(400).json({ message: 'Candidate cannot be moved back after being transferred to onboarding' });
+        }
+
+        candidate.profileShared = false;
+        candidate.phase2Decision = 'None';
+        candidate.phase2InterviewerFeedback = '';
+        candidate.phase2InterviewStatus = 'None';
+        candidate.interviewRounds = (candidate.interviewRounds || []).filter((round) => Number(round?.phase || 1) !== 2);
+
+        await candidate.save();
+
+        const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+            .populate('uploadedBy', 'firstName lastName email')
+            .populate('hiringRequestId', 'requestId roleDetails')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+        res.status(200).json({
+            message: 'Candidate moved back to Phase 1 successfully',
+            candidate: updatedCandidate
+        });
+    } catch (error) {
+        console.error('Error moving candidate back to previous phase:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
@@ -1205,9 +1509,19 @@ exports.updatePhase3Decision = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.MAKE_DECISION);
-        if (!hasAccess) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
+        const { hasAccess: hasDecisionAccess } = await ensureCandidateCapability(
+            candidate,
+            req.companyId,
+            req.user,
+            TA_CAPABILITIES.MAKE_DECISION
+        );
+
+        if (!hasDecisionAccess) {
+            return res.status(403).json({
+                message: requiredOfferPermission
+                    ? `Forbidden: You need ${requiredOfferPermission} or candidate decision access to set ${phase3Decision}`
+                    : 'Forbidden: You do not have permission to update this candidate'
+            });
         }
 
         candidate.phase3Decision = phase3Decision;
@@ -1335,7 +1649,7 @@ exports.addInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.SCHEDULE_INTERVIEW);
         if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
@@ -1409,7 +1723,7 @@ exports.updateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.SCHEDULE_INTERVIEW);
         if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
@@ -1665,7 +1979,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
 exports.evaluateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 (for Passed)
+        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 when provided
 
         if (!['Passed', 'Failed'].includes(status)) {
             return res.status(400).json({ message: 'Status must be Passed or Failed' });
@@ -1712,14 +2026,14 @@ exports.evaluateInterviewRound = async (req, res) => {
         round.evaluatedBy = req.user._id;
         round.evaluatedAt = new Date();
 
-        // Save rating only when the round is Passed
-        if (status === 'Passed' && rating !== undefined && rating !== null && rating !== '') {
+        // Save rating whenever a valid score is provided, regardless of pass/fail.
+        if (rating !== undefined && rating !== null && rating !== '') {
             const parsedRating = parseInt(rating, 10);
             if (parsedRating >= 1 && parsedRating <= 10) {
                 round.rating = parsedRating;
             }
-        } else if (status === 'Failed') {
-            round.rating = undefined; // Clear rating if changed to Failed
+        } else {
+            round.rating = undefined;
         }
 
         // Save round-specific skill ratings and update global ones

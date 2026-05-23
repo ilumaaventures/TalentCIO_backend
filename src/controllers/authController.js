@@ -15,6 +15,11 @@ const getAssignedClientNames = (user) => (
     )]
 );
 
+const hasDirectTAPermission = (permissions = []) => (
+    Array.isArray(permissions)
+    && permissions.some((permission) => permission === '*' || String(permission || '').startsWith('ta.'))
+);
+
 const getCompanyEmailBranding = async (companyId, company = null) => {
     const branding = await emailService.getCompanyBranding(companyId);
 
@@ -167,7 +172,6 @@ const loginUser = async (req, res) => {
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
-                        { 'ownership.recruiter': user._id },
                         { assignedUsers: user._id },
                         { 'ownership.interviewPanel': user._id },
                         ...(assignedClientNames.length > 0 ? [{ client: { $in: assignedClientNames } }] : [])
@@ -189,7 +193,6 @@ const loginUser = async (req, res) => {
                     $or: [
                         { createdBy: user._id },
                         { 'ownership.hiringManager': user._id },
-                        { 'ownership.recruiter': user._id },
                         { assignedUsers: user._id },
                         { 'ownership.interviewPanel': user._id },
                         ...(assignedClientNames.length > 0 ? [{ client: { $in: assignedClientNames } }] : [])
@@ -208,7 +211,9 @@ const loginUser = async (req, res) => {
 
         // Check if they are an interviewer via per-candidate round assignment (precise check)
         let isInterviewer = false;
-        if (taCount === 0 && !permissions.includes('ta.view') && !permissions.includes('*')) {
+        const hasTAAccessByPermission = hasDirectTAPermission(permissions);
+
+        if (taCount === 0 && !hasTAAccessByPermission) {
             const interviewCount = await Candidate.countDocuments({
                 'interviewRounds.assignedTo': user._id,
                 companyId: user.companyId
@@ -229,8 +234,8 @@ const loginUser = async (req, res) => {
             permissions: permissions,
             hasAllPermissions: hasAllPermissions,
             directReportsCount: directReportsCount,
-            isTAParticipant: taCount > 0 || isInterviewer,
-            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
+            isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
             company: company, // Full configuration for the frontend
             token: generateToken(user._id, user.tokenVersion)
         });

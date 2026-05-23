@@ -1,4 +1,5 @@
 const ADMIN_ROLE_NAMES = new Set(['Admin', 'HR', 'Super Admin', 'System Admin']);
+const { buildTABacHiringRequestConstraint, matchesTABacHiringRequest } = require('./taABAC');
 
 const normalizeClientName = (value) => String(value || '').trim().toLowerCase();
 
@@ -45,73 +46,179 @@ const isHiringRequestAdmin = (user) => {
     return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName)) || permissions.includes('*');
 };
 
-const buildAccessibleHiringRequestQuery = async (companyId, user) => {
-    const query = { companyId };
-
-    if (isHiringRequestAdmin(user)) {
-        return query;
-    }
-
-    query.$or = [
-        { createdBy: user?._id },
-        { 'ownership.hiringManager': user?._id },
-        { 'ownership.recruiter': user?._id },
-        { assignedUsers: user?._id },
-        { analyticsViewers: user?._id },
-        { 'ownership.interviewPanel': user?._id }
-    ];
-    const assignedClientNames = getAssignedClientNames(user);
-    if (assignedClientNames.length > 0) {
-        query.$or.push({ client: { $in: assignedClientNames } });
-    }
-
-    return query;
+const REQUISITION_GLOBAL_PERMISSION_MAP = {
+    view: ['ta.requisition.manage.all', 'ta.view', 'ta.analytics.global'],
+    create: ['ta.requisition.manage.all', 'ta.requisition.create', 'ta.create'],
+    edit: ['ta.requisition.manage.all', 'ta.requisition.update', 'ta.edit'],
+    delete: ['ta.requisition.manage.all', 'ta.requisition.delete', 'ta.delete'],
+    manage: ['ta.hiring_request.manage', 'ta.manage']
 };
 
-const canAccessHiringRequest = async (hiringRequest, companyId, user) => {
+const REQUISITION_ASSIGNED_PERMISSION_MAP = {
+    view: ['ta.requisition.manage.assigned', 'ta.requisition.read', 'ta.analytics.assigned'],
+    edit: ['ta.requisition.manage.assigned'],
+    delete: ['ta.requisition.manage.assigned']
+};
+
+const normalizeRequisitionAction = (action = 'view') => {
+    if (action === 'config_manage') return 'manage';
+    return action || 'view';
+};
+
+const hasGlobalRequisitionPermission = (user, action = 'view') => {
+    const permissions = getUserPermissionKeys(user);
+    if (permissions.includes('*')) {
+        return true;
+    }
+
+    const allowedPermissions = REQUISITION_GLOBAL_PERMISSION_MAP[normalizeRequisitionAction(action)] || [];
+    return allowedPermissions.some((permission) => permissions.includes(permission));
+};
+
+const hasAssignedRequisitionPermission = (user, action = 'view') => {
+    const permissions = getUserPermissionKeys(user);
+    const allowedPermissions = REQUISITION_ASSIGNED_PERMISSION_MAP[normalizeRequisitionAction(action)] || [];
+    return allowedPermissions.some((permission) => permissions.includes(permission));
+};
+
+const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) => {
+    const query = { companyId };
+    const action = normalizeRequisitionAction(options.action || 'view');
+
+    if (isHiringRequestAdmin(user) || hasGlobalRequisitionPermission(user, action)) {
+        const adminAbacConstraint = await buildTABacHiringRequestConstraint({
+            companyId,
+            user,
+            action
+        });
+
+        if (!adminAbacConstraint) {
+            return query;
+        }
+
+        return {
+            $and: [
+                query,
+                adminAbacConstraint
+            ]
+        };
+    }
+
+    if (!hasAssignedRequisitionPermission(user, action)) {
+        return {
+            $and: [
+                query,
+                { _id: { $in: [] } }
+            ]
+        };
+    }
+
+    const baseAccessQuery = { companyId, $or: [] };
+    if (action === 'view') {
+        baseAccessQuery.$or.push(
+            { createdBy: user?._id },
+            { 'ownership.hiringManager': user?._id },
+            { assignedUsers: user?._id },
+            { analyticsViewers: user?._id },
+            { 'ownership.interviewPanel': user?._id }
+        );
+    } else {
+        baseAccessQuery.$or.push(
+            { createdBy: user?._id },
+            { 'ownership.hiringManager': user?._id },
+            { assignedUsers: user?._id }
+        );
+    }
+    const assignedClientNames = getAssignedClientNames(user);
+    if (assignedClientNames.length > 0) {
+        baseAccessQuery.$or.push({ client: { $in: assignedClientNames } });
+    }
+
+    const abacConstraint = await buildTABacHiringRequestConstraint({
+        companyId,
+        user,
+        action
+    });
+
+    if (!abacConstraint) {
+        return baseAccessQuery;
+    }
+
+    return {
+        $and: [
+            baseAccessQuery,
+            abacConstraint
+        ]
+    };
+};
+
+const canAccessHiringRequest = async (hiringRequest, companyId, user, options = {}) => {
     if (!hiringRequest || !user?._id) {
         return false;
     }
 
-    if (isHiringRequestAdmin(user)) {
-        return true;
+    const action = normalizeRequisitionAction(options.action || 'view');
+
+    if (isHiringRequestAdmin(user) || hasGlobalRequisitionPermission(user, action)) {
+        return matchesTABacHiringRequest({
+            companyId,
+            user,
+            hiringRequest,
+            action
+        });
+    }
+
+    if (!hasAssignedRequisitionPermission(user, action)) {
+        return false;
     }
 
     const userId = String(user._id);
+    let hasBaseAccess = false;
     if (String(hiringRequest.createdBy?._id || hiringRequest.createdBy || '') === userId) {
-        return true;
+        hasBaseAccess = true;
     }
 
-    if (String(hiringRequest.ownership?.hiringManager?._id || hiringRequest.ownership?.hiringManager || '') === userId) {
-        return true;
-    }
-
-    if (String(hiringRequest.ownership?.recruiter?._id || hiringRequest.ownership?.recruiter || '') === userId) {
-        return true;
+    if (!hasBaseAccess && String(hiringRequest.ownership?.hiringManager?._id || hiringRequest.ownership?.hiringManager || '') === userId) {
+        hasBaseAccess = true;
     }
 
     const assignedUserIds = Array.isArray(hiringRequest.assignedUsers)
         ? hiringRequest.assignedUsers.map((assignedUser) => String(assignedUser?._id || assignedUser))
         : [];
-    if (assignedUserIds.includes(userId)) {
-        return true;
+    if (!hasBaseAccess && assignedUserIds.includes(userId)) {
+        hasBaseAccess = true;
     }
 
-    const analyticsViewerIds = Array.isArray(hiringRequest.analyticsViewers)
-        ? hiringRequest.analyticsViewers.map((viewer) => String(viewer?._id || viewer))
-        : [];
-    if (analyticsViewerIds.includes(userId)) {
-        return true;
+    if (action === 'view') {
+        const analyticsViewerIds = Array.isArray(hiringRequest.analyticsViewers)
+            ? hiringRequest.analyticsViewers.map((viewer) => String(viewer?._id || viewer))
+            : [];
+        if (!hasBaseAccess && analyticsViewerIds.includes(userId)) {
+            hasBaseAccess = true;
+        }
+
+        const interviewPanelIds = Array.isArray(hiringRequest.ownership?.interviewPanel)
+            ? hiringRequest.ownership.interviewPanel.map((panelUser) => String(panelUser?._id || panelUser))
+            : [];
+        if (!hasBaseAccess && interviewPanelIds.includes(userId)) {
+            hasBaseAccess = true;
+        }
     }
 
-    const interviewPanelIds = Array.isArray(hiringRequest.ownership?.interviewPanel)
-        ? hiringRequest.ownership.interviewPanel.map((panelUser) => String(panelUser?._id || panelUser))
-        : [];
-    if (interviewPanelIds.includes(userId)) {
-        return true;
+    if (!hasBaseAccess) {
+        hasBaseAccess = hasAssignedClientAccess(hiringRequest, user);
     }
 
-    return hasAssignedClientAccess(hiringRequest, user);
+    if (!hasBaseAccess) {
+        return false;
+    }
+
+    return matchesTABacHiringRequest({
+        companyId,
+        user,
+        hiringRequest,
+        action
+    });
 };
 
 module.exports = {

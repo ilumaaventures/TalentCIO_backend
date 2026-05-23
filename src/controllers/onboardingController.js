@@ -30,7 +30,10 @@ const {
 const syncTADecision = async (employee, decision) => {
     if (!employee.sourcedFromTA || !employee.candidateId) return;
     try {
-        await Candidate.findByIdAndUpdate(employee.candidateId, { phase3Decision: decision });
+        await Candidate.findOneAndUpdate(
+            { _id: employee.candidateId, companyId: employee.companyId },
+            { phase3Decision: decision }
+        );
     } catch (err) {
         console.error('[syncTADecision] Failed to sync TA decision:', err.message);
     }
@@ -64,9 +67,40 @@ const formatCurrency = (val) => {
 
 const DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT = 'Action Required: Complete Your Pre-Onboarding';
 const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
-    <p>Hello <strong>{{firstName}}</strong>,</p>
-    <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 22px;">Pre-Onboarding Action Required</h1>
+            <p style="color: #e0e7ff; margin-top: 8px; font-size: 14px;">Please complete the following items on your portal</p>
+        </div>
+        <div style="padding: 32px;">
+            <div style="font-size: 14px; line-height: 1.6;">
+                <p>Hello <strong>{{firstName}}</strong>,</p>
+                <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
+            </div>
+            {{credentialsSection}}
+            {{requestedSectionsBlock}}
+            {{requestedDocumentsBlock}}
+            {{sharedFilesBlock}}
+            {{deadlineBlock}}
+            <div style="text-align: center; margin: 28px 0;">
+                {{portalButton}}
+            </div>
+        </div>
+        <div style="background: #f1f5f9; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">
+            &copy; {{currentYear}} TalentCio. All rights reserved.
+        </div>
+    </div>
 `;
+
+const ONBOARDING_LAYOUT_PLACEHOLDERS = [
+    'credentialsSection',
+    'requestedSectionsBlock',
+    'requestedDocumentsBlock',
+    'sharedFilesBlock',
+    'deadlineBlock',
+    'portalButton',
+    'currentYear'
+];
 
 const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -95,9 +129,16 @@ const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
 const buildPreOnboardingTemplateData = ({
     employee,
     companyName,
-    recruiterName,
+    taContactName,
     portalUrl,
-    deadlineText
+    deadlineText,
+    credentialsSection = '',
+    requestedSectionsBlock = '',
+    requestedDocumentsBlock = '',
+    sharedFilesBlock = '',
+    deadlineBlock = '',
+    portalButton = '',
+    currentYear = String(new Date().getFullYear())
 }) => ({
     candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
     firstName: employee.firstName || '',
@@ -121,7 +162,7 @@ const buildPreOnboardingTemplateData = ({
     location: employee.location || '',
     managerName: employee.reportingManagerName || '',
     managerEmail: employee.reportingManagerEmail || '',
-    recruiterName: recruiterName || 'HR Team',
+    recruiterName: taContactName || 'HR Team',
     companyName: companyName || 'TalentCIO',
     requestId: employee.tempEmployeeId || '',
     currentStatus: employee.status || '',
@@ -133,7 +174,14 @@ const buildPreOnboardingTemplateData = ({
     employeeId: employee.tempEmployeeId || '',
     joiningDate: formatDate(employee.joiningDate),
     submissionDeadline: deadlineText || '',
-    portalLink: portalUrl || ''
+    portalLink: portalUrl || '',
+    credentialsSection,
+    requestedSectionsBlock,
+    requestedDocumentsBlock,
+    sharedFilesBlock,
+    deadlineBlock,
+    portalButton,
+    currentYear
 });
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
@@ -199,6 +247,7 @@ exports.addEmployee = async (req, res) => {
         const employee = new OnboardingEmployee({
             tempEmployeeId,
             tempPassword: rawPassword,
+            pendingCredentialPassword: rawPassword,
             firstName,
             lastName: lastName || '',
             email,
@@ -266,7 +315,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             return res.status(400).json({ message: 'Please select at least one section or document' });
         }
 
-        const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId });
+        const employee = await OnboardingEmployee
+            .findOne({ _id: req.params.id, companyId: req.companyId })
+            .select('+pendingCredentialPassword');
         if (!employee) {
             return res.status(404).json({ message: 'Employee not found' });
         }
@@ -337,11 +388,14 @@ exports.sendPreOnboardingEmail = async (req, res) => {
 
         // Credentials Logic - include original ID and password (regenerate if not changed yet)
         let credentialsHtml = '';
-        let rawPassword = '';
+        let rawPassword = employee.pendingCredentialPassword || '';
         if (employee.isPasswordChanged === false) {
-            rawPassword = generateTempPassword();
-            employee.tempPassword = rawPassword; // Hooks will hash it
-            await employee.save();
+            if (!rawPassword) {
+                rawPassword = generateTempPassword();
+                employee.tempPassword = rawPassword; // Hooks will hash it
+                employee.pendingCredentialPassword = rawPassword;
+                await employee.save();
+            }
             credentialsHtml = `
                 <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 24px 0;">
                     <h3 style="color: #1e293b; font-size: 15px; margin: 0 0 12px; font-weight: 700;">🔑 Your Login Credentials</h3>
@@ -451,18 +505,33 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         }
 
         const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
-        const recruiterName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const taContactName = `${req.user?.firstName || ''} ${req.user?.lastName || ''}`.trim() || 'HR Team';
+        const deadlineBlock = `
+            <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #92400e;">
+                <strong>Submission Deadline:</strong> ${deadlineStr}
+            </div>
+        `;
+        const portalButton = `<a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Pre-Onboarding Portal</a>`;
         const templateData = buildPreOnboardingTemplateData({
             employee,
             companyName,
-            recruiterName,
+            taContactName,
             portalUrl,
-            deadlineText: deadlineStr
+            deadlineText: deadlineStr,
+            credentialsSection: credentialsHtml,
+            requestedSectionsBlock: sectionsHtml,
+            requestedDocumentsBlock: documentsHtml,
+            sharedFilesBlock: sharedFilesHtml,
+            deadlineBlock,
+            portalButton
         });
         const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
+        const usesFullTemplateLayout = ONBOARDING_LAYOUT_PLACEHOLDERS.some((placeholder) =>
+            new RegExp(`\\{\\{\\s*${placeholder}\\s*\\}\\}`).test(bodyTemplate)
+        );
         const introHtml = renderTemplateBody(bodyTemplate, templateData);
 
-        const emailHtml = `
+        let emailHtml = `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
                 <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
                     <h1 style="color: white; margin: 0; font-size: 22px;">Pre-Onboarding Action Required</h1>
@@ -491,6 +560,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 </div>
             </div>
         `;
+        if (usesFullTemplateLayout) {
+            emailHtml = renderTemplateBody(bodyTemplate, templateData);
+        }
         const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
         const attachments = selectedCustomDocuments.map((doc) => ({
             filename: doc.label,
@@ -530,7 +602,10 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             await syncTADecision(employee, 'Offer Sent');
         }
 
-        res.json({ message: 'Pre-onboarding email sent successfully', employee });
+        const employeeResponse = employee.toObject();
+        delete employeeResponse.pendingCredentialPassword;
+
+        res.json({ message: 'Pre-onboarding email sent successfully', employee: employeeResponse });
     } catch (error) {
         console.error('Error sending pre-onboarding email:', error);
         res.status(500).json({ message: 'Failed to send email', error: error.message });
@@ -748,6 +823,7 @@ exports.bulkAddEmployees = async (req, res) => {
                 const employee = new OnboardingEmployee({
                     tempEmployeeId,
                     tempPassword: rawPassword,
+                    pendingCredentialPassword: rawPassword,
                     firstName: emp.firstName,
                     lastName: emp.lastName || '',
                     email: emp.email,
@@ -918,11 +994,16 @@ exports.updateEmployee = async (req, res) => {
 // --- Regenerate temporary credentials ---
 exports.regenerateCredentials = async (req, res) => {
     try {
-        const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId });
+        const employee = await OnboardingEmployee
+            .findOne({ _id: req.params.id, companyId: req.companyId })
+            .select('+pendingCredentialPassword');
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
         const newPassword = Math.random().toString(36).slice(-8);
         employee.tempPassword = newPassword;
+        employee.pendingCredentialPassword = newPassword;
+        employee.isPasswordChanged = false;
+        employee.passwordChangedAt = undefined;
 
         // Reset expiry to 7 days from now
         const expiry = new Date();
@@ -1154,12 +1235,16 @@ exports.employeeLogin = async (req, res) => {
 
         // Fetch the corresponding company if the frontend provides a tenant ID
         let query = { tempEmployeeId };
-        const tenantId = req.headers['x-tenant-id'];
+        const tenantSlug = String(req.company?.subdomain || req.headers['x-tenant-id'] || req.query?.tenant || '').trim().toLowerCase();
 
-        if (tenantId) {
-            const company = await Company.findOne({ tenantId });
+        if (req.companyId) {
+            query.companyId = req.companyId;
+        } else if (tenantSlug) {
+            const company = await Company.findOne({ subdomain: tenantSlug }).select('_id subdomain');
             if (company) {
                 query.companyId = company._id;
+                req.companyId = company._id;
+                req.company = company;
             }
         }
 
@@ -1183,7 +1268,13 @@ exports.employeeLogin = async (req, res) => {
 
         // Check expiry
         if (employee.credentialsExpireAt && new Date() > new Date(employee.credentialsExpireAt)) {
-            return res.status(401).json({ message: 'Your credentials have expired. Please contact HR.' });
+            const workspaceSubdomain = req.company?.subdomain
+                || (await Company.findById(employee.companyId).select('subdomain').lean())?.subdomain
+                || '';
+            return res.status(401).json({
+                message: 'Your credentials have expired. Please contact HR.',
+                workspaceSubdomain
+            });
         }
 
         // Verify password
@@ -1256,6 +1347,7 @@ exports.changePassword = async (req, res) => {
 
         const employee = req.onboardingEmployee;
         employee.tempPassword = newPassword;
+        employee.pendingCredentialPassword = '';
         employee.isPasswordChanged = true;
         employee.passwordChangedAt = new Date();
         employee.auditLog.push({ action: 'PASSWORD_CHANGE', details: 'Password changed on first login' });
@@ -1541,28 +1633,6 @@ exports.submitOnboarding = async (req, res) => {
                 type: 'Info',
                 link: '/onboarding'
             });
-
-            // Notify HR via email
-            if (employee.createdBy.email) {
-                const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmailForCompany({
-                    companyId: employee.companyId,
-                    to: employee.createdBy.email,
-                    subject: `Onboarding Submitted: ${employee.firstName} ${employee.lastName}`,
-                    html: `
-                        <div style="font-family: Arial, sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                            <h2 style="color: #2563eb;">Onboarding Submission Received</h2>
-                            <p>Hello <strong>${employee.createdBy.firstName}</strong>,</p>
-                            <p><strong>${employee.firstName} ${employee.lastName}</strong> (${employee.tempEmployeeId}) has completed and submitted their pre-onboarding portal form and documents.</p>
-                            <p>Please log in to the HR Portal to review the submission.</p>
-                            <div style="margin-top: 24px; text-align: center;">
-                                <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/onboarding" style="background: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review Submission</a>
-                            </div>
-                        </div>
-                    `,
-                    ...branding
-                });
-            }
         }
 
         res.status(200).json({
@@ -2593,8 +2663,28 @@ exports.requestCredentialRegeneration = async (req, res) => {
             return res.status(400).json({ message: 'Employee ID is required' });
         }
 
-        // Allow looking up without auth since they are locked out
-        const employee = await OnboardingEmployee.findOne({ tempEmployeeId });
+        let companyId = req.companyId;
+        const tenantSlug = String(req.company?.subdomain || req.headers['x-tenant-id'] || req.query?.tenant || '').trim().toLowerCase();
+
+        if (!companyId && tenantSlug) {
+            const company = await Company.findOne({ subdomain: tenantSlug }).select('_id subdomain').lean();
+            if (company) {
+                companyId = company._id;
+                req.companyId = company._id;
+            }
+        }
+
+        let employee = null;
+        if (companyId) {
+            employee = await OnboardingEmployee.findOne({ tempEmployeeId, companyId });
+        } else {
+            const matches = await OnboardingEmployee.find({ tempEmployeeId });
+            if (matches.length > 1) {
+                return res.status(400).json({ message: 'Workspace context is required. Please use your workspace login link and try again.' });
+            }
+            employee = matches[0] || null;
+        }
+
         if (!employee) {
             return res.status(404).json({ message: 'Employee not found' });
         }

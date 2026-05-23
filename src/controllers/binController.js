@@ -9,8 +9,36 @@ const {
     moveEntityToBin,
     purgeDeletedDocument
 } = require('../services/binService');
+const Company = require('../models/Company');
+const User = require('../models/User');
 
 const ENTITY_POPULATE_FIELDS = 'firstName lastName email';
+
+const enforceUserRestorePlanLimit = async (companyId, action, hasConflictingItem) => {
+    if (String(action || '').trim().toLowerCase() === 'replace' && hasConflictingItem) {
+        return null;
+    }
+
+    const company = await Company.findById(companyId).populate('planId');
+    if (!company?.planId?.maxUsers) {
+        return null;
+    }
+
+    const activeUserCount = await User.countDocuments({ companyId, isActive: true });
+    if (activeUserCount >= company.planId.maxUsers) {
+        return {
+            status: 403,
+            body: {
+                message: `Cannot restore user. Your company already has ${activeUserCount} active users, 
+                which meets the current plan limit of ${company.planId.maxUsers}. 
+                Move an active user to the recycle bin, deactivate one, 
+                or upgrade the plan before restoring this user.`
+            }
+        };
+    }
+
+    return null;
+};
 
 const restoreEntityTree = async (entity, item, req) => {
     const entityKey = String(entity || '').toLowerCase();
@@ -112,6 +140,7 @@ exports.restoreItem = async (req, res) => {
     try {
         const { entity, id } = req.params;
         const action = String(req.body?.action || '').trim().toLowerCase();
+        const entityKey = String(entity || '').toLowerCase();
         const Model = getEntityModel(entity);
         if (!Model) {
             return res.status(400).json({ message: `Unknown entity type: ${entity}` });
@@ -137,6 +166,17 @@ exports.restoreItem = async (req, res) => {
             }
 
             await moveEntityToBin(entity, conflictingItem, req.user?._id, req.companyId);
+        }
+
+        if (entityKey === 'user') {
+            const planLimitBlock = await enforceUserRestorePlanLimit(
+                req.companyId,
+                action,
+                Boolean(conflictingItem)
+            );
+            if (planLimitBlock) {
+                return res.status(planLimitBlock.status).json(planLimitBlock.body);
+            }
         }
 
         await item.restore();

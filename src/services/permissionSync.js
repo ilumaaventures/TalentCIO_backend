@@ -7,11 +7,22 @@ const LEGACY_PERMISSION_REPLACEMENTS = {
     'ta.application.update': 'ta.candidate.manage.assigned',
     'ta.application.delete': 'ta.candidate.manage.assigned',
     'ta.application.manage.assigned': 'ta.candidate.manage.assigned',
-    'ta.application.manage.all': 'ta.candidate.manage.all'
+    'ta.application.manage.all': 'ta.candidate.manage.all',
+    'ta.candidate.view.client_name': 'ta.requisition.view.client_name',
+    'ta.client.confidential.view': 'ta.requisition.view.client_name',
+    'ta.candidate.view.pii': 'ta.candidate.sensitive.view',
+    'ta.candidate.resume.download': 'ta.resume.download',
+    'ta.candidate.evaluate_round': 'ta.interview.evaluate',
+    'ta.config.manage': 'ta.config.edit',
+    'ta.offer.create': 'ta.candidate.make_decision',
+    'ta.offer.view': 'ta.candidate.make_decision',
+    'ta.offer.approve': 'ta.candidate.make_decision',
+    'ta.offer.revoke': 'ta.candidate.make_decision'
 };
 
 const LEGACY_REMOVED_PERMISSION_KEYS = [
     'ta.analytics.requisition',
+    'ta.interview.schedule',
     ...Object.keys(LEGACY_PERMISSION_REPLACEMENTS)
 ];
 

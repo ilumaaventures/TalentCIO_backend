@@ -24,13 +24,21 @@ const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
 const { buildTimesheetPeriodRange } = require('../utils/timesheetPeriod');
 
-const LEGACY_HIDDEN_PERMISSION_KEYS = new Set(['ta.analytics.requisition']);
+const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
+    'ta.analytics.requisition',
+    'ta.client.confidential.view',
+    'ta.offer.create',
+    'ta.offer.view',
+    'ta.offer.approve',
+    'ta.offer.revoke'
+]);
 
 const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
+    !permission.key.startsWith('onboarding.');
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
@@ -793,6 +801,7 @@ exports.getRoleBootstrap = async (req, res) => {
                 else if (curr.key.startsWith('timesheet.')) groupName = 'TIMESHEETS';
                 else if (curr.key.startsWith('attendance.')) groupName = 'ATTENDANCE';
                 else if (curr.key.startsWith('ta.')) groupName = 'TALENT ACQUISITION';
+                else if (curr.key.startsWith('onboarding.')) groupName = 'ONBOARDING';
                 else if (curr.key.startsWith('helpdesk.')) groupName = 'HELP DESK';
                 else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
                 else if (curr.key.startsWith('dossier.')) groupName = 'EMPLOYEE DOSSIER';

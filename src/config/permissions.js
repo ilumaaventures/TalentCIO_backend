@@ -285,9 +285,24 @@ module.exports = [
         description: "View performance analytics for the entire TA module"
     },
     {
+        key: "ta.analytics.assigned",
+        module: "TA",
+        description: "View analytics for assigned or explicitly shared TA requisitions"
+    },
+    {
         key: "ta.candidate.view",
         module: "TA",
         description: "View candidates through requisition or interviewer access rules"
+    },
+    {
+        key: "ta.requisition.view.client_name",
+        module: "TA",
+        description: "View confidential client names on TA requisitions"
+    },
+    {
+        key: "ta.candidate.sensitive.view",
+        module: "TA",
+        description: "View sensitive candidate personal details such as email and mobile"
     },
     {
         key: "ta.candidate.edit",
@@ -295,7 +310,7 @@ module.exports = [
         description: "Edit candidate records for accessible requisitions"
     },
     {
-        key: "ta.candidate.evaluate_round",
+        key: "ta.interview.evaluate",
         module: "TA",
         description: "Evaluate assigned interview rounds without full candidate edit access"
     },
@@ -320,9 +335,24 @@ module.exports = [
         description: "Manage all TA candidates with workspace-wide access"
     },
     {
-        key: "ta.config.manage",
+        key: "ta.config.view",
         module: "TA",
-        description: "Manage TA configuration such as workflows, templates, and access settings"
+        description: "View TA workflows, templates, and access settings in read-only mode"
+    },
+    {
+        key: "ta.config.edit",
+        module: "TA",
+        description: "Create, edit, and manage TA workflows, templates, and access settings"
+    },
+    {
+        key: "ta.resume.download",
+        module: "TA",
+        description: "Download candidate resumes for accessible requisitions"
+    },
+    {
+        key: "ta.interview.feedback.view_all",
+        module: "TA",
+        description: "View all interviewer feedback on accessible candidates"
     },
     {
         key: "ta.manage",
@@ -348,6 +378,11 @@ module.exports = [
         key: "ta.requisition.delete",
         module: "TA",
         description: "Delete TA requisitions you can access"
+    },
+    {
+        key: "ta.requisition.view.budget",
+        module: "TA",
+        description: "View budget and compensation range details on accessible requisitions"
     },
     {
         key: "ta.requisition.manage.assigned",
@@ -401,5 +436,30 @@ module.exports = [
         key: "onboarding.manage",
         module: "ONBOARDING",
         description: "Manage onboarding candidates and details"
+    },
+    {
+        key: "onboarding.view",
+        module: "ONBOARDING",
+        description: "View onboarding candidates and dashboard details"
+    },
+    {
+        key: "onboarding.document.review",
+        module: "ONBOARDING",
+        description: "Review, approve, and flag onboarding documents"
+    },
+    {
+        key: "onboarding.document.request",
+        module: "ONBOARDING",
+        description: "Request onboarding documents and send onboarding communications"
+    },
+    {
+        key: "onboarding.credential.manage",
+        module: "ONBOARDING",
+        description: "Manage onboarding credentials, deadlines, and extension handling"
+    },
+    {
+        key: "onboarding.complete",
+        module: "ONBOARDING",
+        description: "Complete onboarding and transfer candidates to active employees"
     }
 ];

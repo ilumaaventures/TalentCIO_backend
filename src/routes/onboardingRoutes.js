@@ -28,11 +28,20 @@ const protectOnboarding = async (req, res, next) => {
                 return res.status(401).json({ message: 'Employee not found' });
             }
 
+            if (decoded.companyId && String(decoded.companyId) !== String(employee.companyId)) {
+                return res.status(401).json({ message: 'Tenant validation failed' });
+            }
+
+            if (req.companyId && String(req.companyId) !== String(employee.companyId)) {
+                return res.status(401).json({ message: 'Workspace validation failed' });
+            }
+
             // Check credential expiry
             if (employee.credentialsExpireAt && new Date() > new Date(employee.credentialsExpireAt)) {
                 return res.status(401).json({ message: 'Credentials expired' });
             }
 
+            req.companyId = employee.companyId;
             req.onboardingEmployee = employee;
             next();
         } catch (error) {
@@ -49,7 +58,27 @@ const protectOnboarding = async (req, res, next) => {
 // ==========================================
 // HR ADMIN ROUTES (Protected + Admin)
 // ==========================================
-const requireOnboarding = authorize('onboarding.manage');
+const ONBOARDING_VIEW_PERMISSIONS = [
+    'onboarding.view',
+    'onboarding.document.review',
+    'onboarding.document.request',
+    'onboarding.credential.manage',
+    'onboarding.complete',
+    'onboarding.manage'
+];
+const ONBOARDING_REQUEST_PERMISSIONS = ['onboarding.document.request', 'onboarding.manage'];
+const ONBOARDING_REVIEW_PERMISSIONS = ['onboarding.document.review', 'onboarding.manage'];
+const ONBOARDING_CREDENTIAL_PERMISSIONS = ['onboarding.credential.manage', 'onboarding.manage'];
+const ONBOARDING_COMPLETE_PERMISSIONS = ['onboarding.complete', 'onboarding.manage'];
+
+const requireOnboardingView = authorize(ONBOARDING_VIEW_PERMISSIONS);
+const requireOnboardingRequest = authorize(ONBOARDING_REQUEST_PERMISSIONS);
+const requireOnboardingReview = authorize(ONBOARDING_REVIEW_PERMISSIONS);
+const requireOnboardingCredentialManage = authorize(ONBOARDING_CREDENTIAL_PERMISSIONS);
+const requireOnboardingComplete = authorize(ONBOARDING_COMPLETE_PERMISSIONS);
+const requireOnboardingRequestOrCredentialManage = authorize([
+    ...new Set([...ONBOARDING_REQUEST_PERMISSIONS, ...ONBOARDING_CREDENTIAL_PERMISSIONS])
+]);
 
 const handleCustomFileUpload = (req, res, next) => {
     uploadOnboardingCustomFiles.array('documents', 10)(req, res, (err) => {
@@ -63,39 +92,39 @@ const handleCustomFileUpload = (req, res, next) => {
     });
 };
 
-router.post('/employees', protect, requireOnboarding, onboardingController.addEmployee);
-router.post('/employees/bulk', protect, requireOnboarding, onboardingController.bulkAddEmployees);
-router.get('/bootstrap', protect, requireOnboarding, getOnboardingBootstrap);
-router.get('/employees', protect, requireOnboarding, onboardingController.getOnboardingList);
-router.get('/employees/:id', protect, requireOnboarding, onboardingController.getOnboardingEmployee);
-router.patch('/employees/:id', protect, requireOnboarding, onboardingController.updateEmployee);
-router.post('/employees/:id/custom-files', protect, requireOnboarding, handleCustomFileUpload, onboardingController.addCustomFiles);
-router.delete('/employees/:id/custom-files/:docId', protect, requireOnboarding, onboardingController.deleteCustomFile);
-router.post('/employees/:id/regenerate-credentials', protect, requireOnboarding, onboardingController.regenerateCredentials);
-router.post('/employees/:id/send-onboarding-email', protect, requireOnboarding, onboardingController.sendPreOnboardingEmail);
-router.post('/employees/:id/send-custom-file', protect, requireOnboarding, handleCustomFileUpload, onboardingController.sendCustomFile);
-router.patch('/employees/:id/documents/:docId/flag', protect, requireOnboarding, onboardingController.flagDocument);
-router.patch('/employees/:id/documents/:docId/approve', protect, requireOnboarding, onboardingController.approveDocument);
-router.post('/employees/:id/extension/:extId/resolve', protect, requireOnboarding, onboardingController.resolveExtensionRequest);
-router.get('/employees/:id/download', protect, requireOnboarding, onboardingController.downloadAllDocuments);
-router.get('/employees/:id/offer-letter', protect, requireOnboarding, onboardingController.generateOfferLetter);
-router.get('/employees/:id/declaration', protect, requireOnboarding, onboardingController.generateDeclaration);
-router.get('/employees/:id/dynamic-template/:templateId', protect, requireOnboarding, onboardingController.generateDynamicTemplate);
-router.post('/employees/:id/transfer-to-active', protect, requireOnboarding, onboardingController.transferToActiveEmployee);
+router.post('/employees', protect, requireOnboardingRequest, onboardingController.addEmployee);
+router.post('/employees/bulk', protect, requireOnboardingRequest, onboardingController.bulkAddEmployees);
+router.get('/bootstrap', protect, requireOnboardingView, getOnboardingBootstrap);
+router.get('/employees', protect, requireOnboardingView, onboardingController.getOnboardingList);
+router.get('/employees/:id', protect, requireOnboardingView, onboardingController.getOnboardingEmployee);
+router.patch('/employees/:id', protect, requireOnboardingRequestOrCredentialManage, onboardingController.updateEmployee);
+router.post('/employees/:id/custom-files', protect, requireOnboardingRequest, handleCustomFileUpload, onboardingController.addCustomFiles);
+router.delete('/employees/:id/custom-files/:docId', protect, requireOnboardingRequest, onboardingController.deleteCustomFile);
+router.post('/employees/:id/regenerate-credentials', protect, requireOnboardingCredentialManage, onboardingController.regenerateCredentials);
+router.post('/employees/:id/send-onboarding-email', protect, requireOnboardingRequest, onboardingController.sendPreOnboardingEmail);
+router.post('/employees/:id/send-custom-file', protect, requireOnboardingRequest, handleCustomFileUpload, onboardingController.sendCustomFile);
+router.patch('/employees/:id/documents/:docId/flag', protect, requireOnboardingReview, onboardingController.flagDocument);
+router.patch('/employees/:id/documents/:docId/approve', protect, requireOnboardingReview, onboardingController.approveDocument);
+router.post('/employees/:id/extension/:extId/resolve', protect, requireOnboardingCredentialManage, onboardingController.resolveExtensionRequest);
+router.get('/employees/:id/download', protect, requireOnboardingReview, onboardingController.downloadAllDocuments);
+router.get('/employees/:id/offer-letter', protect, requireOnboardingRequest, onboardingController.generateOfferLetter);
+router.get('/employees/:id/declaration', protect, requireOnboardingRequest, onboardingController.generateDeclaration);
+router.get('/employees/:id/dynamic-template/:templateId', protect, requireOnboardingRequest, onboardingController.generateDynamicTemplate);
+router.post('/employees/:id/transfer-to-active', protect, requireOnboardingComplete, onboardingController.transferToActiveEmployee);
 
 // --- Settings & Templates ---
-router.get('/settings', protect, requireOnboarding, onboardingController.getOnboardingSettings);
-router.post('/settings/templates', protect, requireOnboarding, onboardingController.updateTemplate);
-router.post('/settings/templates/upload', protect, requireOnboarding, upload.single('document'), onboardingController.uploadAndSetTemplate);
-router.post('/settings/templates/dynamic/upload', protect, requireOnboarding, upload.single('document'), onboardingController.addDynamicTemplate);
-router.delete('/settings/templates/dynamic/:templateId', protect, requireOnboarding, onboardingController.deleteDynamicTemplate);
-router.get('/settings/templates/:type/preview', protect, requireOnboarding, onboardingController.getTemplatePreview);
-router.delete('/settings/templates/:type', protect, requireOnboarding, onboardingController.deleteBaseTemplate);
-router.get('/settings/templates/:type/download', protect, requireOnboarding, onboardingController.downloadTemplate);
+router.get('/settings', protect, requireOnboardingView, onboardingController.getOnboardingSettings);
+router.post('/settings/templates', protect, requireOnboardingRequest, onboardingController.updateTemplate);
+router.post('/settings/templates/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.uploadAndSetTemplate);
+router.post('/settings/templates/dynamic/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addDynamicTemplate);
+router.delete('/settings/templates/dynamic/:templateId', protect, requireOnboardingRequest, onboardingController.deleteDynamicTemplate);
+router.get('/settings/templates/:type/preview', protect, requireOnboardingView, onboardingController.getTemplatePreview);
+router.delete('/settings/templates/:type', protect, requireOnboardingRequest, onboardingController.deleteBaseTemplate);
+router.get('/settings/templates/:type/download', protect, requireOnboardingView, onboardingController.downloadTemplate);
 
 // --- Policies ---
-router.post('/settings/policies/upload', protect, requireOnboarding, upload.single('document'), onboardingController.addPolicy);
-router.delete('/settings/policies/:policyId', protect, requireOnboarding, onboardingController.deletePolicy);
+router.post('/settings/policies/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addPolicy);
+router.delete('/settings/policies/:policyId', protect, requireOnboardingRequest, onboardingController.deletePolicy);
 
 // ==========================================
 // EMPLOYEE SELF-SERVICE ROUTES (Public / Onboarding Token)

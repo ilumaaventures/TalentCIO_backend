@@ -4,6 +4,7 @@ const TEMPLATE_PLACEHOLDERS = [
     'lastName',
     'fullName',
     'email',
+    'phone',
     'workEmail',
     'mobile',
     'phoneNumber',
@@ -11,6 +12,10 @@ const TEMPLATE_PLACEHOLDERS = [
     'designation',
     'client',
     'department',
+    'offerDate',
+    'dateOfOffer',
+    'workLocation',
+    'employmentDetails',
     'location',
     'managerName',
     'managerEmail',
@@ -26,7 +31,14 @@ const TEMPLATE_PLACEHOLDERS = [
     'employeeId',
     'joiningDate',
     'submissionDeadline',
-    'portalLink'
+    'portalLink',
+    'credentialsSection',
+    'requestedSectionsBlock',
+    'requestedDocumentsBlock',
+    'sharedFilesBlock',
+    'deadlineBlock',
+    'portalButton',
+    'currentYear'
 ];
 
 const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
@@ -59,7 +71,14 @@ const ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
     'joiningDate',
     'workLocation',
     'submissionDeadline',
-    'portalLink'
+    'portalLink',
+    'credentialsSection',
+    'requestedSectionsBlock',
+    'requestedDocumentsBlock',
+    'sharedFilesBlock',
+    'deadlineBlock',
+    'portalButton',
+    'currentYear'
 ];
 
 const getSupportedPlaceholderTokens = (placeholders = TEMPLATE_PLACEHOLDERS) => placeholders.map((placeholder) => `{{${placeholder}}}`);

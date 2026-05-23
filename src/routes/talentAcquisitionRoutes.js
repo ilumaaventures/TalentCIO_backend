@@ -10,6 +10,8 @@ const PublicApplication = require('../models/PublicApplication');
 const Candidate = require('../models/Candidate');
 const { HiringRequest: HiringRequestModel } = require('../models/HiringRequest');
 const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
+const { hasAssignedTAAnalyticsAccess, hasGlobalTAAnalyticsAccess } = require('../utils/taAnalyticsAccess');
+const { authorizeHiringRequestApproval } = require('../middlewares/authorizeHiringRequestApproval');
 
 const APPLICANT_REVIEW_SELECT = [
     'firstName',
@@ -48,18 +50,46 @@ const APPLICANT_REVIEW_SELECT = [
     'updatedAt'
 ].join(' ');
 
+const taAccessSettingsViewPermissions = ['ta.manage', 'ta.config.view', 'ta.config.edit'];
+const taAccessSettingsEditPermissions = ['ta.manage', 'ta.config.edit'];
+const requireTAAnalyticsAccess = async (req, res, next) => {
+    try {
+        if (hasAssignedTAAnalyticsAccess(req.user)) {
+            return next();
+        }
+
+        const hasAssignedAnalyticsAccess = await HiringRequestModel.exists({
+            companyId: req.companyId,
+            analyticsViewers: req.user._id
+        });
+
+        if (hasAssignedAnalyticsAccess) {
+            return next();
+        }
+
+        return res.status(403).json({
+            message: 'Forbidden: You do not have permission to access TA analytics'
+        });
+    } catch (error) {
+        return res.status(500).json({
+            message: 'Failed to validate TA analytics access'
+        });
+    }
+};
+
 router.use(protect);
 router.use(requireModule('talentAcquisition'));
 
 // Hiring Requests
-router.post('/hiring-request', protect, authorizeAny(['ta.create']), taController.createHiringRequest);
+router.post('/hiring-request', protect, authorizeAny(['ta.requisition.create', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.create']), taController.createHiringRequest);
 router.get('/hiring-request', protect, taController.getHiringRequests);
 router.get('/hiring-requests/:id/phases', protect, taController.getHiringRequestPhases);
 router.get('/hiring-request/:id', protect, taController.getHiringRequestById);
-router.put('/hiring-request/:id', protect, authorizeAny(['ta.edit']), taController.updateHiringRequest);
-router.patch('/hiring-request/:id/approve', protect, authorizeAny(['ta.hiring_request.manage', 'ta.super_approve']), taController.approveHiringRequest);
-router.patch('/hiring-request/:id/reject', protect, authorizeAny(['ta.hiring_request.manage', 'ta.super_approve']), taController.rejectHiringRequest);
-router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.hiring_request.manage']), taController.closeHiringRequest);
+router.put('/hiring-request/:id', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit']), taController.updateHiringRequest);
+router.delete('/hiring-request/:id', protect, authorizeAny(['ta.requisition.delete', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.delete']), taController.deleteHiringRequest);
+router.patch('/hiring-request/:id/approve', protect, authorizeHiringRequestApproval, taController.approveHiringRequest);
+router.patch('/hiring-request/:id/reject', protect, authorizeHiringRequestApproval, taController.rejectHiringRequest);
+router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.manage', 'ta.hiring_request.manage']), taController.closeHiringRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
@@ -68,18 +98,18 @@ router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.can
 router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
 
 // Analytics
-router.get('/analytics/global', protect, taController.getGlobalAnalytics);
-router.get('/analytics/client/:clientName', protect, taController.getClientAnalytics);
+router.get('/analytics/global', protect, requireTAAnalyticsAccess, taController.getGlobalAnalytics);
+router.get('/analytics/client/:clientName', protect, requireTAAnalyticsAccess, taController.getClientAnalytics);
 
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);
 
 // TA access settings
-router.get('/settings/access/overview', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.getOverview);
-router.put('/settings/access/roles/:roleId', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRolePermissions);
-router.put('/settings/access/requisitions/:id', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateRequisitionAccess);
-router.put('/settings/access/users/:userId/clients', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateUserClientAssignments);
-router.put('/settings/access/clients/assignments', protect, authorizeAny(['ta.config.manage', 'ta.edit', 'role.update', 'role.create']), taAccessSettingsController.updateClientUserAssignments);
+router.get('/settings/access/overview', protect, authorizeAny(taAccessSettingsViewPermissions), taAccessSettingsController.getOverview);
+router.put('/settings/access/roles/:roleId', protect, authorizeAny(taAccessSettingsEditPermissions), taAccessSettingsController.updateRolePermissions);
+router.put('/settings/access/requisitions/:id', protect, authorizeAny(taAccessSettingsEditPermissions), taAccessSettingsController.updateRequisitionAccess);
+router.put('/settings/access/users/:userId/clients', protect, authorizeAny(taAccessSettingsEditPermissions), taAccessSettingsController.updateUserClientAssignments);
+router.put('/settings/access/clients/assignments', protect, authorizeAny(taAccessSettingsEditPermissions), taAccessSettingsController.updateClientUserAssignments);
 
 // File Uploads
 router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taController.uploadJDFile);
@@ -203,13 +233,24 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
             return res.status(404).json({ message: 'Target hiring request not found or not active' });
         }
 
-        const existing = await Candidate.findOne({
-            hiringRequestId: targetRequestId,
-            email: app.email
-        });
+        const duplicateCandidateConditions = [];
+        if (app.email) {
+            duplicateCandidateConditions.push({ email: String(app.email).trim().toLowerCase() });
+        }
+        if (app.mobile) {
+            duplicateCandidateConditions.push({ mobile: String(app.mobile).trim() });
+        }
+
+        const existing = duplicateCandidateConditions.length
+            ? await Candidate.findOne({
+                companyId: req.companyId,
+                hiringRequestId: targetRequestId,
+                $or: duplicateCandidateConditions
+            })
+            : null;
 
         if (existing) {
-            return res.status(409).json({ message: `${app.email} already exists as a candidate in that request.` });
+            return res.status(409).json({ message: 'This candidate already exists in the system.' });
         }
 
         const candidate = new Candidate({
@@ -222,8 +263,8 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
             resumePublicId: app.resumePublicId,
             uploadedBy: req.user._id,
             candidateName: app.candidateName,
-            email: app.email,
-            mobile: app.mobile,
+            email: String(app.email || '').trim().toLowerCase(),
+            mobile: String(app.mobile || '').trim(),
             source: 'Public Job Board',
             profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
             currentCTC: app.currentCTC,
@@ -253,7 +294,7 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         });
     } catch (err) {
         if (err.code === 11000) {
-            return res.status(409).json({ message: 'This applicant already exists as a candidate in that request.' });
+            return res.status(409).json({ message: 'This candidate already exists in the system.' });
         }
 
         console.error(err);
@@ -261,6 +302,6 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
     }
 });
 
-router.patch('/hiring-request/:id/visibility', protect, authorizeAny(['ta.config.manage', 'ta.edit']), taController.toggleJobVisibility);
+router.patch('/hiring-request/:id/visibility', protect, authorizeAny(['ta.manage', 'ta.config.edit', 'ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all']), taController.toggleJobVisibility);
 
 module.exports = router;

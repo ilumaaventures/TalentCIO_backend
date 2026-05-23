@@ -64,6 +64,11 @@ const isProtectedPrimaryAdminUser = async (user, companyId) => {
     });
 };
 
+const hasDirectTAPermission = (permissions = []) => (
+    Array.isArray(permissions)
+    && permissions.some((permission) => permission === '*' || String(permission || '').startsWith('ta.'))
+);
+
 // @desc    Get All Users
 // @route   GET /api/users
 // @access  Private (Admin) 
@@ -312,7 +317,6 @@ const getMyself = async (req, res) => {
                 $or: [
                     { createdBy: req.user._id },
                     { 'ownership.hiringManager': req.user._id },
-                    { 'ownership.recruiter': req.user._id },
                     { assignedUsers: req.user._id },
                     { 'ownership.interviewPanel': req.user._id },
                     ...(getAssignedClientNames(req.user).length > 0 ? [{ client: { $in: getAssignedClientNames(req.user) } }] : [])
@@ -340,7 +344,9 @@ const getMyself = async (req, res) => {
         let isInterviewer = false;
 
         // Final concurrent batch for TA/Interviewer checks if not already determined
-        if (taCount === 0 && !permissions.includes('ta.view') && !permissions.includes('*')) {
+        const hasTAAccessByPermission = hasDirectTAPermission(permissions);
+
+        if (taCount === 0 && !hasTAAccessByPermission) {
             const interviewCount = await Candidate.countDocuments({
                 'interviewRounds.assignedTo': req.user._id,
                 companyId: effectiveCompanyId
@@ -373,8 +379,8 @@ const getMyself = async (req, res) => {
             hasAllPermissions,
             directReports: subordinates,
             directReportsCount,
-            isTAParticipant: taCount > 0 || isInterviewer,
-            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.global') || permissions.includes('*'),
+            isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
+            isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
             company: company  // Always includes enabledModules
         });
     } catch (error) {
@@ -427,11 +433,10 @@ const debugTA = async (req, res) => {
             $or: [
                 { createdBy: req.user._id },
                 { 'ownership.hiringManager': req.user._id },
-                { 'ownership.recruiter': req.user._id },
                 { assignedUsers: req.user._id },
                 ...(getAssignedClientNames(req.user).length > 0 ? [{ client: { $in: getAssignedClientNames(req.user) } }] : [])
             ]
-        }).select('requestId createdBy ownership.hiringManager ownership.recruiter assignedUsers').lean();
+        }).select('requestId createdBy ownership.hiringManager assignedUsers').lean();
 
         const panelHRRs = await HiringRequest.find({ 'ownership.interviewPanel': req.user._id, companyId: req.companyId }).select('requestId').lean();
 
