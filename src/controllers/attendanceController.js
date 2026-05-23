@@ -346,7 +346,7 @@ exports.getAttendanceByMonth = async (req, res) => {
             query.date = { $gte: start, $lt: end };
         }
         const history = await Attendance.find(query)
-            .select('date clockIn clockInIST clockOut clockOutIST duration status user')
+            .select('date clockIn clockInIST clockOut clockOutIST duration status user approvalStatus approvedBy')
             .populate('user', 'firstName lastName')
             .sort({ date: -1 })
             .lean();
