@@ -493,19 +493,29 @@ const getPendingTimesheets = async (req, res) => {
             const cycle = ts.submissionCycle || req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
             const { start, end } = buildTimesheetPeriodRange(ts.month, cycle);
 
-            const workLogs = await WorkLog.find({
-                user: ts.user._id,
-                companyId: req.companyId,
-                date: { $gte: start, $lte: end }
-            }).populate({
-                path: 'task',
-                select: 'name module',
-                populate: {
-                    path: 'module',
-                    select: 'name project',
-                    populate: { path: 'project', select: 'name' }
-                }
-            }).sort({ date: 1 }).lean();
+            const [workLogs, attendanceLog] = await Promise.all([
+                WorkLog.find({
+                    user: ts.user._id,
+                    companyId: req.companyId,
+                    date: { $gte: start, $lte: end }
+                }).populate({
+                    path: 'task',
+                    select: 'name module',
+                    populate: {
+                        path: 'module',
+                        select: 'name project',
+                        populate: { path: 'project', select: 'name' }
+                    }
+                }).sort({ date: 1 }).lean(),
+                Attendance.find({
+                    user: ts.user._id,
+                    companyId: req.companyId,
+                    date: { $gte: start, $lte: end }
+                })
+                    .select('date clockIn clockOut clockInIST clockOutIST attendanceMode status approvalStatus rejectionReason')
+                    .sort({ date: 1 })
+                    .lean()
+            ]);
 
             const entries = workLogs.map(log => ({
                 _id: log._id,
@@ -522,7 +532,8 @@ const getPendingTimesheets = async (req, res) => {
 
             return {
                 ...(ts.toObject ? ts.toObject() : ts),
-                entries
+                entries,
+                attendanceLog
             };
         }));
 
@@ -571,17 +582,45 @@ const approveTimesheet = async (req, res) => {
 
         if (status === 'REJECTED' && type === 'PARTIAL') {
             if (rejectedEntryIds.length === 0) {
-                return res.status(400).json({ message: 'Select at least one timesheet entry to reject.' });
+                return res.status(400).json({ message: 'Select at least one timesheet item to reject.' });
             }
 
-            const scopedRejectedEntries = await WorkLog.find({
-                _id: { $in: rejectedEntryIds },
-                user: targetUser._id,
-                companyId: req.companyId,
-                date: { $gte: start, $lte: end }
-            }).select('_id').lean();
+            const workLogIds = rejectedEntryIds
+                .filter((entryId) => String(entryId).startsWith('worklog:'))
+                .map((entryId) => String(entryId).slice('worklog:'.length));
+            const attendanceIds = rejectedEntryIds
+                .filter((entryId) => String(entryId).startsWith('attendance:'))
+                .map((entryId) => String(entryId).slice('attendance:'.length));
 
-            if (scopedRejectedEntries.length !== rejectedEntryIds.length) {
+            const unscopedIds = rejectedEntryIds.filter((entryId) => {
+                const normalized = String(entryId);
+                return !normalized.startsWith('worklog:') && !normalized.startsWith('attendance:');
+            });
+
+            if (unscopedIds.length > 0) {
+                return res.status(400).json({ message: 'One or more selected items are invalid.' });
+            }
+
+            const [scopedRejectedEntries, scopedRejectedAttendance] = await Promise.all([
+                workLogIds.length > 0
+                    ? WorkLog.find({
+                        _id: { $in: workLogIds },
+                        user: targetUser._id,
+                        companyId: req.companyId,
+                        date: { $gte: start, $lte: end }
+                    }).select('_id').lean()
+                    : Promise.resolve([]),
+                attendanceIds.length > 0
+                    ? Attendance.find({
+                        _id: { $in: attendanceIds },
+                        user: targetUser._id,
+                        companyId: req.companyId,
+                        date: { $gte: start, $lte: end }
+                    }).select('_id').lean()
+                    : Promise.resolve([])
+            ]);
+
+            if ((scopedRejectedEntries.length + scopedRejectedAttendance.length) !== rejectedEntryIds.length) {
                 return res.status(400).json({ message: 'One or more selected entries are outside this timesheet period.' });
             }
 
@@ -589,15 +628,30 @@ const approveTimesheet = async (req, res) => {
             timesheet.approver = req.user._id;
             timesheet.rejectionReason = "Partial Rejection: " + reason;
 
-            await WorkLog.updateMany(
-                {
-                    _id: { $in: rejectedEntryIds },
-                    user: targetUser._id,
-                    companyId: req.companyId,
-                    date: { $gte: start, $lte: end }
-                },
-                { $set: { status: 'REJECTED', rejectionReason: reason } }
-            );
+            await Promise.all([
+                workLogIds.length > 0
+                    ? WorkLog.updateMany(
+                        {
+                            _id: { $in: workLogIds },
+                            user: targetUser._id,
+                            companyId: req.companyId,
+                            date: { $gte: start, $lte: end }
+                        },
+                        { $set: { status: 'REJECTED', rejectionReason: reason } }
+                    )
+                    : Promise.resolve(),
+                attendanceIds.length > 0
+                    ? Attendance.updateMany(
+                        {
+                            _id: { $in: attendanceIds },
+                            user: targetUser._id,
+                            companyId: req.companyId,
+                            date: { $gte: start, $lte: end }
+                        },
+                        { $set: { approvalStatus: 'REJECTED', rejectionReason: reason } }
+                    )
+                    : Promise.resolve()
+            ]);
 
         } else {
             timesheet.status = status;
@@ -605,17 +659,30 @@ const approveTimesheet = async (req, res) => {
             if (reason) timesheet.rejectionReason = reason;
 
             const entryStatus = status === 'APPROVED' ? 'APPROVED' : 'REJECTED';
-            const updateDoc = { status: entryStatus };
-            if (status === 'REJECTED') updateDoc.rejectionReason = reason;
+            const workLogUpdateDoc = { status: entryStatus };
+            if (status === 'REJECTED') workLogUpdateDoc.rejectionReason = reason;
 
-            await WorkLog.updateMany(
-                {
-                    user: targetUser._id,
-                    companyId: req.companyId,
-                    date: { $gte: start, $lte: end }
-                },
-                { $set: updateDoc }
-            );
+            const attendanceUpdateDoc = { approvalStatus: entryStatus };
+            if (status === 'REJECTED') attendanceUpdateDoc.rejectionReason = reason;
+
+            await Promise.all([
+                WorkLog.updateMany(
+                    {
+                        user: targetUser._id,
+                        companyId: req.companyId,
+                        date: { $gte: start, $lte: end }
+                    },
+                    { $set: workLogUpdateDoc }
+                ),
+                Attendance.updateMany(
+                    {
+                        user: targetUser._id,
+                        companyId: req.companyId,
+                        date: { $gte: start, $lte: end }
+                    },
+                    { $set: attendanceUpdateDoc }
+                )
+            ]);
         }
 
         await timesheet.save();

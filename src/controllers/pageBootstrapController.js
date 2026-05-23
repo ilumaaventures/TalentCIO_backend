@@ -481,14 +481,18 @@ exports.getTimesheetBootstrap = async (req, res) => {
             }
         }
 
-        const { start, end } = getMonthRange(year, month);
+        const company = await Company.findById(req.companyId)
+            .select('settings.attendance.weeklyOff settings.timesheet.approvalCycle')
+            .lean();
+        const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
         const usersListPromise = canLoadUserList(req.user)
             ? isAdminUser(req.user) || req.user?.permissions?.includes('timesheet.view') || req.user?.permissions?.includes('*')
                 ? User.find({ companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
                 : User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
             : Promise.resolve([]);
 
-        const [timesheet, projects, holidays, usersList] = await Promise.all([
+        const [timesheet, projects, holidays, approvedLeaves, usersList] = await Promise.all([
             getTimesheetDocument({
                 requestUser: req.user,
                 companyId: req.companyId,
@@ -507,6 +511,16 @@ exports.getTimesheetBootstrap = async (req, res) => {
                 .select('name date isOptional')
                 .sort({ date: 1 })
                 .lean(),
+            LeaveRequest.find({
+                user: targetUserId,
+                companyId: req.companyId,
+                status: 'Approved',
+                startDate: { $lte: end },
+                endDate: { $gte: start }
+            })
+                .select('leaveType startDate endDate isHalfDay halfDaySession reason status createdAt daysCount')
+                .sort({ startDate: 1, createdAt: -1 })
+                .lean(),
             usersListPromise
         ]);
 
@@ -515,6 +529,7 @@ exports.getTimesheetBootstrap = async (req, res) => {
             attendanceLogs: timesheet.attendanceLog || [],
             projects,
             holidays,
+            approvedLeaves,
             weeklyOff: timesheet.weeklyOff || ['Sunday'],
             usersList
         });
