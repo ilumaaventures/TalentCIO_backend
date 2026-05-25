@@ -16,43 +16,43 @@ const { getProjectBootstrap } = require('../controllers/pageBootstrapController'
 router.use(protect);
 
 // Helpers
-router.get('/bootstrap', requireModule('projectManagement'), getProjectBootstrap);
-router.get('/employees', requireModule('projectManagement'), getEmployees);
+router.get('/bootstrap', requireModule('projects'), getProjectBootstrap);
+router.get('/employees', requireModule('projects'), getEmployees);
 
 // Business Units
-router.get('/business-units', authorize('business_unit.read'), requireModule('projectManagement'), getBusinessUnits);
-router.post('/business-units', authorize('business_unit.create'), requireModule('projectManagement'), createBusinessUnit);
-router.put('/business-units/:id', authorize('business_unit.update'), requireModule('projectManagement'), updateBusinessUnit);
+router.get('/business-units', authorize('business_unit.read'), requireModule('businessUnits'), getBusinessUnits);
+router.post('/business-units', authorize('business_unit.create'), requireModule('businessUnits'), createBusinessUnit);
+router.put('/business-units/:id', authorize('business_unit.update'), requireModule('businessUnits'), updateBusinessUnit);
 
 // Clients
-router.get('/clients', authorizeAny(['client.read', 'client.create', 'client.update']), requireModule(['projectManagement', 'timesheet', 'attendance']), getClients);
-router.post('/clients', authorize('client.create'), requireModule('projectManagement'), createClient);
-router.put('/clients/:id', authorize('client.update'), requireModule('projectManagement'), updateClient);
+router.get('/clients', authorizeAny(['client.read', 'client.create', 'client.update']), requireModule(['clients', 'projects', 'timesheet', 'attendance']), getClients);
+router.post('/clients', authorize('client.create'), requireModule('clients'), createClient);
+router.put('/clients/:id', authorize('client.update'), requireModule('clients'), updateClient);
 
 // Projects
-router.get('/:id/hierarchy', requireModule(['projectManagement', 'timesheet', 'attendance']), getProjectHierarchy);
-router.get('/', requireModule(['projectManagement', 'timesheet', 'attendance']), getProjects);
-router.post('/', authorize('project.create'), requireModule('projectManagement'), createProject);
-router.put('/:id', authorize('project.update'), requireModule('projectManagement'), updateProject);
-router.delete('/:id', authorize('project.delete'), requireModule('projectManagement'), deleteProject);
+router.get('/:id/hierarchy', requireModule(['projects', 'timesheet', 'attendance']), getProjectHierarchy);
+router.get('/', requireModule(['projects', 'timesheet', 'attendance']), getProjects);
+router.post('/', authorize('project.create'), requireModule('projects'), createProject);
+router.put('/:id', authorize('project.update'), requireModule('projects'), updateProject);
+router.delete('/:id', authorize('project.delete'), requireModule('projects'), deleteProject);
 
 // Modules
-router.get('/:projectId/modules', requireModule(['projectManagement', 'timesheet', 'attendance']), getModules);
-router.post('/modules', authorize('project.create'), requireModule('projectManagement'), createModule);
-router.put('/modules/:id', authorize('project.update'), requireModule('projectManagement'), updateModule);
-router.delete('/modules/:id', authorize('module.delete'), requireModule('projectManagement'), deleteModule);
+router.get('/:projectId/modules', requireModule(['projects', 'timesheet', 'attendance']), getModules);
+router.post('/modules', authorize('project.create'), requireModule('projects'), createModule);
+router.put('/modules/:id', authorize('project.update'), requireModule('projects'), updateModule);
+router.delete('/modules/:id', authorize('module.delete'), requireModule('projects'), deleteModule);
 
 // Tasks
-router.get('/tasks', requireModule(['projectManagement', 'timesheet', 'attendance']), getTasks); // /api/projects/tasks?moduleId=...
-router.post('/tasks', authorize('task.create'), requireModule('projectManagement'), createTask);
-router.put('/tasks/:id', authorize('task.update'), requireModule('projectManagement'), updateTask);
-router.delete('/tasks/:id', authorize('task.delete'), requireModule('projectManagement'), deleteTask);
+router.get('/tasks', requireModule(['projects', 'timesheet', 'attendance']), getTasks); // /api/projects/tasks?moduleId=...
+router.post('/tasks', authorize('task.create'), requireModule('projects'), createTask);
+router.put('/tasks/:id', authorize('task.update'), requireModule('projects'), updateTask);
+router.delete('/tasks/:id', authorize('task.delete'), requireModule('projects'), deleteTask);
 
 // Work Logs
 const { logWork, getWorkLogs, updateWorkLog, deleteWorkLog } = require('../controllers/workLogController');
-router.post('/tasks/:taskId/log', requireModule(['projectManagement', 'timesheet', 'attendance']), logWork);
-router.get('/worklogs', requireModule(['projectManagement', 'timesheet', 'attendance']), getWorkLogs);
-router.put('/worklogs/:id', requireModule(['projectManagement', 'timesheet', 'attendance']), updateWorkLog);
-router.delete('/worklogs/:id', requireModule(['projectManagement', 'timesheet', 'attendance']), deleteWorkLog);
+router.post('/tasks/:taskId/log', requireModule(['projects', 'timesheet', 'attendance']), logWork);
+router.get('/worklogs', requireModule(['projects', 'timesheet', 'attendance']), getWorkLogs);
+router.put('/worklogs/:id', requireModule(['projects', 'timesheet', 'attendance']), updateWorkLog);
+router.delete('/worklogs/:id', requireModule(['projects', 'timesheet', 'attendance']), deleteWorkLog);
 
 module.exports = router;

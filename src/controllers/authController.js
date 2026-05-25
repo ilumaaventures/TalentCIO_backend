@@ -4,6 +4,7 @@ const Candidate = require('../models/Candidate');
 const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
 const crypto = require('crypto');
+const { normalizeEnabledModules } = require('../utils/enabledModules');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -221,7 +222,10 @@ const loginUser = async (req, res) => {
             isInterviewer = interviewCount > 0;
         }
 
-        const company = await require('../models/Company').findById(user.companyId);
+        const company = await require('../models/Company').findById(user.companyId).lean();
+        const normalizedCompany = company
+            ? { ...company, enabledModules: normalizeEnabledModules(company.enabledModules || []) }
+            : null;
 
         res.json({
             _id: user._id,
@@ -236,7 +240,7 @@ const loginUser = async (req, res) => {
             directReportsCount: directReportsCount,
             isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
             isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
-            company: company, // Full configuration for the frontend
+            company: normalizedCompany, // Full configuration for the frontend
             token: generateToken(user._id, user.tokenVersion)
         });
     } catch (error) {

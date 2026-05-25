@@ -22,7 +22,7 @@ const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
-const { buildTimesheetPeriodRange } = require('../utils/timesheetPeriod');
+const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
     'ta.analytics.requisition',
@@ -307,7 +307,7 @@ exports.getAttendanceBootstrap = async (req, res) => {
             }
         }
 
-        const companyPromise = Company.findById(req.companyId).select('settings.attendance').lean();
+        const companyPromise = Company.findById(req.companyId).select('settings.attendance settings.timesheet.approvalCycle').lean();
         const historyPromise = Attendance.find({
             companyId: req.companyId,
             user: targetUserId,
@@ -361,6 +361,16 @@ exports.getAttendanceBootstrap = async (req, res) => {
             recentLogsPromise
         ]);
 
+        const approvalCycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(start, approvalCycle);
+        const timesheetSummary = await Timesheet.findOne({
+            user: targetUserId,
+            companyId: req.companyId,
+            month: periodId
+        })
+            .select('month status submittedAt updatedAt rejectionReason')
+            .lean();
+
         res.json({
             status: viewingSelf ? (status || { status: 'Not Clocked In' }) : null,
             history,
@@ -368,7 +378,14 @@ exports.getAttendanceBootstrap = async (req, res) => {
             approvedLeaves,
             recentLogs,
             weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'],
-            attendanceSettings: company?.settings?.attendance || {}
+            attendanceSettings: company?.settings?.attendance || {},
+            timesheetSummary: timesheetSummary || {
+                month: periodId,
+                status: 'DRAFT',
+                submittedAt: null,
+                updatedAt: null,
+                rejectionReason: ''
+            }
         });
     } catch (error) {
         console.error('getAttendanceBootstrap error:', error);

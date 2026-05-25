@@ -4,6 +4,7 @@ const { HiringRequest } = require('../models/HiringRequest');
 const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const Permission = require('../models/Permission');
+const { normalizeEnabledModules } = require('../utils/enabledModules');
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
 
@@ -354,6 +355,13 @@ const getMyself = async (req, res) => {
             isInterviewer = interviewCount > 0;
         }
 
+        const normalizedCompany = company
+            ? {
+                ...(company.toObject ? company.toObject() : company),
+                enabledModules: normalizeEnabledModules(company.enabledModules || [])
+            }
+            : company;
+
         res.json({
             // Core identity
             _id: req.user._id,
@@ -381,7 +389,7 @@ const getMyself = async (req, res) => {
             directReportsCount,
             isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
             isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
-            company: company  // Always includes enabledModules
+            company: normalizedCompany  // Always includes enabledModules
         });
     } catch (error) {
         console.error(error);

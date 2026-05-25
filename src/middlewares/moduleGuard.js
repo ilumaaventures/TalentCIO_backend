@@ -1,4 +1,5 @@
 const Company = require('../models/Company');
+const { hasEnabledModule, normalizeEnabledModules } = require('../utils/enabledModules');
 
 /**
  * Middleware factory that checks if a specific module is enabled for the requesting tenant.
@@ -33,8 +34,8 @@ const requireModule = (moduleIds) => async (req, res, next) => {
             return res.status(403).json({ message: 'This workspace is suspended.' });
         }
 
-        const enabledModules = company.enabledModules || [];
-        const isEnabled = idsToCheck.some(id => enabledModules.includes(id));
+        const enabledModules = normalizeEnabledModules(company.enabledModules || []);
+        const isEnabled = idsToCheck.some(id => hasEnabledModule(enabledModules, id));
 
         if (!isEnabled) {
             return res.status(403).json({
