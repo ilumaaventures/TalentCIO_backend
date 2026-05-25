@@ -70,28 +70,71 @@ const hasDirectTAPermission = (permissions = []) => (
     && permissions.some((permission) => permission === '*' || String(permission || '').startsWith('ta.'))
 );
 
+const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode';
+
+const buildUsersListQuery = (companyId, includeDeleted = false) => (
+    User.find(
+        { companyId },
+        null,
+        includeDeleted ? { includeDeleted: true } : undefined
+    )
+        .select(USER_LIST_SELECT)
+        .populate({
+            path: 'roles',
+            select: 'name isSystem permissions',
+            populate: { path: 'permissions', select: 'key' }
+        })
+        .populate('reportingManagers', 'firstName lastName email')
+        .populate('employeeProfile', 'hris')
+);
+
 // @desc    Get All Users
 // @route   GET /api/users
 // @access  Private (Admin) 
 const getUsers = async (req, res) => {
     try {
         const includeDeleted = req.query.includeDeleted === 'true';
-        const users = await User.find(
-            { companyId: req.companyId },
-            null,
-            includeDeleted ? { includeDeleted: true } : undefined
-        )
-            .select('firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
-            .populate({
-                path: 'roles',
-                select: 'name isSystem permissions',
-                populate: { path: 'permissions', select: 'key' }
-            })
-            .populate('reportingManagers', 'firstName lastName email')
-            .populate('employeeProfile', 'hris')
-            .lean();
+        const parsedPage = Number.parseInt(req.query.page, 10);
+        const parsedLimit = Number.parseInt(req.query.limit, 10);
+        const hasPagination = Number.isFinite(parsedPage) || Number.isFinite(parsedLimit);
+
+        if (!hasPagination) {
+            const users = await buildUsersListQuery(req.companyId, includeDeleted).lean();
+            const usersWithFlags = await attachPrimaryAdminFlags(users, req.companyId);
+            return res.json(usersWithFlags);
+        }
+
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+            ? Math.min(parsedLimit, 100)
+            : 15;
+        const skip = (page - 1) * limit;
+
+        const totalQuery = User.countDocuments({ companyId: req.companyId });
+        if (includeDeleted) {
+            totalQuery.setOptions({ includeDeleted: true });
+        }
+
+        const [users, total] = await Promise.all([
+            buildUsersListQuery(req.companyId, includeDeleted)
+                .sort({ joiningDate: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            totalQuery
+        ]);
+
         const usersWithFlags = await attachPrimaryAdminFlags(users, req.companyId);
-        res.json(usersWithFlags);
+
+        return res.json({
+            users: usersWithFlags,
+            total,
+            page,
+            limit,
+            totalPages: Math.max(Math.ceil(total / limit), 1),
+            hasNextPage: skip + usersWithFlags.length < total,
+            hasPreviousPage: page > 1
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
