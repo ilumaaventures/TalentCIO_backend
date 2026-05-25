@@ -207,17 +207,16 @@ exports.deleteEmailTemplate = async (req, res) => {
             return res.status(400).json({ message: 'Invalid template ID.' });
         }
 
-        const template = await EmailTemplate.findOneAndUpdate(
-            buildScopedTemplateQuery(req, { _id: req.params.id }),
-            { $set: { isActive: false } },
-            { new: true }
-        ).lean();
+        const template = await EmailTemplate.findOne(buildScopedTemplateQuery(req, { _id: req.params.id }));
 
         if (!template) {
             return res.status(404).json({ message: 'Email template not found.' });
         }
 
-        res.status(200).json({ message: 'Email template archived successfully.', template });
+        template.isActive = false;
+        await template.softDelete(req.user?._id);
+
+        res.status(200).json({ message: 'Email template moved to recycle bin successfully.', template });
     } catch (error) {
         console.error('deleteEmailTemplate error:', error);
         res.status(500).json({ message: 'Failed to delete email template', error: error.message });

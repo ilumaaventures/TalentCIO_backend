@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
 
 const emailTemplateSchema = new mongoose.Schema({
     companyId: {
@@ -51,5 +52,7 @@ const emailTemplateSchema = new mongoose.Schema({
 
 emailTemplateSchema.index({ companyId: 1, scope: 1, templateType: 1, isActive: 1, updatedAt: -1 });
 emailTemplateSchema.index({ companyId: 1, scope: 1, templateType: 1, name: 1 });
+emailTemplateSchema.index({ companyId: 1, isDeleted: 1 });
+emailTemplateSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('EmailTemplate', emailTemplateSchema);

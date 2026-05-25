@@ -67,29 +67,51 @@ const formatCurrency = (val) => {
 
 const DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT = 'Action Required: Complete Your Pre-Onboarding';
 const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
-    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-        <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 32px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 22px;">Pre-Onboarding Action Required</h1>
-            <p style="color: #e0e7ff; margin-top: 8px; font-size: 14px;">Please complete the following items on your portal</p>
-        </div>
-        <div style="padding: 32px;">
-            <div style="font-size: 14px; line-height: 1.6;">
-                <p>Hello <strong>{{firstName}}</strong>,</p>
-                <p>Your HR team has requested that you complete the following items on the pre-onboarding portal before your joining date.</p>
-            </div>
-            {{credentialsSection}}
-            {{requestedSectionsBlock}}
-            {{requestedDocumentsBlock}}
-            {{sharedFilesBlock}}
-            {{deadlineBlock}}
-            <div style="text-align: center; margin: 28px 0;">
-                {{portalButton}}
-            </div>
-        </div>
-        <div style="background: #f1f5f9; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">
-            &copy; {{currentYear}} TalentCio. All rights reserved.
-        </div>
-    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; margin:0 auto; border:1px solid #e2e8f0; border-radius:12px; background:#ffffff;">
+        <tr>
+            <td style="padding:0;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0f172a;">
+                    <tr>
+                        <td align="center" style="padding:32px 24px 28px;">
+                            <div style="display:inline-block; background:#334155; color:#dbeafe; padding:8px 16px; border-radius:999px; font-size:12px; letter-spacing:1px; text-transform:uppercase; font-weight:600;">
+                                Pre-Onboarding Portal
+                            </div>
+                            <div style="height:20px; line-height:20px; font-size:20px;">&nbsp;</div>
+                            <div style="color:#ffffff; font-size:22px; line-height:28px; font-weight:700;">
+                                Action Required
+                            </div>
+                            <div style="height:12px; line-height:12px; font-size:12px;">&nbsp;</div>
+                            <div style="max-width:460px; margin:0 auto; color:#cbd5e1; font-size:14px; line-height:24px;">
+                                Complete your pending onboarding tasks and upload the requested information before your joining date.
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding:32px;">
+                <div style="color:#0f172a; font-size:18px; line-height:28px; font-weight:600; margin:0 0 12px;">
+                    Hello {{firstName}},
+                </div>
+                <div style="color:#475569; font-size:14px; line-height:26px; margin:0 0 28px;">
+                    Your HR team has shared a few onboarding requirements that need your attention. Please review the items below and complete them through your employee portal.
+                </div>
+                <div style="margin-bottom:22px;">{{credentialsSection}}</div>
+                <div style="margin-bottom:22px;">{{requestedSectionsBlock}}</div>
+                <div style="margin-bottom:22px;">{{requestedDocumentsBlock}}</div>
+                <div style="margin-bottom:22px;">{{sharedFilesBlock}}</div>
+                <div style="margin-bottom:30px;">{{deadlineBlock}}</div>
+                <div style="text-align:center; margin-top:28px;">{{portalButton}}</div>
+            </td>
+        </tr>
+        <tr>
+            <td style="background:#f1f5f9; padding:16px; text-align:center; border-top:1px solid #e2e8f0;">
+                <div style="margin:0 0 8px; color:#0f172a; font-size:14px; font-weight:600;">TalentCio</div>
+                <div style="margin:0; color:#94a3b8; font-size:12px;">&copy; {{currentYear}} TalentCio. All rights reserved.</div>
+            </td>
+        </tr>
+    </table>
 `;
 
 const ONBOARDING_LAYOUT_PLACEHOLDERS = [
@@ -511,7 +533,14 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 <strong>Submission Deadline:</strong> ${deadlineStr}
             </div>
         `;
-        const portalButton = `<a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Pre-Onboarding Portal</a>`;
+        const portalButton = `
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;">
+                <tr>
+                    <td bgcolor="#2563eb" style="border-radius:8px; text-align:center;">
+                        <a href="${portalUrl}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Pre-Onboarding Portal</a>
+                    </td>
+                </tr>
+            </table>`;
         const templateData = buildPreOnboardingTemplateData({
             employee,
             companyName,
@@ -560,6 +589,57 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                 </div>
             </div>
         `;
+        if (!usesFullTemplateLayout) {
+            emailHtml = `
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; margin:0 auto; border:1px solid #e2e8f0; border-radius:12px; background:#ffffff;">
+                    <tr>
+                        <td style="padding:0;">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0f172a;">
+                                <tr>
+                                    <td align="center" style="padding:32px 24px 28px;">
+                                        <div style="display:inline-block; background:#334155; color:#dbeafe; padding:8px 16px; border-radius:999px; font-size:12px; letter-spacing:1px; text-transform:uppercase; font-weight:600;">
+                                            Pre-Onboarding Portal
+                                        </div>
+                                        <div style="height:20px; line-height:20px; font-size:20px;">&nbsp;</div>
+                                        <div style="color:#ffffff; font-size:22px; line-height:28px; font-weight:700;">
+                                            Action Required
+                                        </div>
+                                        <div style="height:12px; line-height:12px; font-size:12px;">&nbsp;</div>
+                                        <div style="max-width:460px; margin:0 auto; color:#cbd5e1; font-size:14px; line-height:24px;">
+                                            Complete your pending onboarding tasks and upload the requested information before your joining date.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:32px;">
+                            <div style="font-size:14px; line-height:26px; color:#475569; margin:0 0 22px;">
+                                ${introHtml}
+                            </div>
+
+                            ${credentialsHtml}
+                            ${sectionsHtml}
+                            ${documentsHtml}
+                            ${sharedFilesHtml}
+
+                            <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; color: #92400e;">
+                                <strong>Submission Deadline:</strong> ${deadlineStr}
+                            </div>
+
+                            ${portalButton}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background:#f1f5f9; padding:16px; text-align:center; border-top:1px solid #e2e8f0;">
+                            <div style="margin:0 0 8px; color:#0f172a; font-size:14px; font-weight:600;">TalentCio</div>
+                            <div style="margin:0; color:#94a3b8; font-size:12px;">&copy; ${new Date().getFullYear()} TalentCio. All rights reserved.</div>
+                        </td>
+                    </tr>
+                </table>
+            `;
+        }
         if (usesFullTemplateLayout) {
             emailHtml = renderTemplateBody(bodyTemplate, templateData);
         }
