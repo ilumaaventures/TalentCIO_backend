@@ -92,11 +92,16 @@ const normalizeShiftList = (attendanceSettings = {}) => {
     });
 };
 
-const getAttendanceModeForUser = ({ company, user }) => (
-    user?.attendanceMode ||
-    company?.settings?.attendance?.defaultAttendanceMode ||
-    DEFAULT_ATTENDANCE_MODE
-);
+const getAttendanceModeForUser = ({ company, user }) => {
+    const userMode = user?.attendanceMode;
+    const companyMode = company?.settings?.attendance?.defaultAttendanceMode;
+
+    if (userMode === 'present_only' || companyMode === 'present_only') {
+        return 'present_only';
+    }
+
+    return userMode || companyMode || DEFAULT_ATTENDANCE_MODE;
+};
 
 const resolveShiftForUser = ({ company, user }) => {
     const attendanceSettings = company?.settings?.attendance || {};

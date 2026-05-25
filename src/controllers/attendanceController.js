@@ -62,6 +62,14 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 const getAttendanceSettings = (company) => company?.settings?.attendance || {};
+const canUpdateFutureRecords = (user) => (
+    user?.roles?.some(r =>
+        (typeof r === 'string' && r === 'Admin') ||
+        (typeof r === 'object' && r.name === 'Admin')
+    ) ||
+    user?.permissions?.includes('*') ||
+    user?.permissions?.includes('attendance.update_future')
+);
 
 const applyPolicyMetadata = (attendance, policy) => {
     attendance.attendanceMode = policy.mode;
@@ -338,7 +346,7 @@ exports.getAttendanceByMonth = async (req, res) => {
             query.date = { $gte: start, $lt: end };
         }
         const history = await Attendance.find(query)
-            .select('date clockIn clockInIST clockOut clockOutIST duration status user')
+            .select('date clockIn clockInIST clockOut clockOutIST duration status user approvalStatus approvedBy')
             .populate('user', 'firstName lastName')
             .sort({ date: -1 })
             .lean();
@@ -383,6 +391,10 @@ exports.updateAttendance = async (req, res) => {
             return res.status(400).json({ message: editability.message });
         }
 
+        if (parseDateAsIST(attendance.date) > getStartOfDayIST() && !canUpdateFutureRecords(req.user)) {
+            return res.status(403).json({ message: 'Not authorized to update attendance for future dates' });
+        }
+
         if (clockIn) {
             attendance.clockIn = new Date(clockIn);
             attendance.clockInIST = new Date(clockIn).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -406,6 +418,46 @@ exports.updateAttendance = async (req, res) => {
 
         await attendance.save();
         res.json(attendance);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+exports.deleteAttendance = async (req, res) => {
+    try {
+        const attendance = await Attendance.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
+        if (!attendance) return res.status(404).json({ message: 'Attendance record not found' });
+
+        const isAdmin = req.user.roles?.some(r =>
+            (typeof r === 'string' && r === 'Admin') ||
+            (typeof r === 'object' && r.name === 'Admin')
+        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('attendance.update_others');
+
+        const isOwner = attendance.user?._id.toString() === req.user._id.toString();
+        const isManager = attendance.user?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
+
+        if (!isOwner && !isManager && !isAdmin) {
+            return res.status(403).json({ message: 'Not authorized to delete this attendance record' });
+        }
+
+        const company = req.company || await Company.findById(req.companyId).select('settings.timesheet settings.attendance').lean();
+        const editability = await ensureTimesheetPeriodEditable({
+            company,
+            companyId: req.companyId,
+            userId: attendance.user?._id || attendance.user,
+            dateValue: attendance.date
+        });
+        if (!editability.ok) {
+            return res.status(400).json({ message: editability.message });
+        }
+
+        if (parseDateAsIST(attendance.date) > getStartOfDayIST() && !canUpdateFutureRecords(req.user)) {
+            return res.status(403).json({ message: 'Not authorized to delete attendance for future dates' });
+        }
+
+        await Attendance.deleteOne({ _id: attendance._id, companyId: req.companyId });
+        res.json({ message: 'Attendance deleted successfully', id: attendance._id.toString() });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
@@ -458,6 +510,9 @@ exports.createAttendance = async (req, res) => {
         }
 
         const attendanceDate = parseDateAsIST(date);
+        if (attendanceDate > getStartOfDayIST() && !canUpdateFutureRecords(req.user)) {
+            return res.status(403).json({ message: 'Not authorized to create attendance for future dates' });
+        }
         const newAttendance = new Attendance({
             user: targetUserId,
             companyId: req.companyId,
@@ -826,6 +881,12 @@ exports.requestRegularization = async (req, res) => {
         // Fetch Company settings for weekly offs
         const company = await Company.findById(req.companyId);
         const weeklyOffs = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
+        const policy = buildAttendancePolicy({
+            company,
+            user: req.user,
+            attendanceDate: normalizedTargetDate
+        });
+        const isPresentOnlyMode = policy.mode === 'present_only';
         
         // Fetch Holidays for this year
         const holidays = await Holiday.find({ 
@@ -873,6 +934,39 @@ exports.requestRegularization = async (req, res) => {
             return res.status(400).json({ message: 'Regularization only allowed for the last 4 working days.' });
         }
 
+        const normalizedType = String(type || '').toUpperCase();
+        const allowedTypes = isPresentOnlyMode
+            ? ['PRESENT']
+            : ['IN', 'OUT', 'BOTH'];
+
+        if (!allowedTypes.includes(normalizedType)) {
+            return res.status(400).json({
+                message: isPresentOnlyMode
+                    ? 'Present-only users can only request to mark a day as present.'
+                    : 'Invalid regularization type.'
+            });
+        }
+
+        if (!reason || !String(reason).trim()) {
+            return res.status(400).json({ message: 'Reason is required for regularization.' });
+        }
+
+        let normalizedRequestedClockIn = requestedClockIn ? new Date(requestedClockIn) : null;
+        let normalizedRequestedClockOut = requestedClockOut ? new Date(requestedClockOut) : null;
+
+        if (!isPresentOnlyMode) {
+            if ((normalizedType === 'IN' || normalizedType === 'BOTH') && (!normalizedRequestedClockIn || Number.isNaN(normalizedRequestedClockIn.getTime()))) {
+                return res.status(400).json({ message: 'A valid check-in time is required.' });
+            }
+
+            if ((normalizedType === 'OUT' || normalizedType === 'BOTH') && (!normalizedRequestedClockOut || Number.isNaN(normalizedRequestedClockOut.getTime()))) {
+                return res.status(400).json({ message: 'A valid check-out time is required.' });
+            }
+        } else {
+            normalizedRequestedClockIn = null;
+            normalizedRequestedClockOut = null;
+        }
+
         // 2. Set Manager (use the first reporting manager as an ObjectId)
         let manager = null;
         if (req.user.reportingManagers && req.user.reportingManagers.length > 0) {
@@ -885,10 +979,10 @@ exports.requestRegularization = async (req, res) => {
             user: req.user._id,
             companyId: req.companyId,
             date,
-            reason,
-            type,
-            requestedClockIn,
-            requestedClockOut,
+            reason: String(reason).trim(),
+            type: normalizedType,
+            requestedClockIn: normalizedRequestedClockIn,
+            requestedClockOut: normalizedRequestedClockOut,
             manager
         });
         await request.save();
@@ -1026,7 +1120,7 @@ exports.processRegularizationRequest = async (req, res) => {
             });
             applyPolicyMetadata(attendance, policy);
 
-            if (policy.mode === 'present_only') {
+            if (request.type === 'PRESENT' || policy.mode === 'present_only') {
                 applyPresentOnlyRecord(attendance, '[Marked present by regularization]');
             }
 

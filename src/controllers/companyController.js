@@ -5,6 +5,7 @@ const Permission = require('../models/Permission');
 const ActivityLog = require('../models/ActivityLog');
 const Attendance = require('../models/Attendance');
 const LeaveRequest = require('../models/LeaveRequest');
+const { normalizeEnabledModules } = require('../utils/enabledModules');
 const {
     normalizeShiftList,
     DEFAULT_SHIFT_CODE,
@@ -20,6 +21,14 @@ const logActivity = async (action, entity, entityId, admin, companyId = null, de
             details,
         });
     } catch (e) { /* non-blocking */ }
+};
+
+const normalizeCompanyResponse = (company) => {
+    if (!company) return company;
+
+    const normalizedCompany = company.toObject ? company.toObject() : { ...company };
+    normalizedCompany.enabledModules = normalizeEnabledModules(normalizedCompany.enabledModules || []);
+    return normalizedCompany;
 };
 
 // GET /api/superadmin/companies
@@ -41,7 +50,12 @@ const getAllCompanies = async (req, res) => {
             .skip((page - 1) * limit)
             .limit(Number(limit));
 
-        res.json({ companies, total, page: Number(page), totalPages: Math.ceil(total / limit) });
+        res.json({
+            companies: companies.map(normalizeCompanyResponse),
+            total,
+            page: Number(page),
+            totalPages: Math.ceil(total / limit)
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -54,7 +68,7 @@ const getCompanyById = async (req, res) => {
         if (!company) return res.status(404).json({ message: 'Company not found' });
         const userCount = await User.countDocuments({ companyId: company._id });
         const activeUserCount = await User.countDocuments({ companyId: company._id, isActive: true });
-        res.json({ ...company.toObject(), userCount, activeUserCount });
+        res.json({ ...normalizeCompanyResponse(company), userCount, activeUserCount });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -81,6 +95,10 @@ const createCompany = async (req, res) => {
         const existingSubdomain = await Company.findOne({ subdomain: companyData.subdomain.toLowerCase() });
         if (existingSubdomain) {
             return res.status(400).json({ message: `Subdomain '${companyData.subdomain}' is already taken. Please choose another one.` });
+        }
+
+        if (companyData.enabledModules) {
+            companyData.enabledModules = normalizeEnabledModules(companyData.enabledModules);
         }
 
         // 2. Creation Process
@@ -119,7 +137,7 @@ const createCompany = async (req, res) => {
             });
 
             await logActivity('COMPANY_CREATED', 'Company', company._id, req.superAdmin, company._id, { name: company.name, subdomain: company.subdomain });
-            res.status(201).json(company);
+            res.status(201).json(normalizeCompanyResponse(company));
 
         } catch (innerErr) {
             // Manual Rollback on failure
@@ -323,6 +341,8 @@ const updateCompany = async (req, res) => {
             if (req.body[field] !== undefined) {
                 if (field === 'planId' && req.body[field] === "") {
                     company[field] = null;
+                } else if (field === 'enabledModules') {
+                    company[field] = normalizeEnabledModules(req.body[field]);
                 } else {
                     company[field] = req.body[field];
                 }
@@ -415,7 +435,7 @@ const updateCompany = async (req, res) => {
         });
 
         await logActivity('COMPANY_UPDATED', 'Company', company._id, req.superAdmin, company._id, req.body);
-        res.json(company);
+        res.json(normalizeCompanyResponse(company));
     } catch (err) {
         console.error('[updateCompany] ERROR:', err);
         res.status(500).json({ message: err.message });

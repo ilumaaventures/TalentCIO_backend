@@ -36,7 +36,7 @@ exports.getEmailBranding = async (req, res) => {
 
         return res.json({
             displayName: branding.displayName || company.name || '',
-            logoUrl: branding.logoUrl || company?.settings?.logo || '',
+            logoUrl: branding.logoUrl || '',
             logoWidth: normalizeDimension(branding.logoWidth, DEFAULT_LOGO_WIDTH, 40, 400),
             logoHeight: normalizeDimension(branding.logoHeight, DEFAULT_LOGO_HEIGHT, 20, 160),
             logoAlignment: normalizeAlignment(branding.logoAlignment),

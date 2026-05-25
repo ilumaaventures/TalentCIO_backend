@@ -1,26 +1,16 @@
 const Company = require('../models/Company');
 const ActivityLog = require('../models/ActivityLog');
-
-const ALL_MODULES = [
-    { id: 'attendance', label: 'Attendance', icon: 'Clock' },
-    { id: 'leaves', label: 'Leaves', icon: 'Calendar' },
-    { id: 'timesheet', label: 'Timesheet', icon: 'FileText' },
-    { id: 'talentAcquisition', label: 'Talent Acquisition', icon: 'Users' },
-    { id: 'helpdesk', label: 'Helpdesk', icon: 'MessageSquare' },
-    { id: 'meetingsOfMinutes', label: 'Minutes of Meeting', icon: 'BookOpen' },
-    { id: 'projectManagement', label: 'Project Management', icon: 'Briefcase' },
-    { id: 'employeeDossier', label: 'Employee Dossier', icon: 'Folder' },
-    { id: 'userManagement', label: 'User Management', icon: 'UserCog' },
-];
+const { ALL_COMPANY_MODULES, hasEnabledModule, normalizeEnabledModules } = require('../utils/enabledModules');
 
 // GET /api/superadmin/companies/:id/modules
 const getModules = async (req, res) => {
     try {
         const company = await Company.findById(req.params.id).select('enabledModules name');
         if (!company) return res.status(404).json({ message: 'Company not found' });
-        const modules = ALL_MODULES.map(m => ({
+        const enabledModules = normalizeEnabledModules(company.enabledModules);
+        const modules = ALL_COMPANY_MODULES.map(m => ({
             ...m,
-            enabled: company.enabledModules.includes(m.id)
+            enabled: hasEnabledModule(enabledModules, m.id)
         }));
         res.json({ companyName: company.name, modules });
     } catch (err) {
@@ -31,13 +21,13 @@ const getModules = async (req, res) => {
 // PUT /api/superadmin/companies/:id/modules
 const updateModules = async (req, res) => {
     try {
-        const { enabledModules } = req.body;
+        const enabledModules = normalizeEnabledModules(req.body?.enabledModules);
         
         // Find current state first for logging
         const existing = await Company.findById(req.params.id).select('enabledModules');
         if (!existing) return res.status(404).json({ message: 'Company not found' });
 
-        const previous = existing.enabledModules || [];
+        const previous = normalizeEnabledModules(existing.enabledModules || []);
 
         // Use findByIdAndUpdate to perform a partial update and avoid validation errors on unrelated required fields
         const company = await Company.findByIdAndUpdate(
@@ -62,7 +52,7 @@ const updateModules = async (req, res) => {
             details: { previous, updated: enabledModules },
         });
 
-        res.json({ enabledModules: company.enabledModules, message: 'Modules updated' });
+        res.json({ enabledModules: normalizeEnabledModules(company.enabledModules || []), message: 'Modules updated' });
     } catch (err) {
         console.error('Update Modules Error:', err);
         res.status(500).json({ message: err.message });
@@ -71,7 +61,7 @@ const updateModules = async (req, res) => {
 
 // GET /api/superadmin/modules  — all available modules list
 const listAllModules = async (req, res) => {
-    res.json(ALL_MODULES);
+    res.json(ALL_COMPANY_MODULES);
 };
 
 module.exports = { getModules, updateModules, listAllModules };

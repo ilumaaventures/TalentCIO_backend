@@ -59,6 +59,11 @@ const restoreEntityTree = async (entity, item, req) => {
         item.isActive = true;
         await item.save();
     }
+
+    if (entityKey === 'emailtemplate') {
+        item.isActive = true;
+        await item.save();
+    }
 };
 
 const buildConflictResponse = (entity, binItem, activeItem) => {

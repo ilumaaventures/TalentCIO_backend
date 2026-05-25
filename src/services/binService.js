@@ -16,6 +16,7 @@ const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const InterviewWorkflow = require('../models/InterviewWorkflow');
 const LeaveConfig = require('../models/LeaveConfig');
 const QueryType = require('../models/QueryType');
+const EmailTemplate = require('../models/EmailTemplate');
 
 const ENTITY_MAP = {
     project: Project,
@@ -34,7 +35,8 @@ const ENTITY_MAP = {
     approvalworkflow: ApprovalWorkflow,
     interviewworkflow: InterviewWorkflow,
     leaveconfig: LeaveConfig,
-    querytype: QueryType
+    querytype: QueryType,
+    emailtemplate: EmailTemplate
 };
 
 const buildSoftDeleteUpdate = (userId, deletedAt = new Date()) => ({
@@ -180,13 +182,22 @@ const getEntityConflictQuery = (entity, item) => {
         return { ...baseQuery, name: item.name };
     }
 
+    if (entityKey === 'emailtemplate' && item.name) {
+        return {
+            ...baseQuery,
+            scope: item.scope,
+            templateType: item.templateType,
+            name: item.name
+        };
+    }
+
     return null;
 };
 
 const getEntityConflictLabel = (entity, item) => {
     const entityKey = String(entity || '').trim().toLowerCase();
 
-    if (['project', 'module', 'task', 'role', 'client', 'businessunit', 'holiday', 'approvalworkflow', 'interviewworkflow', 'querytype'].includes(entityKey)) {
+    if (['project', 'module', 'task', 'role', 'client', 'businessunit', 'holiday', 'approvalworkflow', 'interviewworkflow', 'querytype', 'emailtemplate'].includes(entityKey)) {
         return item.name || entityKey;
     }
 
@@ -362,6 +373,10 @@ const moveEntityToBin = async (entity, item, userId, companyId) => {
         item.deletedBy = userId || null;
         await item.save();
         return item;
+    }
+
+    if (entityKey === 'emailtemplate') {
+        item.isActive = false;
     }
 
     await item.softDelete(userId);

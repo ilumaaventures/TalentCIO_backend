@@ -22,7 +22,7 @@ const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
-const { buildTimesheetPeriodRange } = require('../utils/timesheetPeriod');
+const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
     'ta.analytics.requisition',
@@ -218,7 +218,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
     }
 
     const fullUser = await User.findOne({ _id: targetUserId, companyId })
-        .select('firstName lastName email employeeCode joiningDate reportingManagers')
+        .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode')
         .populate('reportingManagers', 'firstName lastName email')
         .lean();
 
@@ -250,7 +250,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
             companyId,
             date: { $gte: start, $lte: end }
         })
-            .select('date clockInIST clockOutIST duration clockIn clockOut status approvalStatus')
+            .select('date clockInIST clockOutIST duration clockIn clockOut status approvalStatus attendanceMode maxWorkingHours')
             .lean()
     ]);
 
@@ -307,7 +307,7 @@ exports.getAttendanceBootstrap = async (req, res) => {
             }
         }
 
-        const companyPromise = Company.findById(req.companyId).select('settings.attendance').lean();
+        const companyPromise = Company.findById(req.companyId).select('settings.attendance settings.timesheet.approvalCycle').lean();
         const historyPromise = Attendance.find({
             companyId: req.companyId,
             user: targetUserId,
@@ -361,6 +361,16 @@ exports.getAttendanceBootstrap = async (req, res) => {
             recentLogsPromise
         ]);
 
+        const approvalCycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(start, approvalCycle);
+        const timesheetSummary = await Timesheet.findOne({
+            user: targetUserId,
+            companyId: req.companyId,
+            month: periodId
+        })
+            .select('month status submittedAt updatedAt rejectionReason')
+            .lean();
+
         res.json({
             status: viewingSelf ? (status || { status: 'Not Clocked In' }) : null,
             history,
@@ -368,7 +378,14 @@ exports.getAttendanceBootstrap = async (req, res) => {
             approvedLeaves,
             recentLogs,
             weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'],
-            attendanceSettings: company?.settings?.attendance || {}
+            attendanceSettings: company?.settings?.attendance || {},
+            timesheetSummary: timesheetSummary || {
+                month: periodId,
+                status: 'DRAFT',
+                submittedAt: null,
+                updatedAt: null,
+                rejectionReason: ''
+            }
         });
     } catch (error) {
         console.error('getAttendanceBootstrap error:', error);
@@ -481,14 +498,18 @@ exports.getTimesheetBootstrap = async (req, res) => {
             }
         }
 
-        const { start, end } = getMonthRange(year, month);
+        const company = await Company.findById(req.companyId)
+            .select('settings.attendance.weeklyOff settings.timesheet.approvalCycle')
+            .lean();
+        const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
         const usersListPromise = canLoadUserList(req.user)
             ? isAdminUser(req.user) || req.user?.permissions?.includes('timesheet.view') || req.user?.permissions?.includes('*')
                 ? User.find({ companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
                 : User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
             : Promise.resolve([]);
 
-        const [timesheet, projects, holidays, usersList] = await Promise.all([
+        const [timesheet, projects, holidays, approvedLeaves, usersList] = await Promise.all([
             getTimesheetDocument({
                 requestUser: req.user,
                 companyId: req.companyId,
@@ -507,6 +528,16 @@ exports.getTimesheetBootstrap = async (req, res) => {
                 .select('name date isOptional')
                 .sort({ date: 1 })
                 .lean(),
+            LeaveRequest.find({
+                user: targetUserId,
+                companyId: req.companyId,
+                status: 'Approved',
+                startDate: { $lte: end },
+                endDate: { $gte: start }
+            })
+                .select('leaveType startDate endDate isHalfDay halfDaySession reason status createdAt daysCount')
+                .sort({ startDate: 1, createdAt: -1 })
+                .lean(),
             usersListPromise
         ]);
 
@@ -515,6 +546,7 @@ exports.getTimesheetBootstrap = async (req, res) => {
             attendanceLogs: timesheet.attendanceLog || [],
             projects,
             holidays,
+            approvedLeaves,
             weeklyOff: timesheet.weeklyOff || ['Sunday'],
             usersList
         });

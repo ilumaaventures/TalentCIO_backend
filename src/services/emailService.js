@@ -2,7 +2,6 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const Company = require('../models/Company');
 
-const DEFAULT_LOGO_URL = 'https://talentcio.in/navbar-logo.png';
 const DEFAULT_LOGO_LINK = 'https://talentcio.in';
 const DEFAULT_BRAND_COLOR = '#6366f1';
 const DEFAULT_LOGO_WIDTH = 200;
@@ -30,7 +29,6 @@ const getTransporter = () => {
     });
 };
 
-const getEmailLogoUrl = () => process.env.EMAIL_LOGO_URL || process.env.TALENTCIO_LOGO_URL || DEFAULT_LOGO_URL;
 const getEmailLogoLink = () => process.env.EMAIL_LOGO_LINK || process.env.TALENTCIO_WEBSITE_URL || DEFAULT_LOGO_LINK;
 
 const getCompanyBranding = async (companyId) => {
@@ -54,7 +52,7 @@ const getCompanyBranding = async (companyId) => {
         const branding = company?.settings?.emailBranding || {};
 
         return {
-            logoUrl: branding.logoUrl || company?.settings?.logo || '',
+            logoUrl: branding.logoUrl || '',
             logoWidth: Number.isFinite(Number(branding.logoWidth)) ? Number(branding.logoWidth) : DEFAULT_LOGO_WIDTH,
             logoHeight: Number.isFinite(Number(branding.logoHeight)) ? Number(branding.logoHeight) : DEFAULT_LOGO_HEIGHT,
             logoAlignment: ['left', 'center', 'right'].includes(String(branding.logoAlignment || '').toLowerCase())
@@ -86,7 +84,7 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
     const content = String(html || '').trim();
     if (!content) return html;
 
-    const logoUrl = branding.logoUrl || getEmailLogoUrl();
+    const logoUrl = String(branding.logoUrl || '').trim();
     const logoLink = branding.logoLink || getEmailLogoLink();
     const logoAlt = branding.logoAlt || 'TalentCIO';
     const brandColor = branding.brandColor || DEFAULT_BRAND_COLOR;
@@ -103,7 +101,7 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
                 <div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:${logoAlignment};">
                     ${logoUrl
             ? `<a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="width:${logoWidth}px;height:${logoHeight}px;max-width:100%;object-fit:contain;display:block;margin:0 auto;" /></a>`
-            : `<span style="color:#fff;font-size:20px;font-weight:bold;">${logoAlt}</span>`
+            : ''
         }
                 </div>
                 <div style="background:#ffffff;padding:32px 24px;border:1px solid #e2e8f0;border-top:none;">

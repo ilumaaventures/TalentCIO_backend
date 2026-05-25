@@ -96,6 +96,11 @@ module.exports = [
         module: "ATTENDANCE",
         description: "Update attendance of other users"
     },
+    {
+        key: "attendance.update_future",
+        module: "ATTENDANCE",
+        description: "Create, update, or delete attendance and timesheet records for future dates"
+    },
 
     // PROJECT MANAGEMENT
     // --- PROJECT MANAGEMENT: BUSINESS UNITS ---
