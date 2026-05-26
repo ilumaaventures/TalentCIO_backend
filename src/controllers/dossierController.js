@@ -2,6 +2,7 @@ const EmployeeProfile = require('../models/EmployeeProfile');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
+const Company = require('../models/Company');
 const { cloudinary } = require('../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const axios = require('axios');
@@ -10,6 +11,117 @@ const BANK_DOCUMENT_TITLE = 'Cancelled Cheque / Passbook Front Page';
 const PASSPORT_DOCUMENT_TITLE = 'Passport';
 const LEGACY_PASSPORT_DOCUMENT_TITLE = 'Passport (Optional)';
 const PASSPORT_PHOTO_DOCUMENT_TITLE = 'Recent Passport-Size Photograph';
+const EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Previous Experience Certificate';
+const LEGACY_EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Experience Certificate';
+const OFFER_LETTER_DOCUMENT_TITLE = 'Offer Letter';
+const POLICY_SOURCE_LABEL = 'Policy shared during onboarding';
+
+const normalizeDocumentKey = (value = '') => String(value || '').trim().toLowerCase();
+
+const buildTransferredOnboardingCustomFiles = async (profile, userId, companyId) => {
+    if (!userId || !companyId) {
+        return [];
+    }
+
+    const onboardingEmployee = await OnboardingEmployee.findOne({
+        transferredToUserId: userId,
+        companyId
+    })
+        .select('offerLetterUrl documents offerDate createdAt updatedAt requestedDocuments')
+        .lean();
+
+    if (!onboardingEmployee) {
+        return [];
+    }
+
+    const existingUrls = new Set(
+        (Array.isArray(profile?.documents) ? profile.documents : [])
+            .map((doc) => normalizeDocumentKey(doc?.url))
+            .filter(Boolean)
+    );
+
+    const customFiles = [];
+
+    if (onboardingEmployee.offerLetterUrl && !existingUrls.has(normalizeDocumentKey(onboardingEmployee.offerLetterUrl))) {
+        customFiles.push({
+            _id: `onboarding-offer-letter-${userId}`,
+            title: OFFER_LETTER_DOCUMENT_TITLE,
+            fileName: 'Offer_Letter.pdf',
+            category: 'Custom Files',
+            url: onboardingEmployee.offerLetterUrl,
+            uploadDate: onboardingEmployee.offerDate || onboardingEmployee.updatedAt || onboardingEmployee.createdAt || new Date(),
+            sourceType: 'offer_letter',
+            sourceLabel: 'Shared during onboarding',
+            isOnboardingShared: true
+        });
+    }
+
+    (onboardingEmployee.documents || [])
+        .filter((doc) => doc?.type === 'custom_file' && doc?.url)
+        .forEach((doc) => {
+            const normalizedUrl = normalizeDocumentKey(doc.url);
+            if (!normalizedUrl || existingUrls.has(normalizedUrl)) {
+                return;
+            }
+
+            customFiles.push({
+                _id: `onboarding-custom-file-${doc._id}`,
+                title: doc.label || 'Custom File',
+                fileName: doc.label || 'Custom File',
+                category: 'Custom Files',
+                url: doc.url,
+                uploadDate: doc.emailSentAt || doc.uploadedAt || onboardingEmployee.updatedAt || onboardingEmployee.createdAt || new Date(),
+                sourceType: 'custom_file',
+                sourceLabel: 'Sent during onboarding',
+                isOnboardingShared: true
+            });
+        });
+
+    const requestedDocumentLabels = new Set(
+        (onboardingEmployee.requestedDocuments || [])
+            .map((item) => normalizeDocumentKey(item?.label || item))
+            .filter(Boolean)
+    );
+
+    if (requestedDocumentLabels.size > 0) {
+        const company = await Company.findById(companyId).select('settings.onboarding.policies').lean();
+        const policies = company?.settings?.onboarding?.policies || [];
+        const customFileUrls = new Set(customFiles.map((file) => normalizeDocumentKey(file.url)).filter(Boolean));
+
+        policies.forEach((policy) => {
+            const policyNameKey = normalizeDocumentKey(policy?.name);
+            const policyUrlKey = normalizeDocumentKey(policy?.url);
+
+            if (!policyNameKey || !policyUrlKey) {
+                return;
+            }
+
+            if (!requestedDocumentLabels.has(policyNameKey)) {
+                return;
+            }
+
+            if (existingUrls.has(policyUrlKey) || customFileUrls.has(policyUrlKey)) {
+                return;
+            }
+
+            customFiles.push({
+                _id: `onboarding-policy-${policy._id}`,
+                title: policy.name,
+                fileName: policy.name,
+                category: 'Custom Files',
+                url: policy.url,
+                uploadDate: onboardingEmployee.updatedAt || onboardingEmployee.createdAt || new Date(),
+                sourceType: 'policy',
+                sourceLabel: POLICY_SOURCE_LABEL,
+                isOnboardingShared: true
+            });
+
+            customFileUrls.add(policyUrlKey);
+        });
+    }
+
+    return customFiles;
+};
 
 const normalizeTransferredIdentityDocuments = async (profile) => {
     if (!profile || !Array.isArray(profile.documents) || profile.documents.length === 0) {
@@ -26,6 +138,15 @@ const normalizeTransferredIdentityDocuments = async (profile) => {
             doc.title = PASSPORT_DOCUMENT_TITLE;
             if (doc.category !== 'ID Proof') {
                 doc.category = 'ID Proof';
+            }
+            changed = true;
+            return;
+        }
+
+        if (normalizedTitle === LEGACY_EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE.toLowerCase()) {
+            doc.title = EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE;
+            if (doc.category !== 'Employment') {
+                doc.category = 'Employment';
             }
             changed = true;
             return;
@@ -251,6 +372,9 @@ exports.getDossier = async (req, res) => {
         // (Removed duplicate skills fix)
 
         const filteredProfile = filterProfileFields(profile, req.user, isSelf);
+        if (filteredProfile.documents !== undefined) {
+            filteredProfile.onboardingCustomFiles = await buildTransferredOnboardingCustomFiles(profile, userId, req.companyId);
+        }
         res.status(200).json(filteredProfile);
 
     } catch (error) {

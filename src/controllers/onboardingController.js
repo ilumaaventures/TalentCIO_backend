@@ -125,6 +125,49 @@ const ONBOARDING_LAYOUT_PLACEHOLDERS = [
 ];
 
 const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const LEGACY_EXPERIENCE_CERTIFICATE_LABEL = 'Experience Certificate';
+const CURRENT_EXPERIENCE_CERTIFICATE_LABEL = 'Previous Experience Certificate';
+
+const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
+    if (!employee) return employee;
+
+    let changed = false;
+
+    if (Array.isArray(employee.documents)) {
+        employee.documents.forEach((doc) => {
+            if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+                changed = true;
+            }
+        });
+    }
+
+    if (Array.isArray(employee.requestedDocuments)) {
+        employee.requestedDocuments.forEach((doc) => {
+            if (doc?.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+                changed = true;
+            }
+        });
+    }
+
+    if (employee.selectionDraft && Array.isArray(employee.selectionDraft.documents)) {
+        employee.selectionDraft.documents = employee.selectionDraft.documents.map((label) => {
+            if (label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                changed = true;
+                return CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+            }
+
+            return label;
+        });
+    }
+
+    if (changed && typeof employee.save === 'function') {
+        await employee.save();
+    }
+
+    return employee;
+};
 
 const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
     const trimmedBaseLabel = String(baseLabel || 'Document').trim() || 'Document';
@@ -262,7 +305,7 @@ exports.addEmployee = async (req, res) => {
             { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
             { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
-            { type: 'experience_certificate', label: 'Experience Certificate' },
+            { type: 'experience_certificate', label: 'Previous Experience Certificate' },
             { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
         ];
 
@@ -898,7 +941,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
                     { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
-                    { type: 'experience_certificate', label: 'Experience Certificate' },
+                    { type: 'experience_certificate', label: 'Previous Experience Certificate' },
                     { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
                 ];
 
@@ -1000,12 +1043,13 @@ exports.getOnboardingEmployee = async (req, res) => {
     try {
         const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId })
             .select('-tempPassword')
-            .populate('createdBy', 'firstName lastName')
-            .lean();
+            .populate('createdBy', 'firstName lastName');
 
         if (!employee) return res.status(404).json({ message: 'Onboarding employee not found' });
 
-        res.status(200).json(employee);
+        await normalizeOnboardingExperienceCertificateLabels(employee);
+
+        res.status(200).json(employee.toObject());
     } catch (error) {
         console.error('Error fetching onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1454,10 +1498,11 @@ exports.changePassword = async (req, res) => {
 exports.getMyOnboarding = async (req, res) => {
     try {
         const employee = await OnboardingEmployee.findById(req.onboardingEmployee._id)
-            .select('-tempPassword -auditLog')
-            .lean();
+            .select('-tempPassword -auditLog');
 
         if (!employee) return res.status(404).json({ message: 'Not found' });
+
+        await normalizeOnboardingExperienceCertificateLabels(employee);
 
         // Fetch company settings for templates and policies
         const company = await Company.findById(employee.companyId).select('settings.onboarding');
@@ -1465,7 +1510,7 @@ exports.getMyOnboarding = async (req, res) => {
         const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
 
         res.status(200).json({
-            ...employee,
+            ...employee.toObject(),
             companyPolicies: policies,
             dynamicTemplates: dynamicTemplates
         });
@@ -2481,7 +2526,8 @@ const DOC_CATEGORY_MAP = {
 
 const DOC_TITLE_MAP = {
     'passport': 'Passport',
-    'passport_photo': 'Recent Passport-Size Photograph'
+    'passport_photo': 'Recent Passport-Size Photograph',
+    'experience_certificate': 'Previous Experience Certificate'
 };
 
 const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
