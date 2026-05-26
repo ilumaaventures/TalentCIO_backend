@@ -84,7 +84,8 @@ exports.getDossier = async (req, res) => {
                     lastName: targetUser.lastName
                 },
                 contact: {
-                    personalEmail: targetUser.email
+                    personalEmail: '',
+                    workEmail: targetUser.email
                 },
                 employment: {
                     department: targetUser.department,
@@ -148,6 +149,11 @@ exports.getDossier = async (req, res) => {
             if (!profile.employment?.joiningDate && targetUser.joiningDate) {
                 if (!profile.employment) profile.employment = {};
                 profile.employment.joiningDate = targetUser.joiningDate;
+                changed = true;
+            }
+            if (!profile.contact?.workEmail && targetUser.email) {
+                if (!profile.contact) profile.contact = {};
+                profile.contact.workEmail = targetUser.email;
                 changed = true;
             }
             if (changed) {

@@ -344,6 +344,8 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             return res.status(404).json({ message: 'Employee not found' });
         }
 
+        const emailSentAt = new Date();
+
         // Update deadline if provided
         if (submissionDeadline) {
             employee.documentDeadline = new Date(submissionDeadline);
@@ -356,9 +358,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         (sections || []).forEach(s => {
             const found = sectionsData.find(rs => rs.label === s);
             if (found) {
-                found.emailSentAt = new Date();
+                found.emailSentAt = emailSentAt;
             } else {
-                sectionsData.push({ label: s, emailSentAt: new Date() });
+                sectionsData.push({ label: s, emailSentAt });
             }
         });
         employee.requestedSections = sectionsData;
@@ -367,9 +369,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         (documents || []).forEach(d => {
             const found = docsData.find(rd => rd.label === d);
             if (found) {
-                found.emailSentAt = new Date();
+                found.emailSentAt = emailSentAt;
             } else {
-                docsData.push({ label: d, emailSentAt: new Date() });
+                docsData.push({ label: d, emailSentAt });
             }
         });
         employee.requestedDocuments = docsData;
@@ -380,7 +382,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             employee.documents.forEach(doc => {
                 if (docLabelsSet.has(doc.label) && (doc.status === 'Pending' || doc.status === 'Mail Sent')) {
                     doc.status = 'Mail Sent';
-                    doc.emailSentAt = new Date();
+                    doc.emailSentAt = emailSentAt;
                 }
             });
         }
@@ -2477,6 +2479,13 @@ const DOC_CATEGORY_MAP = {
     'passport_photo': 'Other'
 };
 
+const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
+
+const normalizeEmploymentWorkLocation = (value = '') => {
+    const trimmedValue = String(value || '').trim();
+    return EMPLOYMENT_WORK_LOCATION_OPTIONS.has(trimmedValue) ? trimmedValue : 'Office';
+};
+
 exports.transferToActiveEmployee = async (req, res) => {
     try {
         const { roleId, employeeCode, password } = req.body || {};
@@ -2548,6 +2557,7 @@ exports.transferToActiveEmployee = async (req, res) => {
         const personalDetails = employee.personalDetails || {};
         const emergencyContact = employee.emergencyContact || {};
         const bankDetails = employee.bankDetails || {};
+        const normalizedEmploymentWorkLocation = normalizeEmploymentWorkLocation(employee.workLocation);
 
         // Map onboarding documents to dossier documents
         const dossierDocuments = (employee.documents || [])
@@ -2560,6 +2570,17 @@ exports.transferToActiveEmployee = async (req, res) => {
                 uploadDate: doc.uploadedAt || new Date(),
                 verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
             }));
+
+        if (bankDetails.cancelledChequeUrl) {
+            dossierDocuments.push({
+                category: 'Bank',
+                title: 'Cancelled Cheque / Passbook Front Page',
+                fileName: 'Cancelled_Cheque_Passbook_Front_Page.pdf',
+                url: bankDetails.cancelledChequeUrl,
+                uploadDate: new Date(),
+                verificationStatus: 'Pending'
+            });
+        }
 
         const profile = new EmployeeProfile({
             user: newUser._id,
@@ -2575,7 +2596,8 @@ exports.transferToActiveEmployee = async (req, res) => {
             },
             identity: {},
             contact: {
-                personalEmail: personalDetails.personalEmail || employee.email,
+                personalEmail: personalDetails.personalEmail || '',
+                workEmail: employee.email || '',
                 mobileNumber: personalDetails.personalMobile || employee.phone || '',
                 emergencyNumber: emergencyContact.phoneNumber || '',
                 emergencyContact: {
@@ -2598,7 +2620,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                 department: employee.department || '',
                 joiningDate: employee.joiningDate || new Date(),
                 status: 'Active',
-                workLocation: employee.workLocation || 'Office',
+                workLocation: normalizedEmploymentWorkLocation,
+                branch: employee.workLocation || '',
                 employmentType: 'Full Time'
             },
             compensation: {
