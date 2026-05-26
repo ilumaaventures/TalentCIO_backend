@@ -2470,13 +2470,18 @@ const DOC_CATEGORY_MAP = {
     'aadhaar_front': 'ID Proof',
     'aadhaar_back': 'ID Proof',
     'passport': 'ID Proof',
+    'passport_photo': 'ID Proof',
     'salary_slip': 'Payslips',
     '10th_marksheet': 'Education',
     '12th_marksheet': 'Education',
     'graduation': 'Education',
     'relieving_letter': 'Relieving Letter',
-    'experience_certificate': 'Employment',
-    'passport_photo': 'Other'
+    'experience_certificate': 'Employment'
+};
+
+const DOC_TITLE_MAP = {
+    'passport': 'Passport',
+    'passport_photo': 'Recent Passport-Size Photograph'
 };
 
 const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
@@ -2562,14 +2567,18 @@ exports.transferToActiveEmployee = async (req, res) => {
         // Map onboarding documents to dossier documents
         const dossierDocuments = (employee.documents || [])
             .filter(doc => doc.url) // Only docs that were actually uploaded
-            .map(doc => ({
+            .map(doc => {
+                const normalizedTitle = DOC_TITLE_MAP[doc.type] || doc.label;
+
+                return ({
                 category: DOC_CATEGORY_MAP[doc.type] || 'Other',
-                title: doc.label,
-                fileName: doc.label.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
+                title: normalizedTitle,
+                fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
                 url: doc.url,
                 uploadDate: doc.uploadedAt || new Date(),
                 verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
-            }));
+                });
+            });
 
         if (bankDetails.cancelledChequeUrl) {
             dossierDocuments.push({

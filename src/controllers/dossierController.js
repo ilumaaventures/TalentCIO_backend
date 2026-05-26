@@ -7,6 +7,47 @@ const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const axios = require('axios');
 
 const BANK_DOCUMENT_TITLE = 'Cancelled Cheque / Passbook Front Page';
+const PASSPORT_DOCUMENT_TITLE = 'Passport';
+const LEGACY_PASSPORT_DOCUMENT_TITLE = 'Passport (Optional)';
+const PASSPORT_PHOTO_DOCUMENT_TITLE = 'Recent Passport-Size Photograph';
+
+const normalizeTransferredIdentityDocuments = async (profile) => {
+    if (!profile || !Array.isArray(profile.documents) || profile.documents.length === 0) {
+        return profile;
+    }
+
+    let changed = false;
+
+    profile.documents.forEach((doc) => {
+        const title = String(doc?.title || '').trim();
+        const normalizedTitle = title.toLowerCase();
+
+        if (normalizedTitle === LEGACY_PASSPORT_DOCUMENT_TITLE.toLowerCase()) {
+            doc.title = PASSPORT_DOCUMENT_TITLE;
+            if (doc.category !== 'ID Proof') {
+                doc.category = 'ID Proof';
+            }
+            changed = true;
+            return;
+        }
+
+        if (
+            normalizedTitle === PASSPORT_DOCUMENT_TITLE.toLowerCase()
+            || normalizedTitle === PASSPORT_PHOTO_DOCUMENT_TITLE.toLowerCase()
+        ) {
+            if (doc.category !== 'ID Proof') {
+                doc.category = 'ID Proof';
+                changed = true;
+            }
+        }
+    });
+
+    if (changed) {
+        await profile.save();
+    }
+
+    return profile;
+};
 
 const ensureTransferredBankDocument = async (profile, userId, companyId) => {
     if (!profile || !userId || !companyId) return profile;
@@ -204,6 +245,7 @@ exports.getDossier = async (req, res) => {
             }
         }
 
+        profile = await normalizeTransferredIdentityDocuments(profile);
         profile = await ensureTransferredBankDocument(profile, userId, req.companyId);
 
         // (Removed duplicate skills fix)
