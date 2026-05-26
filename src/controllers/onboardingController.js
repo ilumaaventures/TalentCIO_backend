@@ -281,7 +281,7 @@ exports.addEmployee = async (req, res) => {
             documentDeadline: documentDeadline || undefined,
             workLocation: workLocation || '',
             address: address || '',
-            probationPeriod: probationPeriod || '6 months',
+            probationPeriod: probationPeriod || '',
             salary: salary || {},
             credentialsExpireAt: documentDeadline || undefined,
             offerLetterUrl: offerLetterUrl || '',
@@ -539,7 +539,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;">
                 <tr>
                     <td bgcolor="#2563eb" style="border-radius:8px; text-align:center;">
-                        <a href="${portalUrl}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Pre-Onboarding Portal</a>
+                        <a href="${portalUrl}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Portal</a>
                     </td>
                 </tr>
             </table>`;
@@ -583,7 +583,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     </div>
 
                     <div style="text-align: center; margin: 28px 0;">
-                        <a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Pre-Onboarding Portal</a>
+                        <a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Portal</a>
                     </div>
                 </div>
                 <div style="background: #f1f5f9; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">
@@ -916,7 +916,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     documentDeadline: emp.documentDeadline || undefined,
                     workLocation: emp.workLocation || '',
                     address: emp.address || '',
-                    probationPeriod: emp.probationPeriod || '6 months',
+                    probationPeriod: emp.probationPeriod || '',
                     credentialsExpireAt: emp.documentDeadline || undefined,
                     documents: defaultDocuments,
                     companyId: req.companyId,
@@ -1035,7 +1035,7 @@ exports.updateEmployee = async (req, res) => {
         }
         if (workLocation) employee.workLocation = workLocation;
         if (address) employee.address = address;
-        if (probationPeriod) employee.probationPeriod = probationPeriod;
+        if (probationPeriod !== undefined) employee.probationPeriod = probationPeriod || '';
         if (salary) {
             employee.salary = { ...employee.salary.toObject(), ...salary };
         }

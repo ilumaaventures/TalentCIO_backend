@@ -1,9 +1,51 @@
 const EmployeeProfile = require('../models/EmployeeProfile');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
+const OnboardingEmployee = require('../models/OnboardingEmployee');
 const { cloudinary } = require('../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const axios = require('axios');
+
+const BANK_DOCUMENT_TITLE = 'Cancelled Cheque / Passbook Front Page';
+
+const ensureTransferredBankDocument = async (profile, userId, companyId) => {
+    if (!profile || !userId || !companyId) return profile;
+
+    const hasBankDocument = Array.isArray(profile.documents)
+        && profile.documents.some((doc) => (
+            doc?.category === 'Bank'
+            || String(doc?.title || '').trim().toLowerCase() === BANK_DOCUMENT_TITLE.toLowerCase()
+        ));
+
+    if (hasBankDocument) {
+        return profile;
+    }
+
+    const onboardingEmployee = await OnboardingEmployee.findOne({
+        transferredToUserId: userId,
+        companyId
+    })
+        .select('bankDetails submittedAt updatedAt')
+        .lean();
+
+    const cancelledChequeUrl = onboardingEmployee?.bankDetails?.cancelledChequeUrl;
+    if (!cancelledChequeUrl) {
+        return profile;
+    }
+
+    profile.documents = Array.isArray(profile.documents) ? profile.documents : [];
+    profile.documents.push({
+        category: 'Bank',
+        title: BANK_DOCUMENT_TITLE,
+        fileName: 'Cancelled_Cheque_Passbook_Front_Page.pdf',
+        url: cancelledChequeUrl,
+        uploadDate: onboardingEmployee.submittedAt || onboardingEmployee.updatedAt || new Date(),
+        verificationStatus: 'Pending'
+    });
+
+    await profile.save();
+    return profile;
+};
 
 // Helper to check permissions using the same role-based lookup as hasPermission()
 const filterProfileFields = (profile, viewer, isSelf) => {
@@ -161,6 +203,8 @@ exports.getDossier = async (req, res) => {
                 await profile.populate('employment.reportingManager', 'firstName lastName');
             }
         }
+
+        profile = await ensureTransferredBankDocument(profile, userId, req.companyId);
 
         // (Removed duplicate skills fix)
 
