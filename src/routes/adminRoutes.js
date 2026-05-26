@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
 const { protect, admin } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
@@ -22,8 +23,32 @@ const { backfillTimesheets } = require('../controllers/migrationController');
 const { getRoleBootstrap } = require('../controllers/pageBootstrapController');
 const {
     getOwnAttendanceSettings,
-    updateOwnAttendanceSettings
+    updateOwnAttendanceSettings,
+    getOwnBrandingSettings,
+    updateOwnBrandingSettings,
+    uploadOwnCompanyLogo,
+    removeOwnCompanyLogo
 } = require('../controllers/companyController');
+
+const companyLogoUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 3 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedMimeTypes = [
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/svg+xml',
+            'image/webp'
+        ];
+
+        if (allowedMimeTypes.includes(file.mimetype)) {
+            return cb(null, true);
+        }
+
+        return cb(new Error('Only JPG, PNG, SVG, WEBP images are allowed.'));
+    }
+});
 
 router.use(protect);
 
@@ -51,5 +76,9 @@ router.post('/migrate-timesheets', authorize('user.update'), backfillTimesheets)
 // Company Attendance Settings
 router.get('/company-settings/attendance', admin, getOwnAttendanceSettings);
 router.put('/company-settings/attendance', admin, updateOwnAttendanceSettings);
+router.get('/company-settings/branding', admin, getOwnBrandingSettings);
+router.put('/company-settings/branding', admin, updateOwnBrandingSettings);
+router.post('/company-settings/branding/logo', admin, companyLogoUpload.single('logo'), uploadOwnCompanyLogo);
+router.delete('/company-settings/branding/logo', admin, removeOwnCompanyLogo);
 
 module.exports = router;

@@ -19,7 +19,24 @@ const companySchema = new mongoose.Schema({
     settings: {
         // Branding
         logo: { type: String, default: '' },
+        logoPublicId: { type: String, default: '' },
         themeColor: { type: String, default: '#6366f1' },
+        workspaceBranding: {
+            displayMode: {
+                type: String,
+                enum: ['talentcio', 'company', 'none'],
+                default: 'talentcio'
+            },
+            logoAlignment: {
+                type: String,
+                enum: ['left', 'center', 'right'],
+                default: 'left'
+            },
+            logoSize: {
+                type: Number,
+                default: 140
+            }
+        },
         emailBranding: {
             displayName: { type: String, default: '' },
             logoUrl: { type: String, default: '' },

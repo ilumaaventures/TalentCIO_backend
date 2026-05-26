@@ -5,12 +5,44 @@ const Permission = require('../models/Permission');
 const ActivityLog = require('../models/ActivityLog');
 const Attendance = require('../models/Attendance');
 const LeaveRequest = require('../models/LeaveRequest');
+const { cloudinary } = require('../config/cloudinary');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
 const {
     normalizeShiftList,
     DEFAULT_SHIFT_CODE,
     DEFAULT_ATTENDANCE_MODE
 } = require('../utils/attendancePolicy');
+
+const DEFAULT_WORKSPACE_LOGO_MODE = 'talentcio';
+const WORKSPACE_LOGO_MODES = new Set(['talentcio', 'company', 'none']);
+const DEFAULT_WORKSPACE_LOGO_ALIGNMENT = 'left';
+const WORKSPACE_LOGO_ALIGNMENTS = new Set(['left', 'center', 'right']);
+const DEFAULT_WORKSPACE_LOGO_SIZE = 140;
+const MIN_WORKSPACE_LOGO_SIZE = 80;
+const MAX_WORKSPACE_LOGO_SIZE = 170;
+
+const normalizeWorkspaceLogoMode = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return WORKSPACE_LOGO_MODES.has(normalized)
+        ? normalized
+        : DEFAULT_WORKSPACE_LOGO_MODE;
+};
+
+const normalizeWorkspaceLogoAlignment = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return WORKSPACE_LOGO_ALIGNMENTS.has(normalized)
+        ? normalized
+        : DEFAULT_WORKSPACE_LOGO_ALIGNMENT;
+};
+
+const normalizeWorkspaceLogoSize = (value) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return DEFAULT_WORKSPACE_LOGO_SIZE;
+    }
+
+    return Math.min(Math.max(parsed, MIN_WORKSPACE_LOGO_SIZE), MAX_WORKSPACE_LOGO_SIZE);
+};
 
 const logActivity = async (action, entity, entityId, admin, companyId = null, details = {}) => {
     try {
@@ -514,6 +546,162 @@ const updateOwnAttendanceSettings = async (req, res) => {
     }
 };
 
+// GET /api/admin/company-settings/branding
+const getOwnBrandingSettings = async (req, res) => {
+    try {
+        const company = req.company || await Company.findById(req.companyId)
+            .select('name settings.logo settings.logoPublicId settings.workspaceBranding')
+            .lean();
+
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        return res.json({
+            displayMode: normalizeWorkspaceLogoMode(company?.settings?.workspaceBranding?.displayMode),
+            logoAlignment: normalizeWorkspaceLogoAlignment(company?.settings?.workspaceBranding?.logoAlignment),
+            logoSize: normalizeWorkspaceLogoSize(company?.settings?.workspaceBranding?.logoSize),
+            companyLogoUrl: company?.settings?.logo || '',
+            hasCompanyLogo: Boolean(company?.settings?.logo)
+        });
+    } catch (error) {
+        console.error('getOwnBrandingSettings error:', error);
+        return res.status(500).json({ message: 'Failed to load company branding settings.' });
+    }
+};
+
+// PUT /api/admin/company-settings/branding
+const updateOwnBrandingSettings = async (req, res) => {
+    try {
+        const displayMode = normalizeWorkspaceLogoMode(req.body?.displayMode);
+        const logoAlignment = normalizeWorkspaceLogoAlignment(req.body?.logoAlignment);
+        const logoSize = normalizeWorkspaceLogoSize(req.body?.logoSize);
+
+        const company = await Company.findByIdAndUpdate(
+            req.companyId,
+            {
+                $set: {
+                    'settings.workspaceBranding.displayMode': displayMode,
+                    'settings.workspaceBranding.logoAlignment': logoAlignment,
+                    'settings.workspaceBranding.logoSize': logoSize
+                }
+            },
+            {
+                new: true,
+                select: 'settings.logo settings.workspaceBranding'
+            }
+        ).lean();
+
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        return res.json({
+            message: 'Company branding updated successfully.',
+            displayMode,
+            logoAlignment,
+            logoSize,
+            companyLogoUrl: company?.settings?.logo || ''
+        });
+    } catch (error) {
+        console.error('updateOwnBrandingSettings error:', error);
+        return res.status(500).json({ message: 'Failed to update company branding settings.' });
+    }
+};
+
+// POST /api/admin/company-settings/branding/logo
+const uploadOwnCompanyLogo = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded.' });
+        }
+
+        const company = await Company.findById(req.companyId)
+            .select('settings.logoPublicId')
+            .lean();
+
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        const oldPublicId = company?.settings?.logoPublicId;
+        if (oldPublicId) {
+            await cloudinary.uploader.destroy(oldPublicId).catch((error) => {
+                console.warn('[COMPANY BRANDING] Failed to delete old logo:', error.message);
+            });
+        }
+
+        const result = await new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+                {
+                    folder: `talentcio/${req.companyId}/workspace-branding`,
+                    resource_type: 'image',
+                    allowed_formats: ['jpg', 'jpeg', 'png', 'svg', 'webp'],
+                    transformation: [{ width: 420, height: 140, crop: 'fit' }]
+                },
+                (error, uploaded) => (error ? reject(error) : resolve(uploaded))
+            );
+
+            stream.end(req.file.buffer);
+        });
+
+        await Company.findByIdAndUpdate(req.companyId, {
+            $set: {
+                'settings.logo': result.secure_url,
+                'settings.logoPublicId': result.public_id,
+                'settings.workspaceBranding.displayMode': 'company'
+            }
+        });
+
+        return res.json({
+            message: 'Company logo uploaded successfully.',
+            companyLogoUrl: result.secure_url,
+            displayMode: 'company'
+        });
+    } catch (error) {
+        console.error('uploadOwnCompanyLogo error:', error);
+        return res.status(500).json({ message: 'Failed to upload company logo.' });
+    }
+};
+
+// DELETE /api/admin/company-settings/branding/logo
+const removeOwnCompanyLogo = async (req, res) => {
+    try {
+        const company = await Company.findById(req.companyId)
+            .select('settings.logoPublicId settings.workspaceBranding')
+            .lean();
+
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        const publicId = company?.settings?.logoPublicId;
+        if (publicId) {
+            await cloudinary.uploader.destroy(publicId).catch((error) => {
+                console.warn('[COMPANY BRANDING] Failed to delete logo:', error.message);
+            });
+        }
+
+        const displayMode = normalizeWorkspaceLogoMode(company?.settings?.workspaceBranding?.displayMode);
+
+        await Company.findByIdAndUpdate(req.companyId, {
+            $set: {
+                'settings.logo': '',
+                'settings.logoPublicId': ''
+            }
+        });
+
+        return res.json({
+            message: 'Company logo removed.',
+            companyLogoUrl: '',
+            displayMode
+        });
+    } catch (error) {
+        console.error('removeOwnCompanyLogo error:', error);
+        return res.status(500).json({ message: 'Failed to remove company logo.' });
+    }
+};
+
 // PATCH /api/superadmin/companies/:id/status
 const toggleCompanyStatus = async (req, res) => {
     try {
@@ -585,5 +773,9 @@ module.exports = {
     deleteCompany,
     getCompanyAnalytics,
     getOwnAttendanceSettings,
-    updateOwnAttendanceSettings
+    updateOwnAttendanceSettings,
+    getOwnBrandingSettings,
+    updateOwnBrandingSettings,
+    uploadOwnCompanyLogo,
+    removeOwnCompanyLogo
 };
