@@ -80,6 +80,7 @@ const employeeProfileSchema = new mongoose.Schema({
     // --- Contact Details ---
     contact: {
         personalEmail: String,
+        workEmail: String,
         mobileNumber: String,
         alternateNumber: String,
         emergencyNumber: String,
