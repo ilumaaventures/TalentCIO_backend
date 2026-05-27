@@ -239,9 +239,11 @@ const initServer = async () => {
     startEscalationCron(io);
     startAutoCheckoutCron();
     startBinAutoPurgeCron();
-};
 
-initServer();
+    server.listen(PORT, () => {
+        console.log(`Server & Socket.IO running on port ${PORT}`);
+    });
+};
 
 app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/superadmin')) return next();
@@ -297,8 +299,9 @@ app.get('/', (req, res) => {
     res.json({ message: 'TalentCio API is running' });
 });
 
-server.listen(PORT, () => {
-    console.log(`Server & Socket.IO running on port ${PORT}`);
+initServer().catch((error) => {
+    console.error('[SERVER INIT] Failed to start server:', error.message);
+    process.exit(1);
 });
 
 process.on('unhandledRejection', (err) => {
