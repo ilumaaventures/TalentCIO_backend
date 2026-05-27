@@ -1755,6 +1755,8 @@ exports.submitOnboarding = async (req, res) => {
             const io = req.app.get('io');
             await NotificationService.createNotification(io, {
                 user: employee.createdBy._id,
+                companyId: req.companyId,
+                preferenceKey: 'onboarding_submission_received',
                 title: 'Onboarding Submission Received',
                 message: `${employee.firstName} ${employee.lastName} (${employee.tempEmployeeId}) has submitted their pre-onboarding documents.`,
                 type: 'Info',

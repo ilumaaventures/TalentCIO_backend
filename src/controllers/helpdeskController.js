@@ -10,6 +10,70 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
 };
 
+const isAdminUser = (user) =>
+    user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+
+const buildRequestError = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    return error;
+};
+
+const validateQueryTypeAssignments = async ({
+    companyId,
+    assignedRole,
+    assignedPerson,
+    escalationRole,
+    escalationPerson
+}) => {
+    if (!assignedPerson) {
+        throw buildRequestError('Assigned responsible person is required.');
+    }
+
+    const [assignedRoleDoc, assignedPersonDoc, escalationRoleDoc, escalationPersonDoc] = await Promise.all([
+        assignedRole
+            ? Role.findOne({ _id: assignedRole, companyId, isActive: true }).select('_id').lean()
+            : Promise.resolve(null),
+        User.findOne({ _id: assignedPerson, companyId, isActive: true }).select('_id roles').lean(),
+        escalationRole
+            ? Role.findOne({ _id: escalationRole, companyId, isActive: true }).select('_id').lean()
+            : Promise.resolve(null),
+        escalationPerson
+            ? User.findOne({ _id: escalationPerson, companyId, isActive: true }).select('_id roles').lean()
+            : Promise.resolve(null)
+    ]);
+
+    if (assignedRole && !assignedRoleDoc) {
+        throw buildRequestError('Assigned role must belong to this workspace.');
+    }
+
+    if (!assignedPersonDoc) {
+        throw buildRequestError('Assigned responsible person must belong to this workspace and be active.');
+    }
+
+    if (assignedRoleDoc) {
+        const hasAssignedRole = (assignedPersonDoc.roles || []).some(roleId => roleId?.toString() === assignedRoleDoc._id.toString());
+        if (!hasAssignedRole) {
+            throw buildRequestError('Assigned responsible person must have the selected assigned role.');
+        }
+    }
+
+    if (escalationRole && !escalationRoleDoc) {
+        throw buildRequestError('Escalation role must belong to this workspace.');
+    }
+
+    if (escalationPerson && !escalationPersonDoc) {
+        throw buildRequestError('Escalation person must belong to this workspace and be active.');
+    }
+
+    if (escalationRoleDoc && escalationPersonDoc) {
+        const hasEscalationRole = (escalationPersonDoc.roles || []).some(roleId => roleId?.toString() === escalationRoleDoc._id.toString());
+        if (!hasEscalationRole) {
+            throw buildRequestError('Escalation person must have the selected escalation role.');
+        }
+    }
+};
+
 
 // === QUERY TYPE MANAGEMENT ===
 
@@ -32,12 +96,20 @@ exports.getQueryTypes = async (req, res) => {
 
 exports.addQueryType = async (req, res) => {
     try {
-        if (!req.user.roles.some(r => r.name === 'Admin')) return res.status(403).json({ success: false, message: 'Admins only' });
+        if (!isAdminUser(req.user)) return res.status(403).json({ success: false, message: 'Admins only' });
 
         const {
             name, assignedRole, assignedPerson,
             enableEscalation, escalationDays, escalationRole, escalationPerson
         } = req.body;
+
+        await validateQueryTypeAssignments({
+            companyId: req.companyId,
+            assignedRole,
+            assignedPerson,
+            escalationRole,
+            escalationPerson
+        });
 
         const newType = new QueryType({
             name, assignedRole, assignedPerson,
@@ -49,13 +121,16 @@ exports.addQueryType = async (req, res) => {
         res.status(201).json({ success: true, data: newType });
     } catch (error) {
         console.error('Error adding query type:', error);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.statusCode ? error.message : 'Server Error'
+        });
     }
 };
 
 exports.updateQueryType = async (req, res) => {
     try {
-        if (!req.user.roles.some(r => r.name === 'Admin')) return res.status(403).json({ success: false, message: 'Admins only' });
+        if (!isAdminUser(req.user)) return res.status(403).json({ success: false, message: 'Admins only' });
 
         const {
             name, assignedRole, assignedPerson, isActive,
@@ -64,6 +139,14 @@ exports.updateQueryType = async (req, res) => {
         const type = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
 
         if (!type) return res.status(404).json({ success: false, message: 'Type not found' });
+
+        await validateQueryTypeAssignments({
+            companyId: req.companyId,
+            assignedRole: assignedRole !== undefined ? assignedRole : type.assignedRole,
+            assignedPerson: assignedPerson || type.assignedPerson,
+            escalationRole: escalationRole !== undefined ? escalationRole : type.escalationRole,
+            escalationPerson: escalationPerson !== undefined ? escalationPerson : type.escalationPerson
+        });
 
         if (name) type.name = name;
         if (assignedRole !== undefined) type.assignedRole = assignedRole ? assignedRole : null;
@@ -78,13 +161,16 @@ exports.updateQueryType = async (req, res) => {
         res.status(200).json({ success: true, data: type });
     } catch (error) {
         console.error('Error updating query type:', error);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.statusCode ? error.message : 'Server Error'
+        });
     }
 };
 
 exports.deleteQueryType = async (req, res) => {
     try {
-        if (!req.user.roles.some(r => r.name === 'Admin')) return res.status(403).json({ success: false, message: 'Admins only' });
+        if (!isAdminUser(req.user)) return res.status(403).json({ success: false, message: 'Admins only' });
 
         const queryType = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!queryType) return res.status(404).json({ success: false, message: 'Type not found' });
@@ -141,6 +227,7 @@ exports.createQuery = async (req, res) => {
         const notificationsData = Array.from(notificationTargets).map(userId => ({
             user: userId,
             companyId: req.companyId,
+            preferenceKey: 'helpdesk_query_created',
             title: 'New Helpdesk Query',
             message: `A new ${priority || 'Medium'} priority query has been raised: "${subject}"`,
             type: 'Alert',
@@ -155,6 +242,7 @@ exports.createQuery = async (req, res) => {
         await NotificationService.createNotification(io, {
             user: req.user._id,
             companyId: req.companyId,
+            preferenceKey: 'helpdesk_query_created',
             title: 'Query Raised Successfully',
             message: `Your query "${subject}" has been submitted and is being reviewed.`,
             type: 'Info',
@@ -263,8 +351,7 @@ exports.getQueryById = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Invalid Query ID format' });
         }
 
-        // First try to find by ID and Company (strict multi-tenant)
-        let query = await HelpdeskQuery.findOne({ _id: id, companyId: req.companyId })
+        const query = await HelpdeskQuery.findOne({ _id: id, companyId: req.companyId })
             .populate('raisedBy', 'firstName lastName email')
             .populate('assignedTo', 'firstName lastName email')
             .populate('originalAssignee', 'firstName lastName email')
@@ -272,34 +359,11 @@ exports.getQueryById = async (req, res) => {
             .populate('queryType', 'name')
             .lean();
 
-        // If not found, try to find by ID only to see if it's an old record or a mismatch
-        if (!query) {
-            query = await HelpdeskQuery.findById(id)
-                .populate('raisedBy', 'firstName lastName email')
-                .populate('assignedTo', 'firstName lastName email')
-                .populate('originalAssignee', 'firstName lastName email')
-                .populate('comments.user', 'firstName lastName roles')
-                .populate('queryType', 'name')
-                .lean();
-            
-            // SECURITY REFINEMENT: If found but different company, we allow viewing ONLY if they are the raiser or assignee.
-            // Otherwise, it's a potential cross-tenant leak.
-            if (query && query.companyId && query.companyId.toString() !== req.companyId.toString()) {
-                const isAdmin = req.user.roles.some(r => (r.name || r) === 'Admin' || r.isSystem === true);
-                const isAssignee = query.assignedTo?._id?.toString() === req.user._id.toString() || query.assignedTo?.toString() === req.user._id.toString();
-                const isRaiser = query.raisedBy?._id?.toString() === req.user._id.toString() || query.raisedBy?.toString() === req.user._id.toString();
-                
-                if (!isAdmin && !isAssignee && !isRaiser) {
-                    return res.status(403).json({ success: false, message: 'Access denied: Query belongs to a different workspace.' });
-                }
-            }
-        }
-
         if (!query) {
             return res.status(404).json({ success: false, message: 'Query not found' });
         }
 
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isAdmin = isAdminUser(req.user);
         const isAssignee = query.assignedTo?._id?.toString() === req.user._id.toString() || query.assignedTo?.toString() === req.user._id.toString();
         const isRaiser = query.raisedBy?._id?.toString() === req.user._id.toString() || query.raisedBy?.toString() === req.user._id.toString();
 
@@ -417,6 +481,7 @@ exports.updateQueryStatus = async (req, res) => {
                     await NotificationService.createNotification(io, {
                         user: newAssignee,
                         companyId: req.companyId,
+                        preferenceKey: 'helpdesk_query_escalated',
                         title: 'Manual Escalation Assigned',
                         message: `An escalated query "${query.subject}" has been assigned to you.`,
                         type: 'Alert',
@@ -484,6 +549,7 @@ exports.updateQueryStatus = async (req, res) => {
             await NotificationService.createNotification(io, {
                 user: notifyTarget,
                 companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_status_updated',
                 title: notificationTitle,
                 message: notificationMessage,
                 type: 'Info',
@@ -544,6 +610,7 @@ exports.addComment = async (req, res) => {
             await NotificationService.createNotification(io, {
                 user: notifyTarget,
                 companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_comment_added',
                 title: 'New Comment on Query',
                 message: `${req.user.firstName} commented on "${query.subject}"`,
                 type: 'Info',

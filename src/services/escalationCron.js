@@ -154,6 +154,7 @@ const startEscalationCron = (io) => {
                     notificationsData.push({
                         user: query.raisedBy,
                         companyId: query.companyId,
+                        preferenceKey: 'helpdesk_query_escalated',
                         title: 'Query Escalated',
                         message: `Your query "${query.subject}" has been escalated due to SLA timeout.`,
                         type: 'Alert',
@@ -164,6 +165,7 @@ const startEscalationCron = (io) => {
                         notificationsData.push({
                             user: newAssignee,
                             companyId: query.companyId,
+                            preferenceKey: 'helpdesk_query_escalated',
                             title: 'Escalated Query Assigned',
                             message: `An escalated query "${query.subject}" has been assigned to you.`,
                             type: 'Alert',

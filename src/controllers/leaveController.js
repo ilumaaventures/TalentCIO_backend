@@ -199,6 +199,7 @@ const applyLeave = async (req, res) => {
             const notifications = currentUser.reportingManagers.map(manager => ({
                 user: manager._id,
                 companyId: req.companyId,
+                preferenceKey: 'leave_request_submitted',
                 title: 'New Leave Request',
                 message: `${currentUser.firstName} ${currentUser.lastName} has applied for ${daysCount} days of ${leaveType} leave.`,
                 type: 'Approval',
@@ -456,6 +457,7 @@ const updateLeaveStatus = async (req, res) => {
         await NotificationService.createNotification(io, {
             user: request.user,
             companyId: req.companyId,
+            preferenceKey: 'leave_request_status_updated',
             title: `Leave Request ${status}`,
             message: `Your leave request for ${request.daysCount} days of ${request.leaveType} has been ${status.toLowerCase()}.`,
             type: status === 'Approved' ? 'Info' : 'Alert',

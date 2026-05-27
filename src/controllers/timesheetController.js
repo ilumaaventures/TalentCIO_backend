@@ -267,6 +267,7 @@ const submitTimesheet = async (req, res) => {
             const notifications = currentUser.reportingManagers.map(manager => ({
                 user: manager._id,
                 companyId: req.companyId,
+                preferenceKey: 'timesheet_submitted',
                 title: 'Timesheet Submitted',
                 message: `${currentUser.firstName} ${currentUser.lastName} has submitted their timesheet for ${timesheet.month}.`,
                 type: 'Approval',
@@ -692,6 +693,7 @@ const approveTimesheet = async (req, res) => {
         await NotificationService.createNotification(io, {
             user: targetUser._id,
             companyId: req.companyId,
+            preferenceKey: 'timesheet_status_updated',
             title: `Timesheet ${status}`,
             message: `Your timesheet for ${timesheet.month} has been ${status === 'APPROVED' ? 'approved' : 'rejected'}. ${reason ? 'Reason: ' + reason : ''}`,
             type: status === 'APPROVED' ? 'Info' : 'Alert',

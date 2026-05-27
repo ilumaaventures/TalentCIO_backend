@@ -29,6 +29,8 @@ router.get(
     authorizeAny([
         'settings.email.view',
         'settings.email.manage',
+        'settings.notification.view',
+        'settings.notification.manage',
         'onboarding.view',
         'onboarding.document.review',
         'onboarding.document.request',

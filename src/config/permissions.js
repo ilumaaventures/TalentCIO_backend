@@ -435,6 +435,16 @@ module.exports = [
         module: "SETTINGS",
         description: "Manage company email settings"
     },
+    {
+        key: "settings.notification.view",
+        module: "SETTINGS",
+        description: "View company notification settings"
+    },
+    {
+        key: "settings.notification.manage",
+        module: "SETTINGS",
+        description: "Manage company notification settings"
+    },
 
     // ONBOARDING
     {

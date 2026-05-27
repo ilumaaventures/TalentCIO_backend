@@ -217,6 +217,7 @@ const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 const binRoutes = require('./src/routes/binRoutes');
 const emailSettingsRoutes = require('./src/routes/emailSettingsRoutes');
+const notificationSettingsRoutes = require('./src/routes/notificationSettingsRoutes');
 const emailBrandingRoutes = require('./src/routes/emailBrandingRoutes');
 const emailBrandingTemplateRoutes = require('./src/routes/emailBrandingTemplateRoutes');
 
@@ -281,6 +282,7 @@ app.use('/api/discussions', discussionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/bin', binRoutes);
 app.use('/api/company/email-settings', emailSettingsRoutes);
+app.use('/api/company/notification-settings', notificationSettingsRoutes);
 app.use('/api/email-branding', emailBrandingRoutes);
 app.use('/api/email-templates', emailBrandingTemplateRoutes);
 
