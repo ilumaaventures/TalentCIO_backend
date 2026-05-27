@@ -6,6 +6,7 @@ const CLIENTS_MODULE_ID = 'clients';
 const ALL_COMPANY_MODULES = [
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
     { id: 'leaves', label: 'Leaves', icon: 'Calendar' },
+    { id: 'holidays', label: 'Holidays', icon: 'CalendarDays' },
     { id: 'timesheet', label: 'Timesheet', icon: 'FileText' },
     { id: 'talentAcquisition', label: 'Talent Acquisition', icon: 'Users' },
     { id: 'helpdesk', label: 'Helpdesk', icon: 'MessageSquare' },

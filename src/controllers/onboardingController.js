@@ -125,6 +125,49 @@ const ONBOARDING_LAYOUT_PLACEHOLDERS = [
 ];
 
 const stripHtml = (html = '') => String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const LEGACY_EXPERIENCE_CERTIFICATE_LABEL = 'Experience Certificate';
+const CURRENT_EXPERIENCE_CERTIFICATE_LABEL = 'Previous Experience Certificate';
+
+const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
+    if (!employee) return employee;
+
+    let changed = false;
+
+    if (Array.isArray(employee.documents)) {
+        employee.documents.forEach((doc) => {
+            if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+                changed = true;
+            }
+        });
+    }
+
+    if (Array.isArray(employee.requestedDocuments)) {
+        employee.requestedDocuments.forEach((doc) => {
+            if (doc?.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+                changed = true;
+            }
+        });
+    }
+
+    if (employee.selectionDraft && Array.isArray(employee.selectionDraft.documents)) {
+        employee.selectionDraft.documents = employee.selectionDraft.documents.map((label) => {
+            if (label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
+                changed = true;
+                return CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
+            }
+
+            return label;
+        });
+    }
+
+    if (changed && typeof employee.save === 'function') {
+        await employee.save();
+    }
+
+    return employee;
+};
 
 const getUniqueDocumentLabel = (existingDocs = [], baseLabel = 'Document') => {
     const trimmedBaseLabel = String(baseLabel || 'Document').trim() || 'Document';
@@ -262,7 +305,7 @@ exports.addEmployee = async (req, res) => {
             { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
             { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
-            { type: 'experience_certificate', label: 'Experience Certificate' },
+            { type: 'experience_certificate', label: 'Previous Experience Certificate' },
             { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
         ];
 
@@ -281,7 +324,7 @@ exports.addEmployee = async (req, res) => {
             documentDeadline: documentDeadline || undefined,
             workLocation: workLocation || '',
             address: address || '',
-            probationPeriod: probationPeriod || '6 months',
+            probationPeriod: probationPeriod || '',
             salary: salary || {},
             credentialsExpireAt: documentDeadline || undefined,
             offerLetterUrl: offerLetterUrl || '',
@@ -539,7 +582,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;">
                 <tr>
                     <td bgcolor="#2563eb" style="border-radius:8px; text-align:center;">
-                        <a href="${portalUrl}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Pre-Onboarding Portal</a>
+                        <a href="${portalUrl}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Portal</a>
                     </td>
                 </tr>
             </table>`;
@@ -583,7 +626,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     </div>
 
                     <div style="text-align: center; margin: 28px 0;">
-                        <a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Pre-Onboarding Portal</a>
+                        <a href="${portalUrl}" style="background: linear-gradient(135deg, #2563eb, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 15px;">Open Portal</a>
                     </div>
                 </div>
                 <div style="background: #f1f5f9; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">
@@ -898,7 +941,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
                     { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
-                    { type: 'experience_certificate', label: 'Experience Certificate' },
+                    { type: 'experience_certificate', label: 'Previous Experience Certificate' },
                     { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
                 ];
 
@@ -916,7 +959,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     documentDeadline: emp.documentDeadline || undefined,
                     workLocation: emp.workLocation || '',
                     address: emp.address || '',
-                    probationPeriod: emp.probationPeriod || '6 months',
+                    probationPeriod: emp.probationPeriod || '',
                     credentialsExpireAt: emp.documentDeadline || undefined,
                     documents: defaultDocuments,
                     companyId: req.companyId,
@@ -1000,12 +1043,13 @@ exports.getOnboardingEmployee = async (req, res) => {
     try {
         const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId })
             .select('-tempPassword')
-            .populate('createdBy', 'firstName lastName')
-            .lean();
+            .populate('createdBy', 'firstName lastName');
 
         if (!employee) return res.status(404).json({ message: 'Onboarding employee not found' });
 
-        res.status(200).json(employee);
+        await normalizeOnboardingExperienceCertificateLabels(employee);
+
+        res.status(200).json(employee.toObject());
     } catch (error) {
         console.error('Error fetching onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1035,7 +1079,7 @@ exports.updateEmployee = async (req, res) => {
         }
         if (workLocation) employee.workLocation = workLocation;
         if (address) employee.address = address;
-        if (probationPeriod) employee.probationPeriod = probationPeriod;
+        if (probationPeriod !== undefined) employee.probationPeriod = probationPeriod || '';
         if (salary) {
             employee.salary = { ...employee.salary.toObject(), ...salary };
         }
@@ -1454,10 +1498,11 @@ exports.changePassword = async (req, res) => {
 exports.getMyOnboarding = async (req, res) => {
     try {
         const employee = await OnboardingEmployee.findById(req.onboardingEmployee._id)
-            .select('-tempPassword -auditLog')
-            .lean();
+            .select('-tempPassword -auditLog');
 
         if (!employee) return res.status(404).json({ message: 'Not found' });
+
+        await normalizeOnboardingExperienceCertificateLabels(employee);
 
         // Fetch company settings for templates and policies
         const company = await Company.findById(employee.companyId).select('settings.onboarding');
@@ -1465,7 +1510,7 @@ exports.getMyOnboarding = async (req, res) => {
         const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
 
         res.status(200).json({
-            ...employee,
+            ...employee.toObject(),
             companyPolicies: policies,
             dynamicTemplates: dynamicTemplates
         });
@@ -2470,13 +2515,19 @@ const DOC_CATEGORY_MAP = {
     'aadhaar_front': 'ID Proof',
     'aadhaar_back': 'ID Proof',
     'passport': 'ID Proof',
+    'passport_photo': 'ID Proof',
     'salary_slip': 'Payslips',
     '10th_marksheet': 'Education',
     '12th_marksheet': 'Education',
     'graduation': 'Education',
     'relieving_letter': 'Relieving Letter',
-    'experience_certificate': 'Employment',
-    'passport_photo': 'Other'
+    'experience_certificate': 'Employment'
+};
+
+const DOC_TITLE_MAP = {
+    'passport': 'Passport',
+    'passport_photo': 'Recent Passport-Size Photograph',
+    'experience_certificate': 'Previous Experience Certificate'
 };
 
 const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
@@ -2562,14 +2613,18 @@ exports.transferToActiveEmployee = async (req, res) => {
         // Map onboarding documents to dossier documents
         const dossierDocuments = (employee.documents || [])
             .filter(doc => doc.url) // Only docs that were actually uploaded
-            .map(doc => ({
+            .map(doc => {
+                const normalizedTitle = DOC_TITLE_MAP[doc.type] || doc.label;
+
+                return ({
                 category: DOC_CATEGORY_MAP[doc.type] || 'Other',
-                title: doc.label,
-                fileName: doc.label.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
+                title: normalizedTitle,
+                fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
                 url: doc.url,
                 uploadDate: doc.uploadedAt || new Date(),
                 verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
-            }));
+                });
+            });
 
         if (bankDetails.cancelledChequeUrl) {
             dossierDocuments.push({
