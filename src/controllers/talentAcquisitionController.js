@@ -523,6 +523,11 @@ const sendMassMailForHiringRequest = async ({
     let sent = 0;
     let failed = 0;
     const failedEmails = [];
+    const delivery = await NotificationService.getEmailPreferenceForEvent(
+        companyId,
+        'ta_mass_mail_sent',
+        emailAccountId
+    );
 
     for (const [index, candidate] of candidates.entries()) {
         const dataMap = buildCandidateDataMap(
@@ -539,7 +544,7 @@ const sendMassMailForHiringRequest = async ({
 
         const delivered = await sendEmailForCompany({
             companyId,
-            emailAccountId,
+            emailAccountId: delivery.emailAccountId,
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,

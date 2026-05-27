@@ -8,7 +8,9 @@ const Company = require('../models/Company');
 const HandoffToken = require('../models/HandoffToken');
 const { HiringRequest } = require('../models/HiringRequest');
 const PublicApplication = require('../models/PublicApplication');
-const { sendEmail, sendOTPEmail } = require('../services/emailService');
+const { sendEmail } = require('../services/emailService');
+const { sendEmailForCompany } = require('../services/companyEmailService');
+const NotificationService = require('../services/notificationService');
 const { computeProfileCompletion } = require('../utils/profileCompletion');
 
 const DEMO_REQUEST_RECIPIENT = process.env.DEMO_REQUEST_EMAIL || 'ilumaaventures@gmail.com';
@@ -318,13 +320,51 @@ const getApplicantWithCompletion = async (applicantId) => {
     return { applicant, completion };
 };
 
+const buildOtpEmailContent = (firstName, otpCode) => ({
+    subject: 'Your Password Reset OTP - TalentCIO',
+    html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <h2 style="color: #4a90e2; text-align: center;">Welcome to TalentCIO!</h2>
+            <p>Hello ${firstName},</p>
+            <p>To ensure the security of your account, we require a mandatory password reset for your first login.</p>
+            <p>Please use the following One-Time Password (OTP) to verify your identity and set your new password:</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #333; background: #f4f4f4; padding: 10px 20px; border-radius: 5px; border: 1px solid #ccc;">${otpCode}</span>
+            </div>
+            <p style="color: #666; font-size: 14px;">This OTP is valid for 10 minutes. If you did not expect this email, please ignore it.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+            <p style="text-align: center; color: #999; font-size: 12px;">&copy; 2026 TalentCIO. All rights reserved.</p>
+        </div>
+    `,
+    text: [
+        'Welcome to TalentCIO!',
+        `Hello ${firstName},`,
+        'Use this OTP to reset your password on first login.',
+        `OTP: ${otpCode}`,
+        'This OTP is valid for 10 minutes.'
+    ].join('\n')
+});
+
 const issueFirstLoginOtp = async (user) => {
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     user.otp = otpCode;
     user.otpExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
 
-    sendOTPEmail(user.email, otpCode, user.firstName).catch((error) => {
+    const delivery = await NotificationService.getEmailPreferenceForEvent(
+        user.companyId,
+        'employee_first_login_otp'
+    );
+    const otpEmail = buildOtpEmailContent(user.firstName, otpCode);
+
+    sendEmailForCompany({
+        companyId: user.companyId,
+        emailAccountId: delivery.emailAccountId,
+        to: user.email,
+        subject: otpEmail.subject,
+        html: otpEmail.html,
+        text: otpEmail.text
+    }).catch((error) => {
         console.error('[COMPANY LOGIN] Failed to send first-login OTP:', error.message);
     });
 };

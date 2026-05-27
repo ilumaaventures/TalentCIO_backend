@@ -114,6 +114,19 @@ const DEFAULT_PRE_ONBOARDING_EMAIL_BODY = `
     </table>
 `;
 
+const resolveNotificationEmailDelivery = async (companyId, preferenceKey, requestedEmailAccountId = '') => {
+    const preference = await NotificationService.getEmailPreferenceForEvent(
+        companyId,
+        preferenceKey,
+        requestedEmailAccountId
+    );
+
+    return {
+        shouldSendEmail: preference.shouldSendEmail,
+        emailAccountId: preference.emailAccountId
+    };
+};
+
 const ONBOARDING_LAYOUT_PLACEHOLDERS = [
     'credentialsSection',
     'requestedSectionsBlock',
@@ -695,11 +708,18 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         }));
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
+        const delivery = await resolveNotificationEmailDelivery(
+            employee.companyId,
+            'pre_onboarding_email_sent',
+            req.body?.emailAccountId
+        );
+        if (!delivery.shouldSendEmail) {
+            return res.status(400).json({ message: 'Pre-onboarding email delivery is disabled in notification settings.' });
+        }
         await sendEmailForCompany({
             companyId: employee.companyId,
-            emailAccountId: req.body?.emailAccountId,
+            emailAccountId: delivery.emailAccountId,
             to: employee.email,
-            subject: `Action Required: Complete Your Pre-Onboarding – ${employee.tempEmployeeId}`,
             html: emailHtml,
             subject: resolvedSubject,
             text: emailText,
@@ -862,9 +882,17 @@ exports.sendCustomFile = async (req, res) => {
         }));
 
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
+        const delivery = await resolveNotificationEmailDelivery(
+            employee.companyId,
+            'onboarding_custom_file_sent',
+            req.body?.emailAccountId
+        );
+        if (!delivery.shouldSendEmail) {
+            return res.status(400).json({ message: 'Onboarding custom file email delivery is disabled in notification settings.' });
+        }
         const sent = await sendEmailForCompany({
             companyId: employee.companyId,
-            emailAccountId: req.body?.emailAccountId,
+            emailAccountId: delivery.emailAccountId,
             to: employee.email,
             subject: `Action Required: New ${files.length > 1 ? 'Documents' : 'Document'} for Your Onboarding`,
             html: emailHtml,
@@ -1205,11 +1233,17 @@ exports.flagDocument = async (req, res) => {
                 `).join('');
 
                 const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmailForCompany({
-                    companyId: employee.companyId,
-                    to: employee.email,
-                    subject: `Action Required: Document Updates Needed for Your Onboarding`,
-                    html: `
+                const delivery = await resolveNotificationEmailDelivery(
+                    employee.companyId,
+                    'onboarding_document_reupload_required'
+                );
+                if (delivery.shouldSendEmail) {
+                    await sendEmailForCompany({
+                        companyId: employee.companyId,
+                        emailAccountId: delivery.emailAccountId,
+                        to: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        html: `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
                             <h2 style="color: #e53e3e;">Document Updates Required</h2>
                             <p>Hello ${employee.firstName},</p>
@@ -1219,8 +1253,9 @@ exports.flagDocument = async (req, res) => {
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
                     `,
-                    ...branding
-                });
+                        ...branding
+                    });
+                }
             }
         }
 
@@ -1276,11 +1311,17 @@ exports.approveDocument = async (req, res) => {
                 `).join('');
 
                 const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-                await sendEmailForCompany({
-                    companyId: employee.companyId,
-                    to: employee.email,
-                    subject: `Action Required: Document Updates Needed for Your Onboarding`,
-                    html: `
+                const delivery = await resolveNotificationEmailDelivery(
+                    employee.companyId,
+                    'onboarding_document_reupload_required'
+                );
+                if (delivery.shouldSendEmail) {
+                    await sendEmailForCompany({
+                        companyId: employee.companyId,
+                        emailAccountId: delivery.emailAccountId,
+                        to: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        html: `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
                             <h2 style="color: #e53e3e;">Document Updates Required</h2>
                             <p>Hello ${employee.firstName},</p>
@@ -1290,8 +1331,9 @@ exports.approveDocument = async (req, res) => {
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
                     `,
-                    ...branding
-                });
+                        ...branding
+                    });
+                }
             }
         }
 
@@ -2713,10 +2755,16 @@ exports.transferToActiveEmployee = async (req, res) => {
         // 4. Send welcome email
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
         const branding = await getCompanyEmailBranding(employee.companyId, req.company);
-        await sendEmailForCompany({
-            companyId: employee.companyId,
-            to: employee.email,
-            subject: `Welcome! Your Employee Account is Ready`,
+        const delivery = await resolveNotificationEmailDelivery(
+            employee.companyId,
+            'onboarding_account_ready'
+        );
+        if (delivery.shouldSendEmail) {
+            await sendEmailForCompany({
+                companyId: employee.companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: employee.email,
+                subject: `Welcome! Your Employee Account is Ready`,
             html: `
                 <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
                     <div style="background: linear-gradient(135deg, #059669, #10b981); padding: 32px; text-align: center;">
@@ -2745,7 +2793,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                 </div>
             `,
             ...branding
-        });
+            });
+        }
 
         res.status(201).json({
             message: 'Employee transferred to active user successfully!',

@@ -163,6 +163,19 @@ class NotificationService {
         return settings?.events?.[normalizedKey] || NOTIFICATION_EVENT_MAP[normalizedKey]?.defaultChannel || 'system';
     }
 
+    static async getEmailPreferenceForEvent(companyId, preferenceKey, fallbackEmailAccountId = '') {
+        const settings = companyId
+            ? await this.getCompanyNotificationSettings(companyId)
+            : null;
+        const channel = this.resolveNotificationChannel(settings, preferenceKey);
+
+        return {
+            channel,
+            shouldSendEmail: this.channelIncludesEmail(channel),
+            emailAccountId: String(fallbackEmailAccountId || settings?.emailSenderAccountId || '').trim() || undefined
+        };
+    }
+
     static channelIncludesSystem(channel = '') {
         return channel === 'system' || channel === 'both';
     }

@@ -2,6 +2,14 @@ const NOTIFICATION_CHANNELS = ['off', 'system', 'email', 'both'];
 
 const NOTIFICATION_EVENT_DEFINITIONS = [
     {
+        key: 'employee_first_login_otp',
+        label: 'Employee first login OTP',
+        description: 'Send the first-login OTP when an employee must reset their password.',
+        module: 'Authentication',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
+    },
+    {
         key: 'leave_request_submitted',
         label: 'Leave request submitted',
         description: 'Notify approvers when an employee submits a leave request.',
@@ -126,6 +134,46 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         description: 'Notify HR when a pre-onboarding submission is completed.',
         module: 'Onboarding',
         defaultChannel: 'both'
+    },
+    {
+        key: 'pre_onboarding_email_sent',
+        label: 'Pre-onboarding email send',
+        description: 'Send the main pre-onboarding email to the candidate.',
+        module: 'Onboarding',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
+    },
+    {
+        key: 'onboarding_custom_file_sent',
+        label: 'Onboarding custom file send',
+        description: 'Send manually attached onboarding files to the candidate.',
+        module: 'Onboarding',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
+    },
+    {
+        key: 'onboarding_document_reupload_required',
+        label: 'Onboarding document re-upload required',
+        description: 'Send the re-upload request email when onboarding documents need correction.',
+        module: 'Onboarding',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
+    },
+    {
+        key: 'onboarding_account_ready',
+        label: 'Onboarding account ready email',
+        description: 'Send the welcome email after onboarding is transferred to an active employee account.',
+        module: 'Onboarding',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
+    },
+    {
+        key: 'ta_mass_mail_sent',
+        label: 'TA mass mail send',
+        description: 'Send bulk candidate emails from Talent Acquisition.',
+        module: 'Talent Acquisition',
+        defaultChannel: 'email',
+        supportedChannels: ['email']
     }
 ];
 
@@ -149,8 +197,9 @@ const normalizeNotificationSettings = (settings = {}) => {
     const normalizedEvents = { ...defaultEvents };
 
     Object.keys(defaultEvents).forEach((key) => {
+        const supportedChannels = NOTIFICATION_EVENT_MAP[key]?.supportedChannels || NOTIFICATION_CHANNELS;
         const incomingValue = String(inputEvents?.[key] || '').toLowerCase();
-        if (isValidNotificationChannel(incomingValue)) {
+        if (isValidNotificationChannel(incomingValue) && supportedChannels.includes(incomingValue)) {
             normalizedEvents[key] = incomingValue;
         }
     });
