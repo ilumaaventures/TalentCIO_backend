@@ -57,6 +57,15 @@ router.put(
     emailSettingsController.updateEmailSettings
 );
 
+router.put(
+    '/default-sender',
+    authorizeAny([
+        'settings.email.manage',
+        'settings.notification.manage'
+    ]),
+    emailSettingsController.updateDefaultEmailSender
+);
+
 router.post(
     '/test',
     authorize('settings.email.manage'),

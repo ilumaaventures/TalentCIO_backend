@@ -1,4 +1,5 @@
 const NOTIFICATION_CHANNELS = ['off', 'system', 'email', 'both'];
+const NOTIFICATION_EMAIL_SENDER_SOURCES = ['notification', 'default'];
 
 const NOTIFICATION_EVENT_DEFINITIONS = [
     {
@@ -187,14 +188,35 @@ const buildDefaultNotificationEvents = () => NOTIFICATION_EVENT_DEFINITIONS.redu
     return accumulator;
 }, {});
 
+const buildDefaultNotificationEmailSenderSources = () => NOTIFICATION_EVENT_DEFINITIONS.reduce((accumulator, definition) => {
+    accumulator[definition.key] = 'notification';
+    return accumulator;
+}, {});
+
+const buildDefaultNotificationEventEmailSenderAccountIds = () => NOTIFICATION_EVENT_DEFINITIONS.reduce((accumulator, definition) => {
+    accumulator[definition.key] = '';
+    return accumulator;
+}, {});
+
 const isValidNotificationChannel = (value) => NOTIFICATION_CHANNELS.includes(String(value || '').toLowerCase());
+const isValidNotificationEmailSenderSource = (value) => NOTIFICATION_EMAIL_SENDER_SOURCES.includes(String(value || '').toLowerCase());
 
 const normalizeNotificationSettings = (settings = {}) => {
     const inputEvents = settings?.events instanceof Map
         ? Object.fromEntries(settings.events.entries())
         : (settings?.events || {});
+    const inputEventEmailSenderSources = settings?.eventEmailSenderSources instanceof Map
+        ? Object.fromEntries(settings.eventEmailSenderSources.entries())
+        : (settings?.eventEmailSenderSources || {});
+    const inputEventEmailSenderAccountIds = settings?.eventEmailSenderAccountIds instanceof Map
+        ? Object.fromEntries(settings.eventEmailSenderAccountIds.entries())
+        : (settings?.eventEmailSenderAccountIds || {});
     const defaultEvents = buildDefaultNotificationEvents();
+    const defaultEventEmailSenderSources = buildDefaultNotificationEmailSenderSources();
+    const defaultEventEmailSenderAccountIds = buildDefaultNotificationEventEmailSenderAccountIds();
     const normalizedEvents = { ...defaultEvents };
+    const normalizedEventEmailSenderSources = { ...defaultEventEmailSenderSources };
+    const normalizedEventEmailSenderAccountIds = { ...defaultEventEmailSenderAccountIds };
 
     Object.keys(defaultEvents).forEach((key) => {
         const supportedChannels = NOTIFICATION_EVENT_MAP[key]?.supportedChannels || NOTIFICATION_CHANNELS;
@@ -202,19 +224,32 @@ const normalizeNotificationSettings = (settings = {}) => {
         if (isValidNotificationChannel(incomingValue) && supportedChannels.includes(incomingValue)) {
             normalizedEvents[key] = incomingValue;
         }
+
+        const incomingSenderSource = String(inputEventEmailSenderSources?.[key] || '').toLowerCase();
+        if (isValidNotificationEmailSenderSource(incomingSenderSource)) {
+            normalizedEventEmailSenderSources[key] = incomingSenderSource;
+        }
+
+        normalizedEventEmailSenderAccountIds[key] = String(inputEventEmailSenderAccountIds?.[key] || '').trim();
     });
 
     return {
         emailSenderAccountId: String(settings?.emailSenderAccountId || '').trim(),
-        events: normalizedEvents
+        events: normalizedEvents,
+        eventEmailSenderSources: normalizedEventEmailSenderSources,
+        eventEmailSenderAccountIds: normalizedEventEmailSenderAccountIds
     };
 };
 
 module.exports = {
     NOTIFICATION_CHANNELS,
+    NOTIFICATION_EMAIL_SENDER_SOURCES,
     NOTIFICATION_EVENT_DEFINITIONS,
     NOTIFICATION_EVENT_MAP,
     buildDefaultNotificationEvents,
+    buildDefaultNotificationEmailSenderSources,
+    buildDefaultNotificationEventEmailSenderAccountIds,
     isValidNotificationChannel,
+    isValidNotificationEmailSenderSource,
     normalizeNotificationSettings
 };

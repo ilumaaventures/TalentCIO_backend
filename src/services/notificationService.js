@@ -163,6 +163,37 @@ class NotificationService {
         return settings?.events?.[normalizedKey] || NOTIFICATION_EVENT_MAP[normalizedKey]?.defaultChannel || 'system';
     }
 
+    static resolveNotificationEmailSenderSource(settings, preferenceKey) {
+        const normalizedKey = String(preferenceKey || '').trim();
+        if (!normalizedKey) {
+            return 'notification';
+        }
+
+        return settings?.eventEmailSenderSources?.[normalizedKey] || 'notification';
+    }
+
+    static resolveNotificationEmailAccountId(settings, preferenceKey, fallbackEmailAccountId = '') {
+        const explicitEmailAccountId = String(fallbackEmailAccountId || '').trim();
+        if (explicitEmailAccountId) {
+            return explicitEmailAccountId;
+        }
+
+        const normalizedKey = String(preferenceKey || '').trim();
+        const eventEmailAccountId = normalizedKey
+            ? String(settings?.eventEmailSenderAccountIds?.[normalizedKey] || '').trim()
+            : '';
+        if (eventEmailAccountId) {
+            return eventEmailAccountId;
+        }
+
+        const senderSource = this.resolveNotificationEmailSenderSource(settings, preferenceKey);
+        if (senderSource === 'default') {
+            return undefined;
+        }
+
+        return String(settings?.emailSenderAccountId || '').trim() || undefined;
+    }
+
     static async getEmailPreferenceForEvent(companyId, preferenceKey, fallbackEmailAccountId = '') {
         const settings = companyId
             ? await this.getCompanyNotificationSettings(companyId)
@@ -172,7 +203,7 @@ class NotificationService {
         return {
             channel,
             shouldSendEmail: this.channelIncludesEmail(channel),
-            emailAccountId: String(fallbackEmailAccountId || settings?.emailSenderAccountId || '').trim() || undefined
+            emailAccountId: this.resolveNotificationEmailAccountId(settings, preferenceKey, fallbackEmailAccountId)
         };
     }
 
@@ -214,7 +245,7 @@ class NotificationService {
             const { subject, html, text } = this.buildEmailPayload({ user, data });
             return await sendEmailForCompany({
                 companyId,
-                emailAccountId: settings?.emailSenderAccountId || undefined,
+                emailAccountId: this.resolveNotificationEmailAccountId(settings, data?.preferenceKey),
                 to: user.email,
                 subject,
                 html,

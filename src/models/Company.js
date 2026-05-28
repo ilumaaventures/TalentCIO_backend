@@ -113,6 +113,21 @@ const companySchema = new mongoose.Schema({
                     enum: ['off', 'system', 'email', 'both']
                 },
                 default: {}
+            },
+            eventEmailSenderSources: {
+                type: Map,
+                of: {
+                    type: String,
+                    enum: ['notification', 'default']
+                },
+                default: {}
+            },
+            eventEmailSenderAccountIds: {
+                type: Map,
+                of: {
+                    type: String
+                },
+                default: {}
             }
         },
         onboarding: {

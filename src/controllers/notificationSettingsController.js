@@ -49,17 +49,28 @@ exports.updateNotificationSettings = async (req, res) => {
     try {
         const normalizedSettings = normalizeNotificationSettings(req.body || {});
         const requestedSenderId = String(normalizedSettings.emailSenderAccountId || '').trim();
+        const requestedEventSenderIds = Object.values(normalizedSettings.eventEmailSenderAccountIds || {})
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
 
-        if (requestedSenderId && requestedSenderId !== PLATFORM_EMAIL_ACCOUNT_ID) {
+        if (requestedSenderId || requestedEventSenderIds.length > 0) {
             const emailSettings = await getCompanyEmailSettings(req.companyId);
-            const selectedAccount = (emailSettings?.accounts || []).find(
-                (account) => String(account?._id || '') === requestedSenderId
-            );
+            const allRequestedSenderIds = [...new Set([requestedSenderId, ...requestedEventSenderIds].filter(Boolean))];
 
-            if (!selectedAccount || !resolveStoredAccountConfig(selectedAccount, emailSettings?.companyName || 'TalentCIO')) {
-                return res.status(400).json({
-                    message: 'Selected sender email is unavailable or not fully configured.'
-                });
+            for (const senderId of allRequestedSenderIds) {
+                if (senderId === PLATFORM_EMAIL_ACCOUNT_ID) {
+                    continue;
+                }
+
+                const selectedAccount = (emailSettings?.accounts || []).find(
+                    (account) => String(account?._id || '') === senderId
+                );
+
+                if (!selectedAccount || !resolveStoredAccountConfig(selectedAccount, emailSettings?.companyName || 'TalentCIO')) {
+                    return res.status(400).json({
+                        message: 'Selected sender email is unavailable or not fully configured.'
+                    });
+                }
             }
         }
 
@@ -68,7 +79,9 @@ exports.updateNotificationSettings = async (req, res) => {
             {
                 $set: {
                     'settings.notifications.emailSenderAccountId': requestedSenderId,
-                    'settings.notifications.events': normalizedSettings.events
+                    'settings.notifications.events': normalizedSettings.events,
+                    'settings.notifications.eventEmailSenderSources': normalizedSettings.eventEmailSenderSources,
+                    'settings.notifications.eventEmailSenderAccountIds': normalizedSettings.eventEmailSenderAccountIds
                 }
             },
             { new: true }
