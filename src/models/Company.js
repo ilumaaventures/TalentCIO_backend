@@ -104,6 +104,32 @@ const companySchema = new mongoose.Schema({
             verifiedAt: { type: Date, default: null },
             testSentAt: { type: Date, default: null }
         },
+        notifications: {
+            emailSenderAccountId: { type: String, default: '' },
+            events: {
+                type: Map,
+                of: {
+                    type: String,
+                    enum: ['off', 'system', 'email', 'both']
+                },
+                default: {}
+            },
+            eventEmailSenderSources: {
+                type: Map,
+                of: {
+                    type: String,
+                    enum: ['notification', 'default']
+                },
+                default: {}
+            },
+            eventEmailSenderAccountIds: {
+                type: Map,
+                of: {
+                    type: String
+                },
+                default: {}
+            }
+        },
         onboarding: {
             offerLetterTemplateUrl: { type: String, default: '' },
             declarationTemplateUrl: { type: String, default: '' },

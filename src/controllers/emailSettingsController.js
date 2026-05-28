@@ -86,6 +86,23 @@ const compareMeaningfulAccountFields = (left = {}, right = {}) => (
     String(left.smtp?.pass || '') === String(right.smtp?.pass || '')
 );
 
+const resolveValidDefaultAccountId = (defaultAccountId, emailSettings = {}, companyName = '') => {
+    const requestedDefaultAccountId = String(defaultAccountId || PLATFORM_EMAIL_ACCOUNT_ID).trim() || PLATFORM_EMAIL_ACCOUNT_ID;
+
+    if (requestedDefaultAccountId === PLATFORM_EMAIL_ACCOUNT_ID) {
+        return PLATFORM_EMAIL_ACCOUNT_ID;
+    }
+
+    const accounts = normalizeStoredEmailAccounts(emailSettings, companyName);
+    const selectedAccount = accounts.find((account) => String(account?._id || '') === requestedDefaultAccountId);
+
+    if (!selectedAccount || !resolveStoredAccountConfig(selectedAccount, companyName || 'TalentCIO')) {
+        return '';
+    }
+
+    return requestedDefaultAccountId;
+};
+
 exports.getEmailSettings = async (req, res) => {
     try {
         const company = await Company.findById(req.companyId)
@@ -126,6 +143,59 @@ exports.getAvailableEmailSenders = async (req, res) => {
         console.error('getAvailableEmailSenders error:', error);
         return res.status(500).json({
             message: 'Failed to fetch available email senders.',
+            error: error.message
+        });
+    }
+};
+
+exports.updateDefaultEmailSender = async (req, res) => {
+    try {
+        const company = await Company.findById(req.companyId)
+            .select('name settings.email')
+            .lean();
+
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found.' });
+        }
+
+        const nextDefaultAccountId = resolveValidDefaultAccountId(
+            req.body?.defaultAccountId,
+            company?.settings?.email || {},
+            company?.name || 'TalentCIO'
+        );
+
+        if (!nextDefaultAccountId) {
+            return res.status(400).json({
+                message: 'Selected default sender is unavailable or not fully configured.'
+            });
+        }
+
+        await Company.findByIdAndUpdate(req.companyId, {
+            $set: {
+                'settings.email.defaultAccountId': nextDefaultAccountId
+            }
+        });
+
+        clearCompanyEmailConfigCache(req.companyId);
+
+        await AuditLog.create({
+            companyId: req.companyId,
+            performedBy: req.user?._id,
+            action: 'EMAIL_DEFAULT_SENDER_UPDATED',
+            module: 'SETTINGS',
+            details: {
+                defaultAccountId: nextDefaultAccountId
+            }
+        });
+
+        return res.json({
+            message: 'Default sender updated successfully.',
+            defaultAccountId: nextDefaultAccountId
+        });
+    } catch (error) {
+        console.error('updateDefaultEmailSender error:', error);
+        return res.status(500).json({
+            message: 'Failed to update default sender.',
             error: error.message
         });
     }

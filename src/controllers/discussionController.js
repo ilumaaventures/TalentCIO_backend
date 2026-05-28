@@ -1,6 +1,6 @@
 const Discussion = require('../models/Discussion');
 const User = require('../models/User');
-const Notification = require('../models/Notification');
+const NotificationService = require('../services/notificationService');
 const mongoose = require('mongoose');
 const {
     attachDiscussionPermissions,
@@ -48,9 +48,11 @@ exports.createDiscussion = async (req, res) => {
             .filter((userId) => String(userId) !== String(req.user._id));
 
         if (recipients.length) {
-            await Notification.insertMany(recipients.map((userId) => ({
+            const io = req.app.get('io');
+            await NotificationService.createManyNotifications(io, recipients.map((userId) => ({
                 user: userId,
                 companyId: req.companyId,
+                preferenceKey: 'discussion_created',
                 title: 'New Private Discussion',
                 message: `You have been added to a private discussion: "${discussion.substring(0, 50)}${discussion.length > 50 ? '...' : ''}"`,
                 type: 'Info',

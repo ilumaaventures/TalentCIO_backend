@@ -74,9 +74,10 @@ const notifyDynamicPhaseStakeholders = async (req, hiringRequest, title, message
     await NotificationService.createManyNotifications(io, [...recipientIds].map((userId) => ({
         user: userId,
         companyId: req.companyId,
+        preferenceKey: 'candidate_phase_updated',
         title,
         message,
-        type: 'Talent Acquisition',
+        type: 'Action',
         link: `/ta/view/${hiringRequest._id}?tab=applications`,
         metadata
     })));

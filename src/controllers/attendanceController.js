@@ -1002,6 +1002,7 @@ exports.requestRegularization = async (req, res) => {
             const notifications = Array.from(notifyTargets).map(targetId => ({
                 user: targetId,
                 companyId: req.companyId,
+                preferenceKey: 'attendance_regularization_submitted',
                 title: 'New Regularization Request',
                 message: `${req.user.firstName} has requested attendance regularization for ${format(new Date(date), 'dd MMM yyyy')}.`,
                 type: 'Approval',
@@ -1134,6 +1135,7 @@ exports.processRegularizationRequest = async (req, res) => {
             await NotificationService.createNotification(io, {
                 user: request.user,
                 companyId: req.companyId,
+                preferenceKey: 'attendance_regularization_status_updated',
                 title: `Regularization ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
                 message: `Your regularization request for ${format(new Date(request.date), 'dd MMM yyyy')} has been ${status.toLowerCase()}.`,
                 type: 'Info',

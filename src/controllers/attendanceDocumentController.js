@@ -1,7 +1,7 @@
 const AttendanceDocument = require('../models/AttendanceDocument');
 const User = require('../models/User');
 const Role = require('../models/Role');
-const Notification = require('../models/Notification');
+const NotificationService = require('../services/notificationService');
 const { cloudinary } = require('../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 
@@ -245,18 +245,24 @@ exports.submitAttachmentForApproval = async (req, res) => {
             if (a && a._id) notifyUsers.add(a._id.toString());
         });
 
+        const io = req.app.get('io');
+        const notifications = [];
         for (const managerId of notifyUsers) {
-            // Don't notify the person who performed the action if they are a manager/admin
             if (managerId === req.user._id.toString()) continue;
 
-            await Notification.create({
+            notifications.push({
                 user: managerId,
                 companyId,
+                preferenceKey: 'attendance_document_submitted',
                 title: 'Attendance Document Submitted',
                 message: `${targetUser.firstName} ${targetUser.lastName} has submitted an attendance document for approval (${month}).`,
                 type: 'Approval',
                 link: `/attendance?tab=documents&userId=${userId}&month=${month}`
             });
+        }
+
+        if (notifications.length > 0) {
+            await NotificationService.createManyNotifications(io, notifications);
         }
 
         res.json(file);
@@ -306,9 +312,11 @@ exports.reviewAttachment = async (req, res) => {
         await doc.save();
 
         // Notify User
-        await Notification.create({
+        const io = req.app.get('io');
+        await NotificationService.createNotification(io, {
             user: userId,
             companyId,
+            preferenceKey: 'attendance_document_status_updated',
             title: `Attendance Document ${status}`,
             message: `Your uploaded attendance document for ${month} has been ${status.toLowerCase()}. ${reason ? 'Reason: ' + reason : ''}`,
             type: 'Approval',

@@ -1678,6 +1678,8 @@ exports.addInterviewRound = async (req, res) => {
             const io = req.app.get('io');
             const notifications = assignedTo.map(userId => ({
                 user: userId,
+                companyId: req.companyId,
+                preferenceKey: 'interview_assigned',
                 title: 'New Interview Assigned',
                 message: `You have been assigned to evaluate ${candidate.candidateName} for the ${levelName} round.`,
                 type: 'Interview',

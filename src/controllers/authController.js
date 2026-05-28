@@ -3,6 +3,8 @@ const { HiringRequest } = require('../models/HiringRequest');
 const Candidate = require('../models/Candidate');
 const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
+const { sendEmailForCompany } = require('../services/companyEmailService');
+const NotificationService = require('../services/notificationService');
 const crypto = require('crypto');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
 
@@ -30,6 +32,31 @@ const getCompanyEmailBranding = async (companyId, company = null) => {
         logoAlt: branding.logoAlt || company?.name || 'TalentCIO'
     };
 };
+
+const buildOtpEmailContent = (firstName, otpCode) => ({
+    subject: 'Your Password Reset OTP - TalentCIO',
+    html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <h2 style="color: #4a90e2; text-align: center;">Welcome to TalentCIO!</h2>
+            <p>Hello ${firstName},</p>
+            <p>To ensure the security of your account, we require a mandatory password reset for your first login.</p>
+            <p>Please use the following One-Time Password (OTP) to verify your identity and set your new password:</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #333; background: #f4f4f4; padding: 10px 20px; border-radius: 5px; border: 1px solid #ccc;">${otpCode}</span>
+            </div>
+            <p style="color: #666; font-size: 14px;">This OTP is valid for 10 minutes. If you did not expect this email, please ignore it.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+            <p style="text-align: center; color: #999; font-size: 12px;">&copy; 2026 TalentCIO. All rights reserved.</p>
+        </div>
+    `,
+    text: [
+        'Welcome to TalentCIO!',
+        `Hello ${firstName},`,
+        'Use this OTP to reset your password on first login.',
+        `OTP: ${otpCode}`,
+        'This OTP is valid for 10 minutes.'
+    ].join('\n')
+});
 
 // Generate JWT Helper
 const generateToken = (id, tokenVersion) => {
@@ -130,8 +157,21 @@ const loginUser = async (req, res) => {
 
             // Send OTP via Email (Non-blocking)
             const branding = await getCompanyEmailBranding(user.companyId, req.company);
+            const delivery = await NotificationService.getEmailPreferenceForEvent(
+                user.companyId,
+                'employee_first_login_otp'
+            );
+            const otpEmail = buildOtpEmailContent(user.firstName, otpCode);
 
-            emailService.sendOTPEmail(user.email, otpCode, user.firstName, branding).catch(err => {
+            sendEmailForCompany({
+                companyId: user.companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: user.email,
+                subject: otpEmail.subject,
+                html: otpEmail.html,
+                text: otpEmail.text,
+                ...branding
+            }).catch(err => {
                 console.error('[AUTH] Background Email Send Error:', err.message);
             });
 
@@ -347,7 +387,20 @@ const resendOtp = async (req, res) => {
         await user.save();
 
         const branding = await getCompanyEmailBranding(user.companyId, req.company);
-        const emailSent = await emailService.sendOTPEmail(user.email, otpCode, user.firstName, branding);
+        const delivery = await NotificationService.getEmailPreferenceForEvent(
+            user.companyId,
+            'employee_first_login_otp'
+        );
+        const otpEmail = buildOtpEmailContent(user.firstName, otpCode);
+        const emailSent = await sendEmailForCompany({
+            companyId: user.companyId,
+            emailAccountId: delivery.emailAccountId,
+            to: user.email,
+            subject: otpEmail.subject,
+            html: otpEmail.html,
+            text: otpEmail.text,
+            ...branding
+        });
 
         res.json({
             message: 'A new OTP has been sent to your email.',

@@ -217,6 +217,7 @@ const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 const binRoutes = require('./src/routes/binRoutes');
 const emailSettingsRoutes = require('./src/routes/emailSettingsRoutes');
+const notificationSettingsRoutes = require('./src/routes/notificationSettingsRoutes');
 const emailBrandingRoutes = require('./src/routes/emailBrandingRoutes');
 const emailBrandingTemplateRoutes = require('./src/routes/emailBrandingTemplateRoutes');
 
@@ -238,9 +239,11 @@ const initServer = async () => {
     startEscalationCron(io);
     startAutoCheckoutCron();
     startBinAutoPurgeCron();
-};
 
-initServer();
+    server.listen(PORT, () => {
+        console.log(`Server & Socket.IO running on port ${PORT}`);
+    });
+};
 
 app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/superadmin')) return next();
@@ -281,6 +284,7 @@ app.use('/api/discussions', discussionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/bin', binRoutes);
 app.use('/api/company/email-settings', emailSettingsRoutes);
+app.use('/api/company/notification-settings', notificationSettingsRoutes);
 app.use('/api/email-branding', emailBrandingRoutes);
 app.use('/api/email-templates', emailBrandingTemplateRoutes);
 
@@ -295,8 +299,9 @@ app.get('/', (req, res) => {
     res.json({ message: 'TalentCio API is running' });
 });
 
-server.listen(PORT, () => {
-    console.log(`Server & Socket.IO running on port ${PORT}`);
+initServer().catch((error) => {
+    console.error('[SERVER INIT] Failed to start server:', error.message);
+    process.exit(1);
 });
 
 process.on('unhandledRejection', (err) => {

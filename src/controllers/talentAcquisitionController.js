@@ -523,6 +523,11 @@ const sendMassMailForHiringRequest = async ({
     let sent = 0;
     let failed = 0;
     const failedEmails = [];
+    const delivery = await NotificationService.getEmailPreferenceForEvent(
+        companyId,
+        'ta_mass_mail_sent',
+        emailAccountId
+    );
 
     for (const [index, candidate] of candidates.entries()) {
         const dataMap = buildCandidateDataMap(
@@ -539,7 +544,7 @@ const sendMassMailForHiringRequest = async ({
 
         const delivered = await sendEmailForCompany({
             companyId,
-            emailAccountId,
+            emailAccountId: delivery.emailAccountId,
             to: candidate.email,
             subject: resolvedSubject,
             html: resolvedHtml,
@@ -695,6 +700,7 @@ exports.createHiringRequest = async (req, res) => {
                     const notifications = currentStep.approvers.map(approverId => ({
                         user: approverId,
                         companyId: req.companyId,
+                        preferenceKey: 'hiring_request_approval_requested',
                         title: 'New Hiring Request Approval',
                         message: `Hiring Request ${requestId} for ${roleDetails.title} has been submitted and requires your approval.`,
                         type: 'Approval',
@@ -1067,6 +1073,7 @@ exports.approveHiringRequest = async (req, res) => {
                     const notifications = nextStep.approvers.map(approverId => ({
                         user: approverId,
                         companyId: req.companyId,
+                        preferenceKey: 'hiring_request_approval_requested',
                         title: 'Hiring Request Approval Pending',
                         message: `Hiring Request ${request.requestId} for ${request.roleDetails.title} has reached your approval level.`,
                         type: 'Approval',
@@ -1084,6 +1091,7 @@ exports.approveHiringRequest = async (req, res) => {
                     await NotificationService.createNotification(io, {
                         user: request.createdBy,
                         companyId: req.companyId,
+                        preferenceKey: 'hiring_request_approved',
                         title: 'Hiring Request Approved',
                         message: `Your Hiring Request ${request.requestId} for ${request.roleDetails.title} has been fully approved.`,
                         type: 'Info',
@@ -1113,6 +1121,7 @@ exports.approveHiringRequest = async (req, res) => {
                     await NotificationService.createNotification(io, {
                         user: request.createdBy,
                         companyId: req.companyId,
+                        preferenceKey: 'hiring_request_approved',
                         title: 'Hiring Request Approved',
                         message: `Your Hiring Request ${request.requestId} has been fully approved.`,
                         type: 'Info',
