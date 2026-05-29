@@ -14,7 +14,7 @@ const cleanupStaleIndexes = async () => {
         const collectionNames = collections.map(c => c.name);
 
         const targetCollections = [
-            'roles', 'timesheets', 'hiringrequests', 'worklogs', 'attendance',
+            'roles', 'timesheets', 'hiringrequests', 'worklogs', 'attendance', 'attendances',
             'querytypes', 'leavebalances', 'leaveconfigs', 'holidays',
             'projects', 'modules', 'tasks', 'helpdeskqueries', 'candidates', 'users',
             'onboardingemployees', 'approvalworkflows', 'interviewworkflows',
