@@ -513,6 +513,20 @@ exports.createAttendance = async (req, res) => {
         if (attendanceDate > getStartOfDayIST() && !canUpdateFutureRecords(req.user)) {
             return res.status(403).json({ message: 'Not authorized to create attendance for future dates' });
         }
+
+        const existingAttendance = await Attendance.findOne({
+            user: targetUserId,
+            companyId: req.companyId,
+            date: attendanceDate
+        });
+
+        if (existingAttendance) {
+            return res.status(409).json({
+                message: 'Attendance already exists for this user on this date. Update the existing record instead.',
+                attendance: existingAttendance
+            });
+        }
+
         const newAttendance = new Attendance({
             user: targetUserId,
             companyId: req.companyId,
@@ -540,6 +554,11 @@ exports.createAttendance = async (req, res) => {
         res.status(201).json(newAttendance);
     } catch (error) {
         console.error(error);
+        if (error?.code === 11000) {
+            return res.status(409).json({
+                message: 'Attendance already exists for this user on this date. Update the existing record instead.'
+            });
+        }
         res.status(500).json({ message: 'Server Error' });
     }
 };
