@@ -16,19 +16,19 @@ const isAdminLikeUser = (user = {}) => {
     );
 };
 
-const buildVisibleUserIds = async ({ companyId, requester }) => {
-    if (isAdminLikeUser(requester)) {
-        return null;
+const buildVisibleUsers = async ({ companyId, requester }) => {
+    const query = {
+        companyId,
+        isActive: true
+    };
+
+    if (!isAdminLikeUser(requester)) {
+        query.reportingManagers = requester._id;
     }
 
-    const directReports = await User.find({
-        companyId,
-        reportingManagers: requester._id
-    })
-        .select('_id')
+    return User.find(query)
+        .select('firstName lastName email employeeCode department')
         .lean();
-
-    return directReports.map((user) => user._id);
 };
 
 const buildLatestUploadedAt = (files = []) => {
@@ -60,26 +60,27 @@ const buildStatusCounts = (files = []) => files.reduce((accumulator, file) => {
 });
 
 const getRGDocumentSummary = async ({ companyId, month, requester }) => {
-    const visibleUserIds = await buildVisibleUserIds({ companyId, requester });
+    const visibleUsers = await buildVisibleUsers({ companyId, requester });
+    const visibleUserIds = visibleUsers.map((user) => user._id);
 
-    if (Array.isArray(visibleUserIds) && visibleUserIds.length === 0) {
-        return [];
+    if (visibleUserIds.length === 0) {
+        return {
+            records: [],
+            missingRecords: []
+        };
     }
 
     const query = {
         companyId,
-        month
+        month,
+        user: { $in: visibleUserIds }
     };
-
-    if (Array.isArray(visibleUserIds)) {
-        query.user = { $in: visibleUserIds };
-    }
 
     const documents = await AttendanceDocument.find(query)
         .populate('user', 'firstName lastName email employeeCode department')
         .lean();
 
-    return documents
+    const records = documents
         .filter((document) => document?.user && Array.isArray(document.files) && document.files.length > 0)
         .map((document) => {
             const files = Array.isArray(document.files) ? document.files : [];
@@ -105,6 +106,38 @@ const getRGDocumentSummary = async ({ companyId, month, requester }) => {
 
             return rightTime - leftTime;
         });
+
+    const uploadedUserIds = new Set(records.map((record) => String(record.userId)));
+    const missingRecords = visibleUsers
+        .filter((user) => !uploadedUserIds.has(String(user._id)))
+        .map((user) => ({
+            userId: user._id,
+            firstName: user.firstName || '',
+            lastName: user.lastName || '',
+            email: user.email || '',
+            employeeCode: user.employeeCode || '',
+            department: user.department || '',
+            month,
+            fileCount: 0,
+            latestUploadedAt: null,
+            statusCounts: {
+                pending: 0,
+                submitted: 0,
+                approved: 0,
+                rejected: 0
+            }
+        }))
+        .sort((left, right) => {
+            const leftName = `${left.firstName} ${left.lastName}`.trim().toLowerCase();
+            const rightName = `${right.firstName} ${right.lastName}`.trim().toLowerCase();
+
+            return leftName.localeCompare(rightName);
+        });
+
+    return {
+        records,
+        missingRecords
+    };
 };
 
 module.exports = {
