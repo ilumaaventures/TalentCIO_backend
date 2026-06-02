@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { assignPermissionsToAdminRoles } = require('../services/adminPermissionAssignment');
 
 const permissionSchema = new mongoose.Schema({
     key: {
@@ -24,13 +25,7 @@ const permissionSchema = new mongoose.Schema({
 // Auto-assign newly created permissions to Admin
 permissionSchema.post('save', async function (doc, next) {
     try {
-        const Role = mongoose.model('Role');
-        // Find all roles that are either named 'Admin' or marked as system roles
-        // We push the new permission ID to their permissions array
-        await Role.updateMany(
-            { $or: [{ name: 'Admin' }, { isSystem: true }] },
-            { $addToSet: { permissions: doc._id } }
-        );
+        await assignPermissionsToAdminRoles([doc._id]);
         next();
     } catch (error) {
         console.error('Error auto-assigning permission to Admin:', error);

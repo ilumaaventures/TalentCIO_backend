@@ -1,5 +1,6 @@
 const Permission = require('../models/Permission');
 const permissionConfig = require('../config/permissions');
+const { assignPermissionsToAdminRoles } = require('./adminPermissionAssignment');
 
 const LEGACY_PERMISSION_REPLACEMENTS = {
     'ta.application.read': 'ta.candidate.view',
@@ -125,17 +126,11 @@ const syncPermissions = async () => {
         const allPermsInDb = await Permission.find({}).select('_id');
         const allDbPermissionIds = allPermsInDb.map(p => p._id);
 
-        const adminRole = await Role.findOne({ $or: [{ name: 'Admin' }, { isSystem: true }] });
-
-        if (adminRole) {
-            // Add all permissions found in the database to the Admin role's array
-            await Role.updateOne(
-                { _id: adminRole._id },
-                { $addToSet: { permissions: { $each: allDbPermissionIds } } }
-            );
-            console.log(`Updated Admin role by ensuring all ${allDbPermissionIds.length} DB permissions are assigned.`);
+        const adminPermissionAssignment = await assignPermissionsToAdminRoles(allDbPermissionIds);
+        if (adminPermissionAssignment.matchedCount > 0) {
+            console.log(`Updated admin roles by ensuring all ${allDbPermissionIds.length} DB permissions are assigned.`);
         } else {
-            console.warn('System Admin role not found. Skipping auto-assignment.');
+            console.warn('No admin roles found. Skipping auto-assignment.');
         }
 
         const hrAdminRole = await Role.findOne({ name: 'HR Admin' }).select('_id permissions');
