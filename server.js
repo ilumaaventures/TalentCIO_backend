@@ -194,6 +194,7 @@ const { startBinAutoPurgeCron } = require('./src/services/binAutoPurgeCron');
 
 const authRoutes = require('./src/routes/authRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
+const rgAttendanceRoutes = require('./src/features/rg-attendance/routes/rgAttendanceRoutes');
 const timesheetRoutes = require('./src/routes/timesheetRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const projectRoutes = require('./src/routes/projectRoutes');
@@ -261,6 +262,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/attendance/rg', rgAttendanceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance/attachments', attendanceDocumentRoutes);
 app.use('/api/timesheet', timesheetRoutes);
