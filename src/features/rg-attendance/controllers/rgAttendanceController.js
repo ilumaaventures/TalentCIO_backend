@@ -19,7 +19,7 @@ const getDocumentSummary = async (req, res) => {
             });
         }
 
-        const records = await getRGDocumentSummary({
+        const summary = await getRGDocumentSummary({
             companyId: req.companyId,
             month,
             requester: req.user
@@ -27,8 +27,10 @@ const getDocumentSummary = async (req, res) => {
 
         return res.json({
             month,
-            totalRecords: records.length,
-            records
+            totalRecords: summary.records.length,
+            totalMissingRecords: summary.missingRecords.length,
+            records: summary.records,
+            missingRecords: summary.missingRecords
         });
     } catch (error) {
         console.error('getDocumentSummary error:', error);
