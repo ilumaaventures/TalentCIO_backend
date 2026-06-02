@@ -1,0 +1,998 @@
+const Announcement = require('../models/Announcement');
+const OnboardingEmployee = require('../models/OnboardingEmployee');
+const User = require('../models/User');
+const NotificationService = require('../services/notificationService');
+
+const ANNOUNCEMENT_CATEGORIES = ['General', 'HR', 'Policy', 'Product', 'Celebration', 'Alert'];
+const AUDIENCE_TYPES = ['all', 'departments', 'employmentTypes', 'specificUsers'];
+const REACTION_TYPES = ['like', 'celebrate', 'support'];
+const MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin']);
+const EMPLOYMENT_TYPES = ['Full Time', 'Part Time', 'Contract', 'Intern', 'Consultant', 'Freelance', 'Probation'];
+
+const setPrivateCache = (res, maxAgeSeconds = 20) => {
+    res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
+};
+
+const monthDayFormatter = new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric',
+    month: 'short'
+});
+
+const normalizeString = (value = '') => String(value || '').trim();
+
+const toValidDate = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getMonthScopedRange = (referenceDate = new Date()) => {
+    const start = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);
+    const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 1);
+    return { start, end };
+};
+
+const isSameMonth = (leftValue, rightValue = new Date()) => {
+    const leftDate = toValidDate(leftValue);
+    const rightDate = toValidDate(rightValue);
+    if (!leftDate || !rightDate) return false;
+    return (
+        leftDate.getMonth() === rightDate.getMonth()
+        && leftDate.getFullYear() === rightDate.getFullYear()
+    );
+};
+
+const isSameMonthDay = (leftValue, rightValue = new Date()) => {
+    const leftDate = toValidDate(leftValue);
+    const rightDate = toValidDate(rightValue);
+    if (!leftDate || !rightDate) return false;
+    return (
+        leftDate.getMonth() === rightDate.getMonth()
+        && leftDate.getDate() === rightDate.getDate()
+    );
+};
+
+const getYearsCompleted = (value, referenceDate = new Date()) => {
+    const sourceDate = toValidDate(value);
+    const compareDate = toValidDate(referenceDate);
+    if (!sourceDate || !compareDate) return 0;
+
+    let years = compareDate.getFullYear() - sourceDate.getFullYear();
+    const hasOccurredThisYear = (
+        compareDate.getMonth() > sourceDate.getMonth()
+        || (compareDate.getMonth() === sourceDate.getMonth() && compareDate.getDate() >= sourceDate.getDate())
+    );
+
+    if (!hasOccurredThisYear) {
+        years -= 1;
+    }
+
+    return Math.max(years, 0);
+};
+
+const getCurrentMonthDateValue = (user = {}) => (
+    user?.employeeProfile?.employment?.joiningDate
+    || user?.joiningDate
+    || null
+);
+
+const normalizeStringArray = (values = []) => (
+    [...new Set(
+        (Array.isArray(values) ? values : [])
+            .map((value) => normalizeString(value))
+            .filter(Boolean)
+    )]
+);
+
+const normalizeObjectIdArray = (values = []) => (
+    [...new Set(
+        (Array.isArray(values) ? values : [])
+            .map((value) => normalizeString(value))
+            .filter(Boolean)
+    )]
+);
+
+const normalizeAudienceUserObjectIds = (values = []) => (
+    [...new Set(
+        (Array.isArray(values) ? values : [])
+            .map((value) => {
+                if (!value) return '';
+                if (typeof value === 'string') return normalizeString(value);
+                if (value._id) return normalizeString(value._id);
+                return normalizeString(value);
+            })
+            .filter(Boolean)
+    )]
+);
+
+const getUserRoleNames = (user = {}) => (
+    Array.isArray(user.roles)
+        ? user.roles.map((role) => (typeof role === 'string' ? role : role?.name)).filter(Boolean)
+        : []
+);
+
+const canManageAnnouncements = (user = {}) => {
+    const roleNames = getUserRoleNames(user);
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+
+    return (
+        roleNames.some((roleName) => MANAGER_ROLE_NAMES.has(roleName))
+        || permissions.includes('announcement.manage')
+        || permissions.includes('*')
+        || permissions.includes('admin')
+    );
+};
+
+const announcementPopulatePaths = [
+    { path: 'createdBy', select: 'firstName lastName profilePicture' },
+    { path: 'updatedBy', select: 'firstName lastName profilePicture' },
+    { path: 'audienceUserIds', select: 'firstName lastName email department employmentType profilePicture' },
+    { path: 'comments.userId', select: 'firstName lastName email profilePicture department employmentType' },
+    { path: 'reactions.userId', select: 'firstName lastName profilePicture' }
+];
+
+const applyAnnouncementPopulation = (query) => {
+    announcementPopulatePaths.forEach((populateConfig) => {
+        query.populate(populateConfig);
+    });
+    return query;
+};
+
+const buildAudienceSummary = (announcement = {}) => {
+    if (announcement.audienceType === 'departments') {
+        return {
+            type: announcement.audienceType,
+            label: announcement.audienceDepartments?.length
+                ? `Departments: ${announcement.audienceDepartments.join(', ')}`
+                : 'Departments'
+        };
+    }
+
+    if (announcement.audienceType === 'employmentTypes') {
+        return {
+            type: announcement.audienceType,
+            label: announcement.audienceEmploymentTypes?.length
+                ? `Employment Types: ${announcement.audienceEmploymentTypes.join(', ')}`
+                : 'Employment Types'
+        };
+    }
+
+    if (announcement.audienceType === 'specificUsers') {
+        const count = Array.isArray(announcement.audienceUserIds) ? announcement.audienceUserIds.length : 0;
+        return {
+            type: announcement.audienceType,
+            label: `Specific Users (${count})`
+        };
+    }
+
+    return {
+        type: 'all',
+        label: 'All Employees'
+    };
+};
+
+const buildVisibilityMatch = (user = {}) => {
+    const orConditions = [{ audienceType: 'all' }];
+
+    if (normalizeString(user.department)) {
+        orConditions.push({
+            audienceType: 'departments',
+            audienceDepartments: normalizeString(user.department)
+        });
+    }
+
+    if (normalizeString(user.employmentType)) {
+        orConditions.push({
+            audienceType: 'employmentTypes',
+            audienceEmploymentTypes: normalizeString(user.employmentType)
+        });
+    }
+
+    if (user._id) {
+        orConditions.push({
+            audienceType: 'specificUsers',
+            audienceUserIds: user._id
+        });
+    }
+
+    return { $or: orConditions };
+};
+
+const buildVisibleAnnouncementQuery = ({ companyId, user }) => {
+    const now = new Date();
+
+    return {
+        companyId,
+        status: 'published',
+        ...buildVisibilityMatch(user),
+        $and: [
+            {
+                $or: [
+                    { expiresAt: null },
+                    { expiresAt: { $gt: now } }
+                ]
+            }
+        ]
+    };
+};
+
+const isAnnouncementExpired = (announcement = {}) => (
+    announcement?.expiresAt ? new Date(announcement.expiresAt) <= new Date() : false
+);
+
+const ensureInteractionCollections = (announcement) => {
+    if (!announcement) return announcement;
+
+    if (!Array.isArray(announcement.reactions)) {
+        announcement.reactions = [];
+    }
+
+    if (!Array.isArray(announcement.comments)) {
+        announcement.comments = [];
+    }
+
+    return announcement;
+};
+
+const getReactionBreakdown = (reactions = [], viewerId = '') => {
+    const counts = REACTION_TYPES.reduce((accumulator, type) => {
+        accumulator[type] = 0;
+        return accumulator;
+    }, {});
+
+    let viewerReaction = '';
+    reactions.forEach((reaction) => {
+        const reactionType = normalizeString(reaction?.type).toLowerCase();
+        if (!REACTION_TYPES.includes(reactionType)) return;
+        counts[reactionType] += 1;
+
+        const reactionUserId = String(reaction?.userId?._id || reaction?.userId || '');
+        if (viewerId && reactionUserId === viewerId) {
+            viewerReaction = reactionType;
+        }
+    });
+
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+
+    return {
+        counts,
+        total,
+        viewerReaction
+    };
+};
+
+const serializeComment = (comment = {}, viewer = {}, manageAccess = false) => {
+    const authorName = [comment.userId?.firstName, comment.userId?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    const viewerId = String(viewer?._id || '');
+    const authorId = String(comment.userId?._id || comment.userId || '');
+    const canDelete = Boolean(authorId && (authorId === viewerId || manageAccess));
+
+    return {
+        _id: comment._id,
+        text: comment.text || '',
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        canDelete,
+        author: comment.userId ? {
+            _id: comment.userId._id,
+            firstName: comment.userId.firstName || '',
+            lastName: comment.userId.lastName || '',
+            email: comment.userId.email || '',
+            department: comment.userId.department || '',
+            employmentType: comment.userId.employmentType || '',
+            profilePicture: comment.userId.profilePicture || '',
+            name: authorName || 'Team Member'
+        } : null
+    };
+};
+
+const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = false) => {
+    const audienceSummary = buildAudienceSummary(announcement);
+    const creatorName = [announcement.createdBy?.firstName, announcement.createdBy?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    const updaterName = [announcement.updatedBy?.firstName, announcement.updatedBy?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    const isExpired = isAnnouncementExpired(announcement);
+    const isVisibleToViewer = manageAccess
+        ? true
+        : (
+            announcement.status === 'published'
+            && !isExpired
+        );
+    const viewerId = String(viewer?._id || '');
+    const reactionSummary = getReactionBreakdown(announcement.reactions || [], viewerId);
+    const comments = Array.isArray(announcement.comments)
+        ? announcement.comments
+            .slice()
+            .sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0))
+            .map((comment) => serializeComment(comment, viewer, manageAccess))
+        : [];
+
+    return {
+        _id: announcement._id,
+        title: announcement.title,
+        summary: announcement.summary || '',
+        content: announcement.content,
+        category: announcement.category,
+        status: announcement.status,
+        pinned: Boolean(announcement.pinned),
+        audienceType: announcement.audienceType,
+        audienceDepartments: announcement.audienceDepartments || [],
+        audienceEmploymentTypes: announcement.audienceEmploymentTypes || [],
+        audienceUserIds: (announcement.audienceUserIds || []).map((userId) => String(userId?._id || userId)),
+        audienceUsers: Array.isArray(announcement.audienceUserIds)
+            ? announcement.audienceUserIds
+                .filter((userEntry) => typeof userEntry === 'object' && userEntry)
+                .map((userEntry) => ({
+                    _id: userEntry._id,
+                    firstName: userEntry.firstName,
+                    lastName: userEntry.lastName,
+                    email: userEntry.email,
+                    department: userEntry.department,
+                    employmentType: userEntry.employmentType,
+                    profilePicture: userEntry.profilePicture || ''
+                }))
+            : [],
+        audienceSummary,
+        publishedAt: announcement.publishedAt,
+        expiresAt: announcement.expiresAt,
+        createdAt: announcement.createdAt,
+        updatedAt: announcement.updatedAt,
+        createdBy: creatorName ? {
+            _id: announcement.createdBy?._id,
+            firstName: announcement.createdBy?.firstName || '',
+            lastName: announcement.createdBy?.lastName || '',
+            profilePicture: announcement.createdBy?.profilePicture || '',
+            name: creatorName
+        } : null,
+        updatedBy: updaterName ? {
+            _id: announcement.updatedBy?._id,
+            firstName: announcement.updatedBy?.firstName || '',
+            lastName: announcement.updatedBy?.lastName || '',
+            profilePicture: announcement.updatedBy?.profilePicture || '',
+            name: updaterName
+        } : null,
+        comments,
+        commentCount: comments.length,
+        reactionCounts: reactionSummary.counts,
+        totalReactions: reactionSummary.total,
+        viewerReaction: reactionSummary.viewerReaction,
+        canManage: manageAccess || canManageAnnouncements(viewer),
+        isExpired,
+        isVisibleToViewer
+    };
+};
+
+const serializeCommunityMember = (user = {}, options = {}) => {
+    const {
+        dateValue = null,
+        yearsCompleted = 0,
+        source = '',
+        transferredFromOnboarding = false
+    } = options;
+
+    const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+
+    return {
+        _id: user._id,
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        name: name || user.email || 'Team Member',
+        email: user.email || '',
+        department: user.department || '',
+        employmentType: user.employmentType || '',
+        profilePicture: user.profilePicture || '',
+        dateLabel: dateValue ? monthDayFormatter.format(new Date(dateValue)) : '',
+        yearsCompleted,
+        source,
+        transferredFromOnboarding
+    };
+};
+
+const buildAnnouncementPayload = (body = {}) => {
+    const title = normalizeString(body.title);
+    const summary = normalizeString(body.summary);
+    const content = normalizeString(body.content);
+    const category = ANNOUNCEMENT_CATEGORIES.includes(body.category) ? body.category : 'General';
+    const status = body.status === 'published' ? 'published' : 'draft';
+    const audienceType = AUDIENCE_TYPES.includes(body.audienceType) ? body.audienceType : 'all';
+    const audienceDepartments = normalizeStringArray(body.audienceDepartments);
+    const audienceEmploymentTypes = normalizeStringArray(body.audienceEmploymentTypes);
+    const audienceUserIds = normalizeObjectIdArray(body.audienceUserIds);
+    const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+
+    return {
+        title,
+        summary,
+        content,
+        category,
+        status,
+        pinned: Boolean(body.pinned),
+        audienceType,
+        audienceDepartments,
+        audienceEmploymentTypes,
+        audienceUserIds,
+        expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null
+    };
+};
+
+const validateAnnouncementPayload = async (payload = {}, companyId) => {
+    if (!payload.title) {
+        return 'Title is required.';
+    }
+
+    if (!payload.content) {
+        return 'Announcement content is required.';
+    }
+
+    if (payload.expiresAt && payload.expiresAt <= new Date()) {
+        return 'Expiry date must be in the future.';
+    }
+
+    if (payload.audienceType === 'departments' && payload.audienceDepartments.length === 0) {
+        return 'Select at least one department audience.';
+    }
+
+    if (payload.audienceType === 'employmentTypes' && payload.audienceEmploymentTypes.length === 0) {
+        return 'Select at least one employment type audience.';
+    }
+
+    if (payload.audienceType === 'specificUsers') {
+        if (payload.audienceUserIds.length === 0) {
+            return 'Select at least one employee audience.';
+        }
+
+        const existingUsers = await User.countDocuments({
+            _id: { $in: payload.audienceUserIds },
+            companyId,
+            isActive: true
+        });
+
+        if (existingUsers !== payload.audienceUserIds.length) {
+            return 'One or more selected employees are unavailable.';
+        }
+    }
+
+    return '';
+};
+
+const notifyPublishedAnnouncement = async ({ req, announcement }) => {
+    const liveAudienceQuery = {
+        companyId: req.companyId,
+        isActive: true
+    };
+
+    if (announcement.audienceType === 'departments') {
+        liveAudienceQuery.department = { $in: announcement.audienceDepartments || [] };
+    } else if (announcement.audienceType === 'employmentTypes') {
+        liveAudienceQuery.employmentType = { $in: announcement.audienceEmploymentTypes || [] };
+    } else if (announcement.audienceType === 'specificUsers') {
+        const audienceUserIds = normalizeAudienceUserObjectIds(announcement.audienceUserIds);
+        liveAudienceQuery._id = { $in: audienceUserIds };
+    }
+
+    const recipients = await User.find(liveAudienceQuery)
+        .select('_id')
+        .lean();
+
+    const recipientIds = recipients
+        .map((user) => String(user._id || ''))
+        .filter((userId) => userId && userId !== String(req.user._id));
+
+    if (recipientIds.length === 0) {
+        return;
+    }
+
+    const io = req.app.get('io');
+    await NotificationService.createManyNotifications(io, recipientIds.map((userId) => ({
+        user: userId,
+        companyId: req.companyId,
+        preferenceKey: 'announcement_published',
+        title: announcement.title,
+        message: announcement.summary || 'A new internal announcement has been published.',
+        type: announcement.category === 'Alert' ? 'Alert' : 'Info',
+        link: '/announcements',
+        metadata: {
+            announcementId: announcement._id
+        }
+    })));
+};
+
+const fetchPopulatedAnnouncementById = async (announcementId) => {
+    const query = Announcement.findById(announcementId);
+    applyAnnouncementPopulation(query);
+    return query.lean();
+};
+
+const ensureAnnouncementFeedAccess = async (req, announcement, options = {}) => {
+    const { interactiveOnly = false } = options;
+    const manageAccess = canManageAnnouncements(req.user);
+
+    if (!announcement) {
+        return { error: 'Announcement not found.', status: 404, manageAccess };
+    }
+
+    if (interactiveOnly && (announcement.status !== 'published' || isAnnouncementExpired(announcement))) {
+        return { error: 'Only live announcements can receive reactions or comments.', status: 400, manageAccess };
+    }
+
+    if (manageAccess) {
+        return { announcement, manageAccess };
+    }
+
+    const accessible = await Announcement.exists({
+        _id: announcement._id,
+        ...buildVisibleAnnouncementQuery({ companyId: req.companyId, user: req.user })
+    });
+
+    if (!accessible) {
+        return { error: 'You do not have access to this announcement.', status: 403, manageAccess };
+    }
+
+    return { announcement, manageAccess };
+};
+
+exports.getAnnouncementComposerSetup = async (req, res) => {
+    try {
+        setPrivateCache(res, 60);
+        const manageAccess = canManageAnnouncements(req.user);
+
+        if (!manageAccess) {
+            return res.json({
+                canManage: false,
+                categories: ANNOUNCEMENT_CATEGORIES,
+                audienceTypes: AUDIENCE_TYPES,
+                reactionTypes: REACTION_TYPES,
+                departments: [],
+                employmentTypes: EMPLOYMENT_TYPES,
+                users: []
+            });
+        }
+
+        const [departments, users] = await Promise.all([
+            User.distinct('department', {
+                companyId: req.companyId,
+                isActive: true,
+                department: { $nin: [null, ''] }
+            }),
+            User.find({ companyId: req.companyId, isActive: true })
+                .select('firstName lastName email department employmentType profilePicture')
+                .sort({ firstName: 1, lastName: 1 })
+                .lean()
+        ]);
+
+        return res.json({
+            canManage: true,
+            categories: ANNOUNCEMENT_CATEGORIES,
+            audienceTypes: AUDIENCE_TYPES,
+            reactionTypes: REACTION_TYPES,
+            departments: normalizeStringArray(departments).sort((left, right) => left.localeCompare(right)),
+            employmentTypes: EMPLOYMENT_TYPES,
+            users
+        });
+    } catch (error) {
+        console.error('getAnnouncementComposerSetup error:', error);
+        return res.status(500).json({ message: 'Failed to load announcement composer setup.' });
+    }
+};
+
+exports.getAnnouncementBootstrap = exports.getAnnouncementComposerSetup;
+
+exports.getAnnouncementCommunity = async (req, res) => {
+    try {
+        setPrivateCache(res, 300);
+        const now = new Date();
+        const { start: monthStart, end: monthEnd } = getMonthScopedRange(now);
+
+        const users = await User.find({ companyId: req.companyId, isActive: true })
+            .select('firstName lastName email department employmentType profilePicture joiningDate employeeProfile createdAt')
+            .populate('employeeProfile', 'personal.dob employment.joiningDate')
+            .sort({ firstName: 1, lastName: 1 })
+            .lean();
+
+        const userIds = users.map((user) => user._id);
+        const onboardingTransfers = await OnboardingEmployee.find({
+            companyId: req.companyId,
+            transferredToUserId: { $in: userIds }
+        })
+            .select('transferredToUserId')
+            .lean();
+
+        const onboardingTransferredUserIdSet = new Set(
+            onboardingTransfers.map((entry) => String(entry.transferredToUserId || ''))
+        );
+
+        const birthdayUsersCurrentMonth = users
+            .filter((user) => isSameMonth(user?.employeeProfile?.personal?.dob, now))
+            .sort((left, right) => new Date(left.employeeProfile.personal.dob).getDate() - new Date(right.employeeProfile.personal.dob).getDate());
+
+        const birthdaysCurrentMonth = birthdayUsersCurrentMonth.map((user) => serializeCommunityMember(user, {
+            dateValue: user.employeeProfile.personal.dob,
+            source: 'birthday'
+        }));
+
+        const birthdaysToday = birthdayUsersCurrentMonth
+            .filter((user) => isSameMonthDay(user?.employeeProfile?.personal?.dob, now))
+            .map((user) => serializeCommunityMember(user, {
+                dateValue: user.employeeProfile.personal.dob,
+                source: 'birthday'
+            }));
+
+        const anniversaryUsersCurrentMonth = users
+            .filter((user) => {
+                const joiningDate = getCurrentMonthDateValue(user);
+                return isSameMonth(joiningDate, now) && getYearsCompleted(joiningDate, now) > 0;
+            })
+            .sort((left, right) => {
+                const leftDate = getCurrentMonthDateValue(left);
+                const rightDate = getCurrentMonthDateValue(right);
+                return new Date(leftDate).getDate() - new Date(rightDate).getDate();
+            });
+
+        const anniversariesCurrentMonth = anniversaryUsersCurrentMonth.map((user) => {
+            const joiningDate = getCurrentMonthDateValue(user);
+            return serializeCommunityMember(user, {
+                dateValue: joiningDate,
+                yearsCompleted: getYearsCompleted(joiningDate, now),
+                source: 'anniversary'
+            });
+        });
+
+        const anniversariesToday = anniversaryUsersCurrentMonth
+            .filter((user) => isSameMonthDay(getCurrentMonthDateValue(user), now))
+            .map((user) => {
+                const joiningDate = getCurrentMonthDateValue(user);
+                return serializeCommunityMember(user, {
+                    dateValue: joiningDate,
+                    yearsCompleted: getYearsCompleted(joiningDate, now),
+                    source: 'anniversary'
+                });
+            });
+
+        const newJoineesCurrentMonth = users
+            .filter((user) => (
+                user.createdAt >= monthStart
+                && user.createdAt < monthEnd
+                && onboardingTransferredUserIdSet.has(String(user._id))
+            ))
+            .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
+            .map((user) => serializeCommunityMember(user, {
+                dateValue: user.createdAt,
+                source: 'newJoinee',
+                transferredFromOnboarding: true
+            }));
+
+        return res.json({
+            month: {
+                year: now.getFullYear(),
+                month: now.getMonth() + 1
+            },
+            birthdays: {
+                currentMonth: birthdaysCurrentMonth,
+                today: birthdaysToday,
+                count: birthdaysCurrentMonth.length
+            },
+            workAnniversaries: {
+                currentMonth: anniversariesCurrentMonth,
+                today: anniversariesToday,
+                count: anniversariesCurrentMonth.length
+            },
+            newJoinees: {
+                currentMonth: newJoineesCurrentMonth,
+                count: newJoineesCurrentMonth.length
+            }
+        });
+    } catch (error) {
+        console.error('getAnnouncementCommunity error:', error);
+        return res.status(500).json({ message: 'Failed to load announcement community data.' });
+    }
+};
+
+exports.getAnnouncements = async (req, res) => {
+    try {
+        setPrivateCache(res, 20);
+        const manageAccess = canManageAnnouncements(req.user);
+        const scope = req.query.scope === 'manage' && manageAccess ? 'manage' : 'visible';
+        const featured = req.query.featured === 'true';
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || (featured ? 3 : 20), 1), scope === 'manage' ? 100 : 50);
+        const statusFilter = normalizeString(req.query.status).toLowerCase();
+
+        const query = scope === 'manage'
+            ? { companyId: req.companyId }
+            : buildVisibleAnnouncementQuery({ companyId: req.companyId, user: req.user });
+
+        if (scope === 'manage' && ['draft', 'published'].includes(statusFilter)) {
+            query.status = statusFilter;
+        }
+
+        const announcementQuery = Announcement.find(query)
+            .sort({
+                pinned: -1,
+                publishedAt: -1,
+                createdAt: -1
+            })
+            .limit(limit);
+
+        applyAnnouncementPopulation(announcementQuery);
+        const announcements = await announcementQuery.lean();
+
+        return res.json({
+            announcements: announcements.map((announcement) => serializeAnnouncement(announcement, req.user, scope === 'manage')),
+            canManage: manageAccess,
+            reactionTypes: REACTION_TYPES
+        });
+    } catch (error) {
+        console.error('getAnnouncements error:', error);
+        return res.status(500).json({ message: 'Failed to load announcements.' });
+    }
+};
+
+exports.getAnnouncementById = async (req, res) => {
+    try {
+        const announcementQuery = Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+        applyAnnouncementPopulation(announcementQuery);
+        const announcement = await announcementQuery.lean();
+
+        const { error, status, manageAccess } = await ensureAnnouncementFeedAccess(req, announcement);
+        if (error) {
+            return res.status(status).json({ message: error });
+        }
+
+        return res.json({
+            announcement: serializeAnnouncement(announcement, req.user, manageAccess)
+        });
+    } catch (error) {
+        console.error('getAnnouncementById error:', error);
+        return res.status(500).json({ message: 'Failed to fetch announcement.' });
+    }
+};
+
+exports.createAnnouncement = async (req, res) => {
+    try {
+        const payload = buildAnnouncementPayload(req.body || {});
+        const validationMessage = await validateAnnouncementPayload(payload, req.companyId);
+
+        if (validationMessage) {
+            return res.status(400).json({ message: validationMessage });
+        }
+
+        const shouldPublishNow = payload.status === 'published';
+        const announcement = await Announcement.create({
+            ...payload,
+            companyId: req.companyId,
+            createdBy: req.user._id,
+            updatedBy: req.user._id,
+            publishedAt: shouldPublishNow ? new Date() : null
+        });
+
+        const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
+
+        if (shouldPublishNow) {
+            try {
+                await notifyPublishedAnnouncement({ req, announcement: populatedAnnouncement });
+            } catch (notificationError) {
+                console.error('createAnnouncement notifyPublishedAnnouncement error:', notificationError);
+            }
+        }
+
+        return res.status(201).json({
+            message: shouldPublishNow ? 'Announcement published successfully.' : 'Announcement draft created successfully.',
+            announcement: serializeAnnouncement(populatedAnnouncement, req.user, true)
+        });
+    } catch (error) {
+        console.error('createAnnouncement error:', error);
+        return res.status(500).json({ message: 'Failed to create announcement.' });
+    }
+};
+
+exports.updateAnnouncement = async (req, res) => {
+    try {
+        const existingAnnouncement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!existingAnnouncement) {
+            return res.status(404).json({ message: 'Announcement not found.' });
+        }
+
+        const payload = buildAnnouncementPayload(req.body || {});
+        const validationMessage = await validateAnnouncementPayload(payload, req.companyId);
+
+        if (validationMessage) {
+            return res.status(400).json({ message: validationMessage });
+        }
+
+        const shouldPublishNow = existingAnnouncement.status !== 'published' && payload.status === 'published';
+
+        existingAnnouncement.title = payload.title;
+        existingAnnouncement.summary = payload.summary;
+        existingAnnouncement.content = payload.content;
+        existingAnnouncement.category = payload.category;
+        existingAnnouncement.status = payload.status;
+        existingAnnouncement.pinned = payload.pinned;
+        existingAnnouncement.audienceType = payload.audienceType;
+        existingAnnouncement.audienceDepartments = payload.audienceDepartments;
+        existingAnnouncement.audienceEmploymentTypes = payload.audienceEmploymentTypes;
+        existingAnnouncement.audienceUserIds = payload.audienceUserIds;
+        existingAnnouncement.expiresAt = payload.expiresAt;
+        existingAnnouncement.updatedBy = req.user._id;
+
+        if (shouldPublishNow && !existingAnnouncement.publishedAt) {
+            existingAnnouncement.publishedAt = new Date();
+        }
+
+        await existingAnnouncement.save();
+
+        const populatedAnnouncement = await fetchPopulatedAnnouncementById(existingAnnouncement._id);
+
+        if (shouldPublishNow) {
+            try {
+                await notifyPublishedAnnouncement({ req, announcement: populatedAnnouncement });
+            } catch (notificationError) {
+                console.error('updateAnnouncement notifyPublishedAnnouncement error:', notificationError);
+            }
+        }
+
+        return res.json({
+            message: shouldPublishNow ? 'Announcement published successfully.' : 'Announcement updated successfully.',
+            announcement: serializeAnnouncement(populatedAnnouncement, req.user, true)
+        });
+    } catch (error) {
+        console.error('updateAnnouncement error:', error);
+        return res.status(500).json({
+            message: error?.message || 'Failed to update announcement.'
+        });
+    }
+};
+
+exports.toggleAnnouncementReaction = async (req, res) => {
+    try {
+        const type = normalizeString(req.body?.type).toLowerCase();
+        if (!REACTION_TYPES.includes(type)) {
+            return res.status(400).json({ message: 'Choose a valid reaction.' });
+        }
+
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+        ensureInteractionCollections(announcement);
+
+        const access = await ensureAnnouncementFeedAccess(req, announcement, { interactiveOnly: true });
+        if (access.error) {
+            return res.status(access.status).json({ message: access.error });
+        }
+
+        const viewerId = String(req.user._id);
+        const existingReaction = announcement.reactions.find((reaction) => String(reaction.userId) === viewerId);
+
+        if (existingReaction && existingReaction.type === type) {
+            announcement.reactions = announcement.reactions.filter((reaction) => String(reaction.userId) !== viewerId);
+        } else if (existingReaction) {
+            existingReaction.type = type;
+            existingReaction.createdAt = new Date();
+        } else {
+            announcement.reactions.push({
+                userId: req.user._id,
+                type
+            });
+        }
+
+        announcement.updatedBy = req.user._id;
+        await announcement.save();
+
+        const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
+        return res.json({
+            message: 'Reaction updated successfully.',
+            announcement: serializeAnnouncement(populatedAnnouncement, req.user, access.manageAccess)
+        });
+    } catch (error) {
+        console.error('toggleAnnouncementReaction error:', error);
+        return res.status(500).json({ message: error?.message || 'Failed to update reaction.' });
+    }
+};
+
+exports.addAnnouncementComment = async (req, res) => {
+    try {
+        const text = normalizeString(req.body?.text);
+        if (!text) {
+            return res.status(400).json({ message: 'Comment text is required.' });
+        }
+
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+        ensureInteractionCollections(announcement);
+
+        const access = await ensureAnnouncementFeedAccess(req, announcement, { interactiveOnly: true });
+        if (access.error) {
+            return res.status(access.status).json({ message: access.error });
+        }
+
+        announcement.comments.push({
+            userId: req.user._id,
+            text
+        });
+        announcement.updatedBy = req.user._id;
+        await announcement.save();
+
+        const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
+        return res.status(201).json({
+            message: 'Comment added successfully.',
+            announcement: serializeAnnouncement(populatedAnnouncement, req.user, access.manageAccess)
+        });
+    } catch (error) {
+        console.error('addAnnouncementComment error:', error);
+        return res.status(500).json({ message: error?.message || 'Failed to add comment.' });
+    }
+};
+
+exports.deleteAnnouncementComment = async (req, res) => {
+    try {
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+        ensureInteractionCollections(announcement);
+
+        const access = await ensureAnnouncementFeedAccess(req, announcement, { interactiveOnly: true });
+        if (access.error) {
+            return res.status(access.status).json({ message: access.error });
+        }
+
+        const comment = announcement.comments.id(req.params.commentId);
+        if (!comment) {
+            return res.status(404).json({ message: 'Comment not found.' });
+        }
+
+        const viewerId = String(req.user._id);
+        const authorId = String(comment.userId || '');
+        if (!access.manageAccess && authorId !== viewerId) {
+            return res.status(403).json({ message: 'You can only remove your own comments.' });
+        }
+
+        announcement.comments.pull(comment._id);
+        announcement.updatedBy = req.user._id;
+        await announcement.save();
+
+        const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
+        return res.json({
+            message: 'Comment deleted successfully.',
+            announcement: serializeAnnouncement(populatedAnnouncement, req.user, access.manageAccess)
+        });
+    } catch (error) {
+        console.error('deleteAnnouncementComment error:', error);
+        return res.status(500).json({ message: error?.message || 'Failed to delete comment.' });
+    }
+};
+
+exports.deleteAnnouncement = async (req, res) => {
+    try {
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!announcement) {
+            return res.status(404).json({ message: 'Announcement not found.' });
+        }
+
+        await announcement.softDelete(req.user._id);
+        return res.json({ message: 'Announcement deleted successfully.' });
+    } catch (error) {
+        console.error('deleteAnnouncement error:', error);
+        return res.status(500).json({ message: 'Failed to delete announcement.' });
+    }
+};

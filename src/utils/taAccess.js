@@ -1,6 +1,6 @@
 const Candidate = require('../models/Candidate');
 const { HiringRequest } = require('../models/HiringRequest');
-const { getAssignedClientNames, getUserPermissionKeys, hasAssignedClientAccess, isHiringRequestAdmin } = require('./hiringRequestAccess');
+const { canAccessHiringRequest, getAssignedClientNames, getUserPermissionKeys, hasAssignedClientAccess, isHiringRequestAdmin } = require('./hiringRequestAccess');
 const { buildTABacHiringRequestConstraint, getTABacActionForCapability, matchesTABacHiringRequest } = require('./taABAC');
 
 const TA_CAPABILITIES = {
@@ -80,6 +80,24 @@ const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
     }
 
     return permissions.includes('ta.candidate.manage.all');
+};
+
+const canOverrideAssignedCandidateOwnership = async ({
+    hiringRequest,
+    user,
+    capability,
+    companyId
+}) => {
+    if (capability !== TA_CAPABILITIES.EDIT) {
+        return false;
+    }
+
+    const permissions = getUserPermissionKeys(user);
+    if (!permissions.includes('ta.requisition.manage.assigned')) {
+        return false;
+    }
+
+    return canAccessHiringRequest(hiringRequest, companyId, user, { action: 'edit' });
 };
 
 const findAccessibleHiringRequestIds = async ({
@@ -321,7 +339,16 @@ const canAccessCandidateThroughHiringRequest = async ({
 
     const actorState = getHiringRequestActorState(resolvedHiringRequest, user);
     if (isAssignedCandidateRestrictedActor(actorState, capability) && !isCandidateOwnedByUser(candidate, user)) {
-        return false;
+        const hasOwnershipOverride = await canOverrideAssignedCandidateOwnership({
+            hiringRequest: resolvedHiringRequest,
+            user,
+            capability,
+            companyId
+        });
+
+        if (!hasOwnershipOverride) {
+            return false;
+        }
     }
 
     if (hasUnrestrictedCandidateCapabilityPermission(user, capability) || hasGlobalCapabilityPermission(user, capability)) {

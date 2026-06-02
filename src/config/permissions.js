@@ -411,6 +411,11 @@ module.exports = [
         description: "Create discussions"
     },
     {
+        key: "announcement.manage",
+        module: "ANNOUNCEMENT",
+        description: "Create, publish, edit, and delete internal announcements"
+    },
+    {
         key: "bin.view",
         module: "SYSTEM",
         description: "View recycle bin items"

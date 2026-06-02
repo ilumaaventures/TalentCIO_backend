@@ -47,6 +47,21 @@ const isAllowedOrigin = (origin) => {
     return allowedOriginPatterns.some(pattern => pattern.test(origin));
 };
 
+const LOCAL_UNLIMITED_TIMEOUT_PATTERNS = [
+    /^https?:\/\/localhost:5174$/i,
+    /^https?:\/\/127\.0\.0\.1:5174$/i
+];
+
+const hasLocalUnlimitedTimeoutOrigin = (value) => (
+    typeof value === 'string'
+    && LOCAL_UNLIMITED_TIMEOUT_PATTERNS.some((pattern) => pattern.test(value.trim()))
+);
+
+const shouldDisableRequestTimeout = (req) => (
+    hasLocalUnlimitedTimeoutOrigin(req.headers.origin)
+    || hasLocalUnlimitedTimeoutOrigin(req.headers.referer)
+);
+
 const corsOptions = {
     origin(origin, callback) {
         if (isAllowedOrigin(origin)) {
@@ -74,6 +89,17 @@ app.use(helmet({
     crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
 }));
+app.use((req, res, next) => {
+    if (shouldDisableRequestTimeout(req)) {
+        req.setTimeout(0);
+        res.setTimeout(0);
+        if (req.socket) {
+            req.socket.setTimeout(0);
+        }
+    }
+
+    next();
+});
 
 
 // DEPLOY MARKER v4 – requireAttachment fix – 2026-04-20
@@ -185,6 +211,7 @@ require('./src/models/ActivityLog');
 require('./src/models/SuperAdminUser');
 require('./src/models/OnboardingEmployee');
 require('./src/models/PhaseTemplate');
+require('./src/models/Announcement');
 
 const syncPermissions = require('./src/services/permissionSync');
 const startEscalationCron = require('./src/services/escalationCron');
@@ -211,6 +238,7 @@ const helpdeskRoutes = require('./src/routes/helpdeskRoutes');
 const interviewWorkflowRoutes = require('./src/routes/interviewWorkflowRoutes');
 const notificationRoutes = require('./src/routes/notificationRoutes');
 const discussionRoutes = require('./src/routes/discussionRoutes');
+const announcementRoutes = require('./src/routes/announcementRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 const publicRoutes = require('./src/routes/publicRoutes');
@@ -283,6 +311,7 @@ app.use('/api/meetings', meetingRoutes);
 app.use('/api/helpdesk', helpdeskRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/discussions', discussionRoutes);
+app.use('/api/announcements', announcementRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/bin', binRoutes);
 app.use('/api/company/email-settings', emailSettingsRoutes);

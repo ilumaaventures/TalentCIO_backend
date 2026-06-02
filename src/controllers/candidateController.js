@@ -104,11 +104,24 @@ const isCandidateOwnedByUser = (candidate, userId) => (
     normalizeEntityId(candidate?.uploadedBy) === normalizeEntityId(userId)
 );
 
-const buildDuplicateCandidateMessage = (candidate, userId, allowOwnedDuplicateUpdate = false) => {
+const canOverrideDuplicateCandidateOwnership = async ({ user, companyId, hiringRequest }) => {
+    const permissionKeys = getUserPermissionKeys(user);
+    if (!permissionKeys.includes('ta.requisition.manage.assigned')) {
+        return false;
+    }
+
+    return canAccessHiringRequest(hiringRequest, companyId, user, { action: 'edit' });
+};
+
+const buildDuplicateCandidateMessage = (candidate, userId, canAutoUpdate = false) => {
     if (isCandidateOwnedByUser(candidate, userId)) {
-        return allowOwnedDuplicateUpdate
+        return canAutoUpdate
             ? 'Candidate already exists. Your bulk import will update the existing record.'
             : 'Candidate already exists. Open the existing record to update it.';
+    }
+
+    if (canAutoUpdate) {
+        return 'Candidate already exists. Your requisition access allows the bulk import to update the existing record.';
     }
 
     const uploaderName = getUserDisplayName(candidate?.uploadedBy);
@@ -522,7 +535,14 @@ exports.checkDuplicateCandidate = async (req, res) => {
         const ownedByCurrentUser = duplicateCandidate
             ? isCandidateOwnedByUser(duplicateCandidate, req.user?._id)
             : false;
-        const canAutoUpdate = Boolean(allowOwnedDuplicateUpdate) && ownedByCurrentUser;
+        const hasDuplicateOverrideAccess = duplicateCandidate
+            ? await canOverrideDuplicateCandidateOwnership({
+                user: req.user,
+                companyId: req.companyId,
+                hiringRequest
+            })
+            : false;
+        const canAutoUpdate = Boolean(allowOwnedDuplicateUpdate) && (ownedByCurrentUser || hasDuplicateOverrideAccess);
 
         return res.status(200).json({
             exists: Boolean(duplicateCandidate),
@@ -623,11 +643,18 @@ exports.createCandidate = async (req, res) => {
 
         if (candidate) {
             const ownedByCurrentUser = isCandidateOwnedByUser(candidate, req.user?._id);
-            if (!allowOwnedDuplicateUpdate || !ownedByCurrentUser) {
+            const hasDuplicateOverrideAccess = await canOverrideDuplicateCandidateOwnership({
+                user: req.user,
+                companyId: req.companyId,
+                hiringRequest
+            });
+            const canAutoUpdateExistingCandidate = allowOwnedDuplicateUpdate && (ownedByCurrentUser || hasDuplicateOverrideAccess);
+
+            if (!canAutoUpdateExistingCandidate) {
                 return res.status(409).json({
-                    message: buildDuplicateCandidateMessage(candidate, req.user?._id, allowOwnedDuplicateUpdate && ownedByCurrentUser),
+                    message: buildDuplicateCandidateMessage(candidate, req.user?._id, canAutoUpdateExistingCandidate),
                     ownedByCurrentUser,
-                    canAutoUpdate: allowOwnedDuplicateUpdate && ownedByCurrentUser,
+                    canAutoUpdate: canAutoUpdateExistingCandidate,
                     uploadedByName: getUserDisplayName(candidate.uploadedBy)
                 });
             }
