@@ -24,15 +24,11 @@ const canViewTAAccess = (user) => {
 };
 
 const canManageTAAccess = (user) => {
-    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
-    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
-        || hasAnyPermission(user, ['*', 'ta.config.edit', 'ta.manage']);
+    return hasAnyPermission(user, ['*', 'ta.config.edit', 'ta.manage']);
 };
 
 const canManageTARolePermissions = (user) => {
-    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
-    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName))
-        || hasAnyPermission(user, ['*', 'ta.manage']);
+    return hasAnyPermission(user, ['*', 'ta.manage']);
 };
 
 const getTAAccessPermissions = async () => (

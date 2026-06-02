@@ -102,6 +102,13 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         defaultChannel: 'system'
     },
     {
+        key: 'announcement_published',
+        label: 'Announcement published',
+        description: 'Notify users when a new internal announcement is published for them.',
+        module: 'Announcements',
+        defaultChannel: 'system'
+    },
+    {
         key: 'interview_assigned',
         label: 'Interview assigned',
         description: 'Notify interviewers when they are assigned to an interview round.',
