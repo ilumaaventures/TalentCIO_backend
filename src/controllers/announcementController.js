@@ -36,13 +36,7 @@ const toValidDate = (value) => {
     return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const getMonthScopedRange = (referenceDate = new Date()) => {
-    const start = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);
-    const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 1);
-    return { start, end };
-};
-
-const isSameMonth = (leftValue, rightValue = new Date()) => {
+const isSameCalendarMonth = (leftValue, rightValue = new Date()) => {
     const leftDate = toValidDate(leftValue);
     const rightDate = toValidDate(rightValue);
     if (!leftDate || !rightDate) return false;
@@ -50,6 +44,13 @@ const isSameMonth = (leftValue, rightValue = new Date()) => {
         leftDate.getMonth() === rightDate.getMonth()
         && leftDate.getFullYear() === rightDate.getFullYear()
     );
+};
+
+const isSameRecurringMonth = (leftValue, rightValue = new Date()) => {
+    const leftDate = toValidDate(leftValue);
+    const rightDate = toValidDate(rightValue);
+    if (!leftDate || !rightDate) return false;
+    return leftDate.getMonth() === rightDate.getMonth();
 };
 
 const isSameMonthDay = (leftValue, rightValue = new Date()) => {
@@ -80,9 +81,20 @@ const getYearsCompleted = (value, referenceDate = new Date()) => {
     return Math.max(years, 0);
 };
 
-const getCurrentMonthDateValue = (user = {}) => (
+const getTransferredOnboardingRecord = (user = {}, onboardingEmployeeByUserId = new Map()) => (
+    onboardingEmployeeByUserId.get(String(user?._id || '')) || null
+);
+
+const getBirthdayDateValue = (user = {}, onboardingEmployeeByUserId = new Map()) => (
+    user?.employeeProfile?.personal?.dob
+    || getTransferredOnboardingRecord(user, onboardingEmployeeByUserId)?.personalDetails?.dateOfBirth
+    || null
+);
+
+const getCurrentMonthDateValue = (user = {}, onboardingEmployeeByUserId = new Map()) => (
     user?.employeeProfile?.employment?.joiningDate
     || user?.joiningDate
+    || getTransferredOnboardingRecord(user, onboardingEmployeeByUserId)?.joiningDate
     || null
 );
 
@@ -640,7 +652,6 @@ exports.getAnnouncementCommunity = async (req, res) => {
     try {
         setPrivateCache(res, 300);
         const now = new Date();
-        const { start: monthStart, end: monthEnd } = getMonthScopedRange(now);
 
         const users = await User.find({ companyId: req.companyId, isActive: true })
             .select('firstName lastName email department employmentType profilePicture joiningDate employeeProfile createdAt')
@@ -653,42 +664,48 @@ exports.getAnnouncementCommunity = async (req, res) => {
             companyId: req.companyId,
             transferredToUserId: { $in: userIds }
         })
-            .select('transferredToUserId')
+            .select('transferredToUserId personalDetails.dateOfBirth joiningDate')
             .lean();
 
         const onboardingTransferredUserIdSet = new Set(
             onboardingTransfers.map((entry) => String(entry.transferredToUserId || ''))
         );
+        const onboardingEmployeeByUserId = new Map(
+            onboardingTransfers.map((entry) => [String(entry.transferredToUserId || ''), entry])
+        );
 
         const birthdayUsersCurrentMonth = users
-            .filter((user) => isSameMonth(user?.employeeProfile?.personal?.dob, now))
-            .sort((left, right) => new Date(left.employeeProfile.personal.dob).getDate() - new Date(right.employeeProfile.personal.dob).getDate());
+            .filter((user) => isSameRecurringMonth(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
+            .sort((left, right) => (
+                new Date(getBirthdayDateValue(left, onboardingEmployeeByUserId)).getDate()
+                - new Date(getBirthdayDateValue(right, onboardingEmployeeByUserId)).getDate()
+            ));
 
         const birthdaysCurrentMonth = birthdayUsersCurrentMonth.map((user) => serializeCommunityMember(user, {
-            dateValue: user.employeeProfile.personal.dob,
+            dateValue: getBirthdayDateValue(user, onboardingEmployeeByUserId),
             source: 'birthday'
         }));
 
         const birthdaysToday = birthdayUsersCurrentMonth
-            .filter((user) => isSameMonthDay(user?.employeeProfile?.personal?.dob, now))
+            .filter((user) => isSameMonthDay(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
             .map((user) => serializeCommunityMember(user, {
-                dateValue: user.employeeProfile.personal.dob,
+                dateValue: getBirthdayDateValue(user, onboardingEmployeeByUserId),
                 source: 'birthday'
             }));
 
         const anniversaryUsersCurrentMonth = users
             .filter((user) => {
-                const joiningDate = getCurrentMonthDateValue(user);
-                return isSameMonth(joiningDate, now) && getYearsCompleted(joiningDate, now) > 0;
+                const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
+                return isSameRecurringMonth(joiningDate, now) && getYearsCompleted(joiningDate, now) > 0;
             })
             .sort((left, right) => {
-                const leftDate = getCurrentMonthDateValue(left);
-                const rightDate = getCurrentMonthDateValue(right);
+                const leftDate = getCurrentMonthDateValue(left, onboardingEmployeeByUserId);
+                const rightDate = getCurrentMonthDateValue(right, onboardingEmployeeByUserId);
                 return new Date(leftDate).getDate() - new Date(rightDate).getDate();
             });
 
         const anniversariesCurrentMonth = anniversaryUsersCurrentMonth.map((user) => {
-            const joiningDate = getCurrentMonthDateValue(user);
+            const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
             return serializeCommunityMember(user, {
                 dateValue: joiningDate,
                 yearsCompleted: getYearsCompleted(joiningDate, now),
@@ -697,9 +714,9 @@ exports.getAnnouncementCommunity = async (req, res) => {
         });
 
         const anniversariesToday = anniversaryUsersCurrentMonth
-            .filter((user) => isSameMonthDay(getCurrentMonthDateValue(user), now))
+            .filter((user) => isSameMonthDay(getCurrentMonthDateValue(user, onboardingEmployeeByUserId), now))
             .map((user) => {
-                const joiningDate = getCurrentMonthDateValue(user);
+                const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
                 return serializeCommunityMember(user, {
                     dateValue: joiningDate,
                     yearsCompleted: getYearsCompleted(joiningDate, now),
@@ -708,16 +725,18 @@ exports.getAnnouncementCommunity = async (req, res) => {
             });
 
         const newJoineesCurrentMonth = users
-            .filter((user) => (
-                user.createdAt >= monthStart
-                && user.createdAt < monthEnd
-                && onboardingTransferredUserIdSet.has(String(user._id))
+            .filter((user) => {
+                const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
+                return isSameCalendarMonth(joiningDate, now);
+            })
+            .sort((left, right) => (
+                new Date(getCurrentMonthDateValue(left, onboardingEmployeeByUserId))
+                - new Date(getCurrentMonthDateValue(right, onboardingEmployeeByUserId))
             ))
-            .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
             .map((user) => serializeCommunityMember(user, {
-                dateValue: user.createdAt,
+                dateValue: getCurrentMonthDateValue(user, onboardingEmployeeByUserId),
                 source: 'newJoinee',
-                transferredFromOnboarding: true
+                transferredFromOnboarding: onboardingTransferredUserIdSet.has(String(user._id))
             }));
 
         return res.json({
