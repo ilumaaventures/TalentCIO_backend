@@ -8,6 +8,12 @@ const AUDIENCE_TYPES = ['all', 'departments', 'employmentTypes', 'specificUsers'
 const REACTION_TYPES = ['like', 'celebrate', 'support'];
 const MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin']);
 const EMPLOYMENT_TYPES = ['Full Time', 'Part Time', 'Contract', 'Intern', 'Consultant', 'Freelance', 'Probation'];
+const ANNOUNCEMENT_FIELD_LIMITS = {
+    title: 160,
+    summary: 240,
+    content: 8000,
+    commentText: 1200
+};
 
 const setPrivateCache = (res, maxAgeSeconds = 20) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
@@ -19,6 +25,10 @@ const monthDayFormatter = new Intl.DateTimeFormat('en-IN', {
 });
 
 const normalizeString = (value = '') => String(value || '').trim();
+
+const exceedsMaxLength = (value = '', maxLength = 0) => (
+    Boolean(maxLength) && normalizeString(value).length > maxLength
+);
 
 const toValidDate = (value) => {
     if (!value) return null;
@@ -124,8 +134,8 @@ const canManageAnnouncements = (user = {}) => {
 };
 
 const announcementPopulatePaths = [
-    { path: 'createdBy', select: 'firstName lastName profilePicture' },
-    { path: 'updatedBy', select: 'firstName lastName profilePicture' },
+    { path: 'createdBy', select: 'firstName lastName profilePicture department employmentType' },
+    { path: 'updatedBy', select: 'firstName lastName profilePicture department employmentType' },
     { path: 'audienceUserIds', select: 'firstName lastName email department employmentType profilePicture' },
     { path: 'comments.userId', select: 'firstName lastName email profilePicture department employmentType' },
     { path: 'reactions.userId', select: 'firstName lastName profilePicture' }
@@ -261,6 +271,26 @@ const getReactionBreakdown = (reactions = [], viewerId = '') => {
     };
 };
 
+const buildReactionPreviewUsers = (reactions = []) => (
+    reactions
+        .slice()
+        .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
+        .slice(0, 3)
+        .map((reaction) => {
+            const person = reaction?.userId;
+            const name = [person?.firstName, person?.lastName].filter(Boolean).join(' ').trim();
+
+            return {
+                _id: person?._id || reaction?.userId || null,
+                firstName: person?.firstName || '',
+                lastName: person?.lastName || '',
+                profilePicture: person?.profilePicture || '',
+                name: name || 'Team Member',
+                reactionType: reaction?.type || ''
+            };
+        })
+);
+
 const serializeComment = (comment = {}, viewer = {}, manageAccess = false) => {
     const authorName = [comment.userId?.firstName, comment.userId?.lastName]
         .filter(Boolean)
@@ -349,6 +379,8 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
             _id: announcement.createdBy?._id,
             firstName: announcement.createdBy?.firstName || '',
             lastName: announcement.createdBy?.lastName || '',
+            department: announcement.createdBy?.department || '',
+            employmentType: announcement.createdBy?.employmentType || '',
             profilePicture: announcement.createdBy?.profilePicture || '',
             name: creatorName
         } : null,
@@ -356,6 +388,8 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
             _id: announcement.updatedBy?._id,
             firstName: announcement.updatedBy?.firstName || '',
             lastName: announcement.updatedBy?.lastName || '',
+            department: announcement.updatedBy?.department || '',
+            employmentType: announcement.updatedBy?.employmentType || '',
             profilePicture: announcement.updatedBy?.profilePicture || '',
             name: updaterName
         } : null,
@@ -364,6 +398,7 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
         reactionCounts: reactionSummary.counts,
         totalReactions: reactionSummary.total,
         viewerReaction: reactionSummary.viewerReaction,
+        reactionPreviewUsers: buildReactionPreviewUsers(announcement.reactions || []),
         canManage: manageAccess || canManageAnnouncements(viewer),
         isExpired,
         isVisibleToViewer
@@ -430,6 +465,18 @@ const validateAnnouncementPayload = async (payload = {}, companyId) => {
 
     if (!payload.content) {
         return 'Announcement content is required.';
+    }
+
+    if (exceedsMaxLength(payload.title, ANNOUNCEMENT_FIELD_LIMITS.title)) {
+        return `Title cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.title} characters.`;
+    }
+
+    if (exceedsMaxLength(payload.summary, ANNOUNCEMENT_FIELD_LIMITS.summary)) {
+        return `Summary cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.summary} characters.`;
+    }
+
+    if (exceedsMaxLength(payload.content, ANNOUNCEMENT_FIELD_LIMITS.content)) {
+        return `Announcement content cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.content} characters.`;
     }
 
     if (payload.expiresAt && payload.expiresAt <= new Date()) {
@@ -519,11 +566,11 @@ const ensureAnnouncementFeedAccess = async (req, announcement, options = {}) => 
         return { error: 'Announcement not found.', status: 404, manageAccess };
     }
 
-    if (interactiveOnly && (announcement.status !== 'published' || isAnnouncementExpired(announcement))) {
-        return { error: 'Only live announcements can receive reactions or comments.', status: 400, manageAccess };
-    }
-
     if (manageAccess) {
+        if (interactiveOnly && (announcement.status !== 'published' || isAnnouncementExpired(announcement))) {
+            return { error: 'Only live announcements can receive reactions or comments.', status: 400, manageAccess };
+        }
+
         return { announcement, manageAccess };
     }
 
@@ -534,6 +581,10 @@ const ensureAnnouncementFeedAccess = async (req, announcement, options = {}) => 
 
     if (!accessible) {
         return { error: 'You do not have access to this announcement.', status: 403, manageAccess };
+    }
+
+    if (interactiveOnly && (announcement.status !== 'published' || isAnnouncementExpired(announcement))) {
+        return { error: 'Only live announcements can receive reactions or comments.', status: 400, manageAccess };
     }
 
     return { announcement, manageAccess };
@@ -828,7 +879,7 @@ exports.updateAnnouncement = async (req, res) => {
         existingAnnouncement.expiresAt = payload.expiresAt;
         existingAnnouncement.updatedBy = req.user._id;
 
-        if (shouldPublishNow && !existingAnnouncement.publishedAt) {
+        if (shouldPublishNow) {
             existingAnnouncement.publishedAt = new Date();
         }
 
@@ -908,6 +959,12 @@ exports.addAnnouncementComment = async (req, res) => {
         const text = normalizeString(req.body?.text);
         if (!text) {
             return res.status(400).json({ message: 'Comment text is required.' });
+        }
+
+        if (exceedsMaxLength(text, ANNOUNCEMENT_FIELD_LIMITS.commentText)) {
+            return res.status(400).json({
+                message: `Comment text cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.commentText} characters.`
+            });
         }
 
         const announcement = await Announcement.findOne({
