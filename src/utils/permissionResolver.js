@@ -1,7 +1,23 @@
 const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 
+const ANNOUNCEMENT_MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin']);
+
 const normalizeId = (value) => String(value?._id || value || '');
+
+const augmentPermissionKeysForRoles = ({ roles = [], permissionKeys = [] } = {}) => {
+    const roleNames = (Array.isArray(roles) ? roles : [])
+        .map((role) => (typeof role === 'string' ? role : role?.name))
+        .filter(Boolean);
+
+    const finalPermissions = new Set(Array.isArray(permissionKeys) ? permissionKeys.filter(Boolean) : []);
+
+    if (roleNames.some((roleName) => ANNOUNCEMENT_MANAGER_ROLE_NAMES.has(roleName))) {
+        finalPermissions.add('announcement.manage');
+    }
+
+    return [...finalPermissions];
+};
 
 const getRoleCompanyMatch = (companyId) => (
     companyId
@@ -139,7 +155,10 @@ const resolveRolesWithInheritance = async ({ roleIds = [], companyId }) => {
         roles.flatMap((role) => (role.permissions || []).map((permission) => permission.key).filter(Boolean))
     )];
 
-    return { roles, permissionKeys };
+    return {
+        roles,
+        permissionKeys: augmentPermissionKeysForRoles({ roles, permissionKeys })
+    };
 };
 
 const validateRoleInheritanceGraph = async ({ roleId = null, inheritsFrom = [], companyId }) => {
@@ -190,6 +209,7 @@ const validateRoleInheritanceGraph = async ({ roleId = null, inheritsFrom = [], 
 };
 
 module.exports = {
+    augmentPermissionKeysForRoles,
     resolveRolesWithInheritance,
     validateRoleInheritanceGraph
 };

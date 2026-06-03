@@ -26,6 +26,7 @@ const LEGACY_REMOVED_PERMISSION_KEYS = [
     'ta.interview.schedule',
     ...Object.keys(LEGACY_PERMISSION_REPLACEMENTS)
 ];
+const ANNOUNCEMENT_MANAGER_ROLE_NAMES = ['Admin', 'Manager', 'HR Admin', 'System Admin'];
 
 const syncPermissions = async () => {
     try {
@@ -152,6 +153,21 @@ const syncPermissions = async () => {
                     { $addToSet: { permissions: { $each: settingsPermissions.map((permission) => permission._id) } } }
                 );
                 console.log('Updated HR Admin role with settings permissions.');
+            }
+        }
+
+        const announcementManagePermission = await Permission.findOne({
+            key: 'announcement.manage'
+        }).select('_id');
+
+        if (announcementManagePermission) {
+            const announcementRoleAssignment = await Role.updateMany(
+                { name: { $in: ANNOUNCEMENT_MANAGER_ROLE_NAMES } },
+                { $addToSet: { permissions: announcementManagePermission._id } }
+            );
+
+            if (announcementRoleAssignment.matchedCount > 0) {
+                console.log('Updated announcement manager roles with announcement.manage permission.');
             }
         }
 

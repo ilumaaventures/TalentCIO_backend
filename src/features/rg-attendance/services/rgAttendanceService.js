@@ -16,13 +16,24 @@ const isAdminLikeUser = (user = {}) => {
     );
 };
 
+const canViewCompanyWideRGDocuments = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+
+    return (
+        isAdminLikeUser(user)
+        || permissions.includes('attendance.view')
+        || permissions.includes('attendance.view_others')
+        || permissions.includes('user.read')
+    );
+};
+
 const buildVisibleUsers = async ({ companyId, requester }) => {
     const query = {
         companyId,
         isActive: true
     };
 
-    if (!isAdminLikeUser(requester)) {
+    if (!canViewCompanyWideRGDocuments(requester)) {
         query.reportingManagers = requester._id;
     }
 

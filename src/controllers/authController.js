@@ -7,6 +7,7 @@ const { sendEmailForCompany } = require('../services/companyEmailService');
 const NotificationService = require('../services/notificationService');
 const crypto = require('crypto');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
+const { augmentPermissionKeysForRoles } = require('../utils/permissionResolver');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -190,6 +191,7 @@ const loginUser = async (req, res) => {
         let permissions = [...new Set(
             user.roles.flatMap(role => (role.permissions || []).filter(p => p).map(p => p.key))
         )];
+        permissions = augmentPermissionKeysForRoles({ roles: user.roles, permissionKeys: permissions });
 
         // Wildcard Expansion: If user has '*', provide ALL permissions
         let hasAllPermissions = false;
