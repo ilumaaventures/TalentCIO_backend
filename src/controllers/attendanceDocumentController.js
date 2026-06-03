@@ -5,6 +5,28 @@ const NotificationService = require('../services/notificationService');
 const { cloudinary } = require('../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 
+const getRoleNames = (user = {}) => (
+    Array.isArray(user.roles)
+        ? user.roles.map((role) => (typeof role === 'string' ? role : role?.name)).filter(Boolean)
+        : []
+);
+
+const hasCompanyWideAttachmentViewAccess = (user = {}) => {
+    const roleNames = getRoleNames(user);
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+
+    return (
+        roleNames.includes('Admin')
+        || roleNames.includes('System Admin')
+        || permissions.includes('*')
+        || permissions.includes('admin')
+        || permissions.includes('all')
+        || permissions.includes('attendance.view')
+        || permissions.includes('attendance.view_others')
+        || permissions.includes('user.read')
+    );
+};
+
 // @desc    Upload attendance attachment
 // @route   POST /api/attendance/attachments/:userId/:month
 // @access  Private (Self, Manager, Admin)
@@ -66,11 +88,11 @@ exports.getAttachments = async (req, res) => {
 
         // Permission check
         const isSelf = req.user._id.toString() === userId;
-        const isAdmin = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const hasCompanyWideAccess = hasCompanyWideAttachmentViewAccess(req.user);
         const targetUser = await User.findById(userId);
         const isManager = targetUser?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
-        if (!isSelf && !isAdmin && !isManager) {
+        if (!isSelf && !hasCompanyWideAccess && !isManager) {
             return res.status(403).json({ message: 'Not authorized to view these attachments' });
         }
 
