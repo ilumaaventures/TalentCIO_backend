@@ -12,6 +12,7 @@ const { sendEmail } = require('../services/emailService');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const NotificationService = require('../services/notificationService');
 const { computeProfileCompletion } = require('../utils/profileCompletion');
+const { setSessionCookie } = require('../utils/sessionCookies');
 
 const DEMO_REQUEST_RECIPIENT = process.env.DEMO_REQUEST_EMAIL || 'ilumaaventures@gmail.com';
 const GOOGLE_OAUTH_CLIENT_ID_FALLBACK = '485252065297-kuf4ijabspu0manp3jvkdvlmsjjqa5th.apps.googleusercontent.com';
@@ -1048,6 +1049,19 @@ exports.applicantResetPassword = async (req, res) => {
     }
 };
 
+exports.applicantLogout = async (req, res) => {
+    try {
+        await Applicant.findByIdAndUpdate(req.applicant._id, {
+            $inc: { tokenVersion: 1 }
+        });
+
+        return res.json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('[APPLICANT LOGOUT]', error);
+        return res.status(500).json({ message: 'Failed to logout.' });
+    }
+};
+
 exports.applicantGetMe = async (req, res) => {
     res.json({ applicant: req.applicant });
 };
@@ -1675,6 +1689,7 @@ exports.exchangeHandoffToken = async (req, res) => {
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRE || '7d' }
         );
+        setSessionCookie(res, req, jwtToken);
 
         res.json({
             token: jwtToken,

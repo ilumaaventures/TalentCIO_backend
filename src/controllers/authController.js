@@ -8,6 +8,8 @@ const NotificationService = require('../services/notificationService');
 const crypto = require('crypto');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
 const { augmentPermissionKeysForRoles } = require('../utils/permissionResolver');
+const { invalidateAuthUserCache } = require('../middlewares/authMiddleware');
+const { clearSessionCookie, setSessionCookie } = require('../utils/sessionCookies');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -98,11 +100,13 @@ const register = async (req, res) => {
         });
 
         if (user) {
+            const jwtToken = generateToken(user._id, user.tokenVersion);
+            setSessionCookie(res, req, jwtToken);
             res.status(201).json({
                 _id: user._id,
                 firstName: user.firstName,
                 email: user.email,
-                token: generateToken(user._id, user.tokenVersion)
+                token: jwtToken
             });
         } else {
             res.status(400).json({ message: 'Invalid user data' });
@@ -117,12 +121,14 @@ const register = async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 const loginUser = async (req, res) => {
-
-
     const { email, password } = req.body;
     const normalizedEmail = normalizeEmail(email);
 
     try {
+        if (!req.companyId && req.body.companyId) {
+            req.companyId = req.body.companyId;
+        }
+
         if (!req.companyId) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
@@ -269,6 +275,9 @@ const loginUser = async (req, res) => {
             ? { ...company, enabledModules: normalizeEnabledModules(company.enabledModules || []) }
             : null;
 
+        const jwtToken = generateToken(user._id, user.tokenVersion);
+        setSessionCookie(res, req, jwtToken);
+
         res.json({
             _id: user._id,
             firstName: user.firstName,
@@ -283,7 +292,7 @@ const loginUser = async (req, res) => {
             isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
             isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
             company: normalizedCompany, // Full configuration for the frontend
-            token: generateToken(user._id, user.tokenVersion)
+            token: jwtToken
         });
     } catch (error) {
         console.error('LOGIN ERROR:', error);
@@ -414,9 +423,28 @@ const resendOtp = async (req, res) => {
     }
 };
 
+// @desc    Logout current user and invalidate active JWTs
+// @route   POST /api/auth/logout
+// @access  Private
+const logoutUser = async (req, res) => {
+    try {
+        await User.findByIdAndUpdate(req.user._id, {
+            $inc: { tokenVersion: 1 }
+        });
+        invalidateAuthUserCache(req.user._id);
+        clearSessionCookie(res, req);
+
+        return res.json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('LOGOUT ERROR:', error);
+        return res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
 module.exports = {
     register,
     loginUser,
+    logoutUser,
     uploadProfilePicture,
     verifyOtpAndResetPassword,
     resendOtp

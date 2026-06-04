@@ -48,6 +48,10 @@ const onboardingEmployeeSchema = new mongoose.Schema({
         default: '',
         select: false
     },
+    tokenVersion: {
+        type: Number,
+        default: 0
+    },
     isPasswordChanged: {
         type: Boolean,
         default: false
@@ -242,6 +246,10 @@ onboardingEmployeeSchema.pre('save', async function () {
     if (!this.isModified('tempPassword')) return;
     const salt = await bcrypt.genSalt(10);
     this.tempPassword = await bcrypt.hash(this.tempPassword, salt);
+
+    if (!this.isNew) {
+        this.tokenVersion = (this.tokenVersion || 0) + 1;
+    }
 });
 
 onboardingEmployeeSchema.methods.matchPassword = async function (enteredPassword) {

@@ -17,6 +17,9 @@ const protectSuperAdmin = async (req, res, next) => {
         if (!admin || !admin.isActive) {
             return res.status(401).json({ message: 'Account not found or inactive.' });
         }
+        if ((decoded.tokenVersion || 0) !== (admin.tokenVersion || 0)) {
+            return res.status(401).json({ message: 'Token invalid or expired' });
+        }
         req.superAdmin = admin;
         next();
     } catch (err) {

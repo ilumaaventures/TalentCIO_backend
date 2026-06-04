@@ -2,8 +2,8 @@ const jwt = require('jsonwebtoken');
 const SuperAdminUser = require('../models/SuperAdminUser');
 const ActivityLog = require('../models/ActivityLog');
 
-const generateToken = (id) => jwt.sign(
-    { id, type: 'superadmin' },
+const generateToken = (id, tokenVersion = 0) => jwt.sign(
+    { id, type: 'superadmin', tokenVersion },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
 );
@@ -22,7 +22,7 @@ const login = async (req, res) => {
         await admin.save({ validateBeforeSave: false });
 
         res.json({
-            token: generateToken(admin._id),
+            token: generateToken(admin._id, admin.tokenVersion),
             admin: {
                 _id: admin._id,
                 name: admin.name,
@@ -110,4 +110,21 @@ const updatePassword = async (req, res) => {
     }
 };
 
-module.exports = { login, getMe, seedSuperAdmin, updateProfile, updatePassword };
+// POST /api/superadmin/auth/logout
+const logout = async (req, res) => {
+    try {
+        const admin = await SuperAdminUser.findById(req.superAdmin._id);
+        if (!admin) {
+            return res.status(404).json({ message: 'Admin not found' });
+        }
+
+        admin.tokenVersion = (admin.tokenVersion || 0) + 1;
+        await admin.save({ validateBeforeSave: false });
+
+        res.json({ message: 'Logged out successfully' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+module.exports = { login, logout, getMe, seedSuperAdmin, updateProfile, updatePassword };

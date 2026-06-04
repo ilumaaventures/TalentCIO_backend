@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { resolveRolesWithInheritance } = require('../utils/permissionResolver');
+const { getTokenFromRequest } = require('../utils/sessionCookies');
 //check
 const AUTH_CACHE_TTL_MS = 5000;
 const authUserCache = new Map();
@@ -22,17 +23,20 @@ const cloneCachedUser = (user) => ({
     taAssignedClients: Array.isArray(user.taAssignedClients) ? [...user.taAssignedClients] : []
 });
 
+const invalidateAuthUserCache = (userId) => {
+    const keyPrefix = `${String(userId || '')}:`;
+    for (const cacheKey of authUserCache.keys()) {
+        if (cacheKey.startsWith(keyPrefix)) {
+            authUserCache.delete(cacheKey);
+        }
+    }
+};
+
 const protect = async (req, res, next) => {
-    let token;
+    const token = getTokenFromRequest(req);
 
-    if (
-        req.headers.authorization &&
-        req.headers.authorization.startsWith('Bearer')
-    ) {
+    if (token) {
         try {
-            // Get token from header
-            token = req.headers.authorization.split(' ')[1];
-
             // Verify token
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             const tokenVersion = decoded.tokenVersion || 0;
@@ -130,4 +134,4 @@ const admin = (req, res, next) => {
     }
 };
 
-module.exports = { protect, admin };
+module.exports = { protect, admin, invalidateAuthUserCache };

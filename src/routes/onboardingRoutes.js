@@ -36,6 +36,10 @@ const protectOnboarding = async (req, res, next) => {
                 return res.status(401).json({ message: 'Workspace validation failed' });
             }
 
+            if ((decoded.tokenVersion || 0) !== (employee.tokenVersion || 0)) {
+                return res.status(401).json({ message: 'Session expired. Please login again.', code: 'SESSION_EXPIRED' });
+            }
+
             // Check credential expiry
             if (employee.credentialsExpireAt && new Date() > new Date(employee.credentialsExpireAt)) {
                 return res.status(401).json({ message: 'Credentials expired' });
@@ -131,6 +135,7 @@ router.delete('/settings/policies/:policyId', protect, requireOnboardingRequest,
 // ==========================================
 router.post('/login', onboardingController.employeeLogin);
 router.post('/change-password', protectOnboarding, onboardingController.changePassword);
+router.post('/logout', protectOnboarding, onboardingController.logout);
 router.get('/my-offer-letter', protectOnboarding, onboardingController.getMyOfferLetter);
 router.post('/my-profile/accept-offer', protectOnboarding, onboardingController.acceptOfferLetter);
 router.post('/refresh-token', protectOnboarding, onboardingController.refreshToken);

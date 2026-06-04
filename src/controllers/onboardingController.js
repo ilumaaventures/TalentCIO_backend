@@ -1453,7 +1453,7 @@ exports.employeeLogin = async (req, res) => {
 
         // Generate JWT (15 min expiry for session timeout)
         const token = jwt.sign(
-            { id: employee._id, type: 'onboarding', companyId: employee.companyId },
+            { id: employee._id, type: 'onboarding', companyId: employee.companyId, tokenVersion: employee.tokenVersion || 0 },
             process.env.JWT_SECRET,
             { expiresIn: '15m' }
         );
@@ -1495,7 +1495,7 @@ exports.employeeLogin = async (req, res) => {
 exports.refreshToken = async (req, res) => {
     try {
         const token = jwt.sign(
-            { id: req.onboardingEmployee._id, type: 'onboarding', companyId: req.onboardingEmployee.companyId },
+            { id: req.onboardingEmployee._id, type: 'onboarding', companyId: req.onboardingEmployee.companyId, tokenVersion: req.onboardingEmployee.tokenVersion || 0 },
             process.env.JWT_SECRET,
             { expiresIn: '15m' }
         );
@@ -1524,7 +1524,7 @@ exports.changePassword = async (req, res) => {
 
         // Generate a new token
         const token = jwt.sign(
-            { id: employee._id, type: 'onboarding', companyId: employee.companyId },
+            { id: employee._id, type: 'onboarding', companyId: employee.companyId, tokenVersion: employee.tokenVersion || 0 },
             process.env.JWT_SECRET,
             { expiresIn: '15m' }
         );
@@ -2566,6 +2566,24 @@ const DOC_CATEGORY_MAP = {
     'graduation': 'Education',
     'relieving_letter': 'Relieving Letter',
     'experience_certificate': 'Employment'
+};
+
+exports.logout = async (req, res) => {
+    try {
+        const employee = req.onboardingEmployee;
+        employee.tokenVersion = (employee.tokenVersion || 0) + 1;
+        employee.auditLog.push({
+            action: 'LOGOUT',
+            ip: req.ip || req.headers['x-forwarded-for'] || '',
+            details: 'Employee logged out'
+        });
+
+        await employee.save();
+        res.status(200).json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Error logging out onboarding employee:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
 };
 
 const DOC_TITLE_MAP = {
