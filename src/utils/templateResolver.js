@@ -26,6 +26,14 @@ const TEMPLATE_PLACEHOLDERS = [
     'interviewDate',
     'interviewLink',
     'customNote',
+    'employeeCode',
+    'exitType',
+    'lastWorkingDay',
+    'documentList',
+    'documentListBlock',
+    'personalNote',
+    'offboardingStatus',
+    'hrRemarks',
     'employeeFirstName',
     'employeeFullName',
     'employeeId',
@@ -55,7 +63,15 @@ const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
     'location',
     'managerName',
     'managerEmail',
-    'companyName'
+    'companyName',
+    'employeeCode',
+    'exitType',
+    'lastWorkingDay',
+    'documentList',
+    'documentListBlock',
+    'personalNote',
+    'offboardingStatus',
+    'hrRemarks'
 ];
 
 const ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
@@ -78,6 +94,20 @@ const ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
     'sharedFilesBlock',
     'deadlineBlock',
     'portalButton',
+    'currentYear'
+];
+
+const OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
+    'firstName',
+    'lastName',
+    'fullName',
+    'email',
+    'designation',
+    'department',
+    'joiningDate',
+    'lastWorkingDay',
+    'exitType',
+    'companyName',
     'currentYear'
 ];
 
@@ -199,6 +229,7 @@ module.exports = {
     TEMPLATE_PLACEHOLDERS,
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
+    OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     formatTemplateBodyAsHtml,
     getSupportedPlaceholderTokens,
     hasHtmlMarkup,

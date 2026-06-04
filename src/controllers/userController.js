@@ -72,9 +72,9 @@ const hasDirectTAPermission = (permissions = []) => (
 
 const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode';
 
-const buildUsersListQuery = (companyId, includeDeleted = false) => (
+const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
     User.find(
-        { companyId },
+        { companyId, ...extraFilters },
         null,
         includeDeleted ? { includeDeleted: true } : undefined
     )
@@ -94,12 +94,17 @@ const buildUsersListQuery = (companyId, includeDeleted = false) => (
 const getUsers = async (req, res) => {
     try {
         const includeDeleted = req.query.includeDeleted === 'true';
+        const activeFilter = req.query.active === 'true'
+            ? { isActive: true }
+            : req.query.active === 'false'
+                ? { isActive: false }
+                : {};
         const parsedPage = Number.parseInt(req.query.page, 10);
         const parsedLimit = Number.parseInt(req.query.limit, 10);
         const hasPagination = Number.isFinite(parsedPage) || Number.isFinite(parsedLimit);
 
         if (!hasPagination) {
-            const users = await buildUsersListQuery(req.companyId, includeDeleted).lean();
+            const users = await buildUsersListQuery(req.companyId, includeDeleted, activeFilter).lean();
             const usersWithFlags = await attachPrimaryAdminFlags(users, req.companyId);
             return res.json(usersWithFlags);
         }
@@ -110,13 +115,13 @@ const getUsers = async (req, res) => {
             : 15;
         const skip = (page - 1) * limit;
 
-        const totalQuery = User.countDocuments({ companyId: req.companyId });
+        const totalQuery = User.countDocuments({ companyId: req.companyId, ...activeFilter });
         if (includeDeleted) {
             totalQuery.setOptions({ includeDeleted: true });
         }
 
         const [users, total] = await Promise.all([
-            buildUsersListQuery(req.companyId, includeDeleted)
+            buildUsersListQuery(req.companyId, includeDeleted, activeFilter)
                 .sort({ joiningDate: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(limit)

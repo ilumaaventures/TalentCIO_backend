@@ -3,21 +3,27 @@ const EmailTemplate = require('../models/EmailTemplate');
 const {
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
+    OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     TEMPLATE_PLACEHOLDERS,
     validateTemplateSyntax
 } = require('../utils/templateResolver');
 
 const getTemplateScope = (req) => req.templateScope === 'general' ? 'general' : 'ta';
-const normalizeTemplateType = (value) => value === 'onboarding' ? 'onboarding' : 'general';
+const normalizeTemplateType = (value) => {
+    if (value === 'onboarding') return 'onboarding';
+    if (value === 'offboarding') return 'offboarding';
+    return 'general';
+};
 const getTemplateTypeForPayload = (req, body = {}) => normalizeTemplateType(body.templateType);
 const getAllowedPlaceholdersForScope = (req, body = {}) => {
     if (getTemplateScope(req) !== 'general') {
         return TEMPLATE_PLACEHOLDERS;
     }
 
-    return getTemplateTypeForPayload(req, body) === 'onboarding'
-        ? ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS
-        : GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS;
+    const type = getTemplateTypeForPayload(req, body);
+    if (type === 'onboarding') return ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS;
+    if (type === 'offboarding') return OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS;
+    return GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS;
 };
 
 const applyTemplateTypeFilter = (req, query, templateType) => {
@@ -27,6 +33,11 @@ const applyTemplateTypeFilter = (req, query, templateType) => {
 
     if (templateType === 'onboarding') {
         query.templateType = 'onboarding';
+        return query;
+    }
+
+    if (templateType === 'offboarding') {
+        query.templateType = 'offboarding';
         return query;
     }
 

@@ -481,5 +481,22 @@ module.exports = [
         key: "onboarding.complete",
         module: "ONBOARDING",
         description: "Complete onboarding and transfer candidates to active employees"
+    },
+
+    // OFFBOARDING
+    {
+        key: "offboarding.read",
+        module: "OFFBOARDING",
+        description: "View offboarding records and dashboard stats"
+    },
+    {
+        key: "offboarding.create",
+        module: "OFFBOARDING",
+        description: "Initiate employee offboarding records"
+    },
+    {
+        key: "offboarding.update",
+        module: "OFFBOARDING",
+        description: "Update offboarding progress, documents, and completion"
     }
 ];
