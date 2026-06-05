@@ -1,11 +1,11 @@
 const jwt = require('jsonwebtoken');
 const SuperAdminUser = require('../models/SuperAdminUser');
+const { getTokenFromRequest } = require('../utils/sessionCookies');
+
+const SUPER_ADMIN_SESSION_COOKIE_NAME = 'talentcio_superadmin_session';
 
 const protectSuperAdmin = async (req, res, next) => {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-        token = req.headers.authorization.split(' ')[1];
-    }
+    const token = getTokenFromRequest(req, SUPER_ADMIN_SESSION_COOKIE_NAME);
     if (!token) return res.status(401).json({ message: 'Not authorized, no token' });
 
     try {

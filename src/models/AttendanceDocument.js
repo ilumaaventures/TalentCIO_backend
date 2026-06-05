@@ -13,7 +13,7 @@ const attendanceDocumentSchema = new mongoose.Schema({
         index: true
     },
     month: {
-        type: String, // format YYYY-MM
+        type: String, // period key: YYYY-MM, YYYY-Wnn, YYYY-BWnn, or YYYY-MM-DD
         required: true,
         index: true
     },
@@ -43,7 +43,7 @@ const attendanceDocumentSchema = new mongoose.Schema({
     remarks: String
 }, { timestamps: true });
 
-// Ensure uniqueness per user+month+company
+// Ensure uniqueness per user+period+company
 attendanceDocumentSchema.index({ user: 1, companyId: 1, month: 1 }, { unique: true });
 
 module.exports = mongoose.model('AttendanceDocument', attendanceDocumentSchema);

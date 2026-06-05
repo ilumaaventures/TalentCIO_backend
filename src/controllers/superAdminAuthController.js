@@ -1,6 +1,9 @@
 const jwt = require('jsonwebtoken');
 const SuperAdminUser = require('../models/SuperAdminUser');
 const ActivityLog = require('../models/ActivityLog');
+const { clearSessionCookie, getTokenFromRequest, setSessionCookie } = require('../utils/sessionCookies');
+
+const SUPER_ADMIN_SESSION_COOKIE_NAME = 'talentcio_superadmin_session';
 
 const generateToken = (id, tokenVersion = 0) => jwt.sign(
     { id, type: 'superadmin', tokenVersion },
@@ -21,8 +24,11 @@ const login = async (req, res) => {
         admin.lastLogin = new Date();
         await admin.save({ validateBeforeSave: false });
 
+        const token = generateToken(admin._id, admin.tokenVersion);
+        setSessionCookie(res, req, token, { cookieName: SUPER_ADMIN_SESSION_COOKIE_NAME });
+
         res.json({
-            token: generateToken(admin._id, admin.tokenVersion),
+            token,
             admin: {
                 _id: admin._id,
                 name: admin.name,
@@ -113,14 +119,24 @@ const updatePassword = async (req, res) => {
 // POST /api/superadmin/auth/logout
 const logout = async (req, res) => {
     try {
-        const admin = await SuperAdminUser.findById(req.superAdmin._id);
-        if (!admin) {
-            return res.status(404).json({ message: 'Admin not found' });
+        const token = getTokenFromRequest(req, SUPER_ADMIN_SESSION_COOKIE_NAME);
+
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                if (decoded?.type === 'superadmin' && decoded?.id) {
+                    const admin = await SuperAdminUser.findById(decoded.id);
+                    if (admin) {
+                        admin.tokenVersion = (admin.tokenVersion || 0) + 1;
+                        await admin.save({ validateBeforeSave: false });
+                    }
+                }
+            } catch (tokenError) {
+                // Logout should remain idempotent even if the session is already stale.
+            }
         }
 
-        admin.tokenVersion = (admin.tokenVersion || 0) + 1;
-        await admin.save({ validateBeforeSave: false });
-
+        clearSessionCookie(res, req, SUPER_ADMIN_SESSION_COOKIE_NAME);
         res.json({ message: 'Logged out successfully' });
     } catch (err) {
         res.status(500).json({ message: err.message });

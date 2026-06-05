@@ -10,6 +10,7 @@ const { normalizeEnabledModules } = require('../utils/enabledModules');
 const { augmentPermissionKeysForRoles } = require('../utils/permissionResolver');
 const { invalidateAuthUserCache } = require('../middlewares/authMiddleware');
 const { clearSessionCookie, setSessionCookie } = require('../utils/sessionCookies');
+const Company = require('../models/Company');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -127,6 +128,25 @@ const loginUser = async (req, res) => {
     try {
         if (!req.companyId && req.body.companyId) {
             req.companyId = req.body.companyId;
+        }
+
+        if (!req.companyId) {
+            const matchedUsers = await User.find({
+                email: normalizedEmail,
+                isActive: { $ne: false }
+            })
+                .select('_id companyId')
+                .limit(2)
+                .lean();
+
+            if (matchedUsers.length === 1 && matchedUsers[0]?.companyId) {
+                req.companyId = matchedUsers[0].companyId;
+                req.company = await Company.findById(req.companyId).lean();
+            } else if (matchedUsers.length > 1) {
+                return res.status(400).json({
+                    message: 'Multiple workspaces found for this email. Please use your workspace login link.'
+                });
+            }
         }
 
         if (!req.companyId) {
@@ -270,7 +290,7 @@ const loginUser = async (req, res) => {
             isInterviewer = interviewCount > 0;
         }
 
-        const company = await require('../models/Company').findById(user.companyId).lean();
+        const company = req.company || await Company.findById(user.companyId).lean();
         const normalizedCompany = company
             ? { ...company, enabledModules: normalizeEnabledModules(company.enabledModules || []) }
             : null;

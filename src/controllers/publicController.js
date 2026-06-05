@@ -1692,7 +1692,6 @@ exports.exchangeHandoffToken = async (req, res) => {
         setSessionCookie(res, req, jwtToken);
 
         res.json({
-            token: jwtToken,
             user: {
                 _id: user._id,
                 email: user.email,

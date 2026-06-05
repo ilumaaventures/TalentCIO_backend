@@ -19,6 +19,31 @@ const canUpdateFutureRecords = (user) => (
     user?.permissions?.includes('attendance.update_future')
 );
 
+const populateWorkLogHierarchy = (query) => (
+    query.populate({
+        path: 'task',
+        select: 'name module',
+        populate: {
+            path: 'module',
+            select: 'name project',
+            populate: { path: 'project', select: 'name client' }
+        }
+    })
+);
+
+const mapWorkLogToTimesheetEntry = (log) => ({
+    _id: log._id,
+    date: log.date,
+    project: log.task?.module?.project || { name: 'Unknown Project' },
+    module: log.task?.module,
+    task: log.task,
+    taskName: log.task?.name,
+    hours: log.hours,
+    description: log.description,
+    status: log.status,
+    rejectionReason: log.rejectionReason
+});
+
 // @desc    Get Current Month Timesheet
 // @route   GET /api/timesheet/current
 // @access  Private
@@ -48,6 +73,7 @@ const getCurrentTimesheet = async (req, res) => {
             });
         }
 
+        let fullUser;
         try {
             fullUser = await User.findById(req.user._id)
                 .select('firstName lastName email employeeCode joiningDate attendanceMode')
@@ -66,19 +92,11 @@ const getCurrentTimesheet = async (req, res) => {
         const { start, end } = buildTimesheetPeriodRange(currentMonth, cycle);
 
         const [workLogs, attendance] = await Promise.all([
-            WorkLog.find({
+            populateWorkLogHierarchy(WorkLog.find({
                 user: req.user._id,
                 companyId: req.companyId,
                 date: { $gte: start, $lte: end }
-            }).populate({
-                path: 'task',
-                select: 'name module',
-                populate: {
-                    path: 'module',
-                    select: 'name project',
-                    populate: { path: 'project', select: 'name client' }
-                }
-            }).sort({ date: 1 }).lean(),
+            })).sort({ date: 1 }).lean(),
             Attendance.find({
                 user: req.user._id,
                 companyId: req.companyId,
@@ -86,18 +104,7 @@ const getCurrentTimesheet = async (req, res) => {
             }).select('date clockInIST clockOutIST duration clockIn clockOut attendanceMode maxWorkingHours').lean()
         ]);
 
-        const entries = workLogs.map(log => ({
-            _id: log._id,
-            date: log.date,
-            project: log.task?.module?.project || { name: 'Unknown Project' },
-            module: log.task?.module,
-            task: log.task,
-            taskName: log.task?.name,
-            hours: log.hours,
-            description: log.description,
-            status: log.status,
-            rejectionReason: log.rejectionReason
-        }));
+        const entries = workLogs.map(mapWorkLogToTimesheetEntry);
 
         res.json({
             ...(timesheet || {}),
@@ -125,7 +132,6 @@ const addEntry = async (req, res) => {
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
         ) || req.user.permissions?.includes('*') || 
-          req.user.permissions?.includes('timesheet.create') ||
           req.user.permissions?.includes('timesheet.update_others');
 
         if (userId && isAdmin) {
@@ -206,20 +212,24 @@ const addEntry = async (req, res) => {
 
         await workLog.save();
 
-        // 4. Update Timesheet (Legacy/Cache Sync) - Optional but good for consistency if logic relies on it
-        // We defer this or relying on WorkLog aggregation in getCurrentTimesheet.
-        // Given getCurrentTimesheet uses WorkLog.find, we are good.
+        if (!timesheet) {
+            await Timesheet.updateOne({
+                user: targetUserId,
+                month: periodId,
+                companyId: req.companyId
+            }, {
+                $setOnInsert: {
+                    status: 'DRAFT',
+                    rejectionReason: ''
+                }
+            }, { upsert: true });
+        }
 
-        // Populate return
-        await workLog.populate({
-            path: 'task',
-            populate: {
-                path: 'module',
-                populate: { path: 'project' }
-            }
-        });
+        const populatedWorkLog = await populateWorkLogHierarchy(
+            WorkLog.findOne({ _id: workLog._id, companyId: req.companyId })
+        ).lean();
 
-        res.status(201).json(workLog);
+        res.status(201).json(mapWorkLogToTimesheetEntry(populatedWorkLog));
 
     } catch (error) {
         console.error(error);
@@ -397,17 +407,11 @@ const getUserTimesheet = async (req, res) => {
         const { start, end } = buildTimesheetPeriodRange(currentMonth, cycle);
 
         const [workLogs, attendance, fullTargetUser] = await Promise.all([
-            WorkLog.find({
+            populateWorkLogHierarchy(WorkLog.find({
                 user: targetUserId,
                 companyId: req.companyId,
                 date: { $gte: start, $lte: end }
-            }).populate({
-                path: 'task',
-                populate: {
-                    path: 'module',
-                    populate: { path: 'project' }
-                }
-            }).sort({ date: 1 }).lean(),
+            })).sort({ date: 1 }).lean(),
             Attendance.find({
                 user: targetUserId,
                 companyId: req.companyId,
@@ -424,18 +428,7 @@ const getUserTimesheet = async (req, res) => {
             status: 'NOT_STARTED'
         };
 
-        const entries = workLogs.map(log => ({
-            _id: log._id,
-            date: log.date,
-            project: log.task?.module?.project || { name: 'Unknown Project' },
-            module: log.task?.module,
-            task: log.task,
-            taskName: log.task?.name,
-            hours: log.hours,
-            description: log.description,
-            status: log.status,
-            rejectionReason: log.rejectionReason
-        }));
+        const entries = workLogs.map(mapWorkLogToTimesheetEntry);
 
         responseData.userDetails = fullTargetUser;
         responseData.user = fullTargetUser;
@@ -729,7 +722,6 @@ const updateEntry = async (req, res) => {
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
         ) || requestor.permissions?.includes('*') || 
-          requestor.permissions?.includes('timesheet.update') ||
           requestor.permissions?.includes('timesheet.update_others');
 
         if (!isOwner && !isManager && !isAdmin) {
@@ -773,7 +765,10 @@ const updateEntry = async (req, res) => {
         }
 
         await workLog.save();
-        res.json(workLog);
+        const populatedWorkLog = await populateWorkLogHierarchy(
+            WorkLog.findOne({ _id: workLog._id, companyId: req.companyId })
+        ).lean();
+        res.json(mapWorkLogToTimesheetEntry(populatedWorkLog));
 
     } catch (error) {
         console.error(error);

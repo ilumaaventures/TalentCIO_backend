@@ -2,11 +2,11 @@ const {
     addWeeks,
     endOfDay,
     endOfMonth,
-    endOfWeek,
+    endOfISOWeek,
     format,
     startOfDay,
     startOfMonth,
-    startOfWeek
+    startOfISOWeek
 } = require('date-fns');
 
 const WEEKLY_PERIOD_RE = /^(\d{4})-W(\d{2})$/;
@@ -20,10 +20,9 @@ const normalizeApprovalCycle = (cycle = 'Monthly') => {
 };
 
 const getWeekStartFromYearAndNumber = (year, weekNumber) => {
-    const firstDayOfYear = new Date(year, 0, 1);
-    const daysToFirstMonday = (8 - firstDayOfYear.getDay()) % 7;
-    const firstMonday = new Date(year, 0, 1 + daysToFirstMonday);
-    return startOfWeek(addWeeks(firstMonday, weekNumber - 1));
+    // ISO week 1 is the week containing January 4th.
+    const isoWeekYearStart = startOfISOWeek(new Date(year, 0, 4));
+    return addWeeks(isoWeekYearStart, weekNumber - 1);
 };
 
 const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
@@ -56,11 +55,11 @@ const buildTimesheetPeriodRange = (periodId, cycle = 'Monthly') => {
             const year = parseInt(weeklyMatch[1], 10);
             const weekNumber = parseInt(weeklyMatch[2], 10);
             const start = getWeekStartFromYearAndNumber(year, weekNumber);
-            return { start, end: endOfWeek(start) };
+            return { start, end: endOfISOWeek(start) };
         }
 
-        const date = new Date(`${periodId}-01`);
-        return { start: startOfWeek(date), end: endOfWeek(date) };
+        const date = new Date(periodId);
+        return { start: startOfISOWeek(date), end: endOfISOWeek(date) };
     }
 
     if (normalizedCycle === 'Bi-Weekly') {
@@ -71,7 +70,7 @@ const buildTimesheetPeriodRange = (periodId, cycle = 'Monthly') => {
             const firstWeekNumber = ((biWeeklyNumber - 1) * 2) + 1;
             const start = getWeekStartFromYearAndNumber(year, firstWeekNumber);
             const secondWeekStart = addWeeks(start, 1);
-            return { start, end: endOfWeek(secondWeekStart) };
+            return { start, end: endOfISOWeek(secondWeekStart) };
         }
 
         const derivedPeriodId = getTimesheetPeriodIdForDate(new Date(periodId), 'Bi-Weekly');

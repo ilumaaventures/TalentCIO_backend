@@ -29,6 +29,7 @@ server.setTimeout(SERVER_REQUEST_TIMEOUT_MS);
 
 const allowedOriginPatterns = [
     /^https?:\/\/localhost(?::\d+)?$/i,
+    /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i,
     /^https?:\/\/([a-z0-9-]+\.)+localhost(?::\d+)?$/i,
     /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
     /^https?:\/\/talentcio\.in$/i,
