@@ -286,7 +286,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api/public', publicRoutes);
 
 app.use('/api', (req, res, next) => {
-    if (req.path.startsWith('/superadmin')) return next();
+    if (req.path.startsWith('/superadmin') || req.path.startsWith('/v1')) return next();
     tenantMiddleware(req, res, (err) => {
         if (err) return next(err);
         planGuard(req, res, next);
