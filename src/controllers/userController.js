@@ -5,6 +5,7 @@ const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const Permission = require('../models/Permission');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
+const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
 
@@ -216,6 +217,15 @@ const createUser = async (req, res) => {
         }
 
         if (user) {
+            void dispatchEmployeeWebhook({
+                companyId: req.companyId,
+                company: req.company,
+                userId: user._id,
+                event: 'employee.created'
+            }).catch((webhookError) => {
+                console.error('[PayrollWebhook] createUser failed:', webhookError.message);
+            });
+
             res.status(201).json({
                 _id: user._id,
                 firstName: user.firstName,
@@ -316,6 +326,15 @@ const updateUser = async (req, res) => {
                 { $addToSet: { reportingManagers: user._id } }
             );
         }
+
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            company: req.company,
+            userId: user._id,
+            event: 'employee.updated'
+        }).catch((webhookError) => {
+            console.error('[PayrollWebhook] updateUser failed:', webhookError.message);
+        });
 
         res.json({ message: 'User updated successfully', user });
     } catch (error) {
@@ -538,6 +557,15 @@ const toggleUserStatus = async (req, res) => {
         user.isActive = !user.isActive;
 
         await user.save();
+
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            company: req.company,
+            userId: user._id,
+            event: user.isActive ? 'employee.activated' : 'employee.deactivated'
+        }).catch((webhookError) => {
+            console.error('[PayrollWebhook] toggleUserStatus failed:', webhookError.message);
+        });
 
         res.json({
             message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,

@@ -23,6 +23,7 @@ const {
     resolveTemplate,
     validateTemplateSyntax
 } = require('../utils/templateResolver');
+const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -2769,6 +2770,15 @@ exports.transferToActiveEmployee = async (req, res) => {
             details: `Transferred to active employee (User: ${newUser._id}) by ${req.user.firstName || 'Admin'}`
         });
         await employee.save();
+
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            company: req.company,
+            userId: newUser._id,
+            event: 'employee.activated'
+        }).catch((webhookError) => {
+            console.error('[PayrollWebhook] transferToActiveEmployee failed:', webhookError.message);
+        });
 
         // 4. Send welcome email
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;

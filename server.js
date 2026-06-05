@@ -245,6 +245,7 @@ const onboardingRoutes = require('./src/routes/onboardingRoutes');
 const offboardingRoutes = require('./src/routes/offboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 const publicRoutes = require('./src/routes/publicRoutes');
+const payrollIntegrationRoutes = require('./src/routes/payrollIntegrationRoutes');
 const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 const binRoutes = require('./src/routes/binRoutes');
@@ -293,6 +294,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/v1', payrollIntegrationRoutes);
 app.use('/api/attendance/rg', rgAttendanceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance/attachments', attendanceDocumentRoutes);
