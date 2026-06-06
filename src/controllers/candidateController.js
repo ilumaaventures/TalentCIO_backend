@@ -43,6 +43,10 @@ const normalizeStatusKey = (value) => String(value || '')
 const normalizeCandidateEmail = (value) => String(value || '').trim().toLowerCase();
 const normalizeCandidateMobile = (value) => String(value || '').trim();
 const normalizeEntityId = (value) => String(value?._id || value || '');
+const canViewCandidateDetailsPage = (user) => {
+    const permissionKeys = getUserPermissionKeys(user);
+    return permissionKeys.includes('*') || permissionKeys.includes('ta.candidate.manage.all');
+};
 
 const getUserDisplayName = (user) => {
     if (!user) return '';
@@ -1022,98 +1026,116 @@ exports.getShortlistedCandidates = async (req, res) => {
     }
 };
 
-// Get single candidate by ID
-exports.getCandidateById = async (req, res) => {
-    try {
-        const { id } = req.params;
+const getCandidateByIdPayload = async (req) => {
+    const { id } = req.params;
 
-        let candidateData = await Candidate.findOne({ _id: id, companyId: req.companyId })
-            .populate('uploadedBy', 'firstName lastName email')
-            .populate('hiringRequestId', 'requestId roleDetails requirements')
-            .populate('applicantId', APPLICANT_REVIEW_SELECT)
-            .populate('statusHistory.changedBy', 'firstName lastName')
-            .populate('interviewRounds.assignedTo', 'firstName lastName email')
-            .populate('interviewRounds.evaluatedBy', 'firstName lastName')
-            .lean();
+    let candidateData = await Candidate.findOne({ _id: id, companyId: req.companyId })
+        .populate('uploadedBy', 'firstName lastName email')
+        .populate('hiringRequestId', 'requestId roleDetails requirements')
+        .populate('applicantId', APPLICANT_REVIEW_SELECT)
+        .populate('statusHistory.changedBy', 'firstName lastName')
+        .populate('interviewRounds.assignedTo', 'firstName lastName email')
+        .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+        .lean();
 
-        if (!candidateData) {
-            return res.status(404).json({ message: 'Candidate not found' });
-        }
+    if (!candidateData) {
+        return { status: 404, body: { message: 'Candidate not found' } };
+    }
 
-        const hiringRequest = await getCandidateHiringRequestForAccess(candidateData, req.companyId);
-        const { hasAccess } = await ensureCandidateCapability(
-            candidateData,
-            req.companyId,
-            req.user,
-            TA_CAPABILITIES.VIEW,
-            { hiringRequest }
-        );
-        if (!hasAccess) {
-            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this candidate' });
-        }
+    const hiringRequest = await getCandidateHiringRequestForAccess(candidateData, req.companyId);
+    const { hasAccess } = await ensureCandidateCapability(
+        candidateData,
+        req.companyId,
+        req.user,
+        TA_CAPABILITIES.VIEW,
+        { hiringRequest }
+    );
+    if (!hasAccess) {
+        return { status: 403, body: { message: 'Forbidden: You do not have permission to view this candidate' } };
+    }
 
-        // Sync skillRatings from HiringRequest requirements (Smart Sync)
-        if (candidateData.hiringRequestId?.requirements) {
-            const hrr = candidateData.hiringRequestId.requirements;
-            const currentRatings = candidateData.skillRatings || [];
-            let hasChanges = false;
+    if (candidateData.hiringRequestId?.requirements) {
+        const hrr = candidateData.hiringRequestId.requirements;
+        const currentRatings = candidateData.skillRatings || [];
+        let hasChanges = false;
 
-            // Helper to add missing skills
-            const syncSkills = (skills, category) => {
-                if (!skills || !Array.isArray(skills)) return;
-                skills.forEach(s => {
-                    const exists = currentRatings.some(sr => sr.skill.toLowerCase() === s.toLowerCase());
-                    if (!exists) {
-                        currentRatings.push({ skill: s, rating: 0, category });
-                        hasChanges = true;
-                    }
-                });
-            };
-
-            const mustHaveSkillList = Array.isArray(hrr.mustHaveSkills)
-                ? hrr.mustHaveSkills
-                : [
-                    ...(Array.isArray(hrr.mustHaveSkills?.technical) ? hrr.mustHaveSkills.technical : []),
-                    ...(Array.isArray(hrr.mustHaveSkills?.softSkills) ? hrr.mustHaveSkills.softSkills : [])
-                ];
-
-            syncSkills(mustHaveSkillList, 'Must-Have');
-            syncSkills(hrr.niceToHaveSkills, 'Nice-To-Have');
-
-            if (hasChanges) {
-                await Candidate.findOneAndUpdate({ _id: id, companyId: req.companyId }, { $set: { skillRatings: currentRatings } });
-                candidateData.skillRatings = currentRatings;
-            }
-        }
-
-        let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
-
-        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
-
-        if (!hasHiringRequestAccess) {
-            const interviewerOnly = await isInterviewerOnlyView({
-                candidate,
-                hiringRequest,
-                companyId: req.companyId,
-                user: req.user
+        const syncSkills = (skills, category) => {
+            if (!skills || !Array.isArray(skills)) return;
+            skills.forEach((skill) => {
+                const exists = currentRatings.some((rating) => rating.skill.toLowerCase() === skill.toLowerCase());
+                if (!exists) {
+                    currentRatings.push({ skill, rating: 0, category });
+                    hasChanges = true;
+                }
             });
+        };
 
-            if (!interviewerOnly) {
-                return res.status(403).json({ message: 'Forbidden: You do not have permission to view this candidate' });
-            }
+        const mustHaveSkillList = Array.isArray(hrr.mustHaveSkills)
+            ? hrr.mustHaveSkills
+            : [
+                ...(Array.isArray(hrr.mustHaveSkills?.technical) ? hrr.mustHaveSkills.technical : []),
+                ...(Array.isArray(hrr.mustHaveSkills?.softSkills) ? hrr.mustHaveSkills.softSkills : [])
+            ];
 
-            candidate = sanitizeCandidateForInterviewer(candidate);
+        syncSkills(mustHaveSkillList, 'Must-Have');
+        syncSkills(hrr.niceToHaveSkills, 'Nice-To-Have');
+
+        if (hasChanges) {
+            await Candidate.findOneAndUpdate({ _id: id, companyId: req.companyId }, { $set: { skillRatings: currentRatings } });
+            candidateData.skillRatings = currentRatings;
+        }
+    }
+
+    let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
+    const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
+
+    if (!hasHiringRequestAccess) {
+        const interviewerOnly = await isInterviewerOnlyView({
+            candidate,
+            hiringRequest,
+            companyId: req.companyId,
+            user: req.user
+        });
+
+        if (!interviewerOnly) {
+            return { status: 403, body: { message: 'Forbidden: You do not have permission to view this candidate' } };
         }
 
-        res.status(200).json(serializeCandidateForViewer({
+        candidate = sanitizeCandidateForInterviewer(candidate);
+    }
+
+    return {
+        status: 200,
+        body: serializeCandidateForViewer({
             candidate,
             user: req.user,
             hiringRequest,
             interviewerOnly: !hasHiringRequestAccess
-        }));
+        })
+    };
+};
 
+// Get single candidate by ID
+exports.getCandidateById = async (req, res) => {
+    try {
+        const response = await getCandidateByIdPayload(req);
+        res.status(response.status).json(response.body);
     } catch (error) {
         console.error('Error fetching candidate:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.getCandidateDetailsById = async (req, res) => {
+    try {
+        if (!canViewCandidateDetailsPage(req.user)) {
+            return res.status(403).json({ message: 'Forbidden: Candidate details page requires ta.candidate.manage.all' });
+        }
+
+        const response = await getCandidateByIdPayload(req);
+        res.status(response.status).json(response.body);
+    } catch (error) {
+        console.error('Error fetching candidate details:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
