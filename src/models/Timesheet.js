@@ -45,6 +45,11 @@ const timesheetSchema = new mongoose.Schema({
         enum: ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'],
         default: 'DRAFT'
     },
+    submissionCycle: {
+        type: String,
+        enum: ['Daily', 'Weekly', 'Bi-Weekly', 'Monthly'],
+        default: null
+    },
     approver: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

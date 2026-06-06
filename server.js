@@ -29,6 +29,7 @@ server.setTimeout(SERVER_REQUEST_TIMEOUT_MS);
 
 const allowedOriginPatterns = [
     /^https?:\/\/localhost(?::\d+)?$/i,
+    /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i,
     /^https?:\/\/([a-z0-9-]+\.)+localhost(?::\d+)?$/i,
     /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
     /^https?:\/\/talentcio\.in$/i,
@@ -212,6 +213,7 @@ require('./src/models/SuperAdminUser');
 require('./src/models/OnboardingEmployee');
 require('./src/models/PhaseTemplate');
 require('./src/models/Announcement');
+require('./src/models/OffboardingRecord');
 
 const syncPermissions = require('./src/services/permissionSync');
 const startEscalationCron = require('./src/services/escalationCron');
@@ -240,8 +242,10 @@ const notificationRoutes = require('./src/routes/notificationRoutes');
 const discussionRoutes = require('./src/routes/discussionRoutes');
 const announcementRoutes = require('./src/routes/announcementRoutes');
 const onboardingRoutes = require('./src/routes/onboardingRoutes');
+const offboardingRoutes = require('./src/routes/offboardingRoutes');
 const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
 const publicRoutes = require('./src/routes/publicRoutes');
+const payrollIntegrationRoutes = require('./src/routes/payrollIntegrationRoutes');
 const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
 const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
 const binRoutes = require('./src/routes/binRoutes');
@@ -282,7 +286,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api/public', publicRoutes);
 
 app.use('/api', (req, res, next) => {
-    if (req.path.startsWith('/superadmin')) return next();
+    if (req.path.startsWith('/superadmin') || req.path.startsWith('/v1')) return next();
     tenantMiddleware(req, res, (err) => {
         if (err) return next(err);
         planGuard(req, res, next);
@@ -290,6 +294,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/v1', payrollIntegrationRoutes);
 app.use('/api/attendance/rg', rgAttendanceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance/attachments', attendanceDocumentRoutes);
@@ -313,6 +318,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/discussions', discussionRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/offboarding', offboardingRoutes);
 app.use('/api/bin', binRoutes);
 app.use('/api/company/email-settings', emailSettingsRoutes);
 app.use('/api/company/notification-settings', notificationSettingsRoutes);

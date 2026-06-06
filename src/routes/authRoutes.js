@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, loginUser, uploadProfilePicture, verifyOtpAndResetPassword, resendOtp } = require('../controllers/authController');
+const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, resendOtp } = require('../controllers/authController');
 const { authLimiter } = require('../middlewares/rateLimitMiddleware');
 const { getMyself } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
@@ -21,6 +21,7 @@ const handleProfilePictureUpload = (req, res, next) => {
 
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, loginUser);
+router.post('/logout', protect, logoutUser);
 router.post('/verify-otp-reset', authLimiter, verifyOtpAndResetPassword);
 router.post('/resend-otp', authLimiter, resendOtp);
 router.post('/upload-profile-picture', protect, handleProfilePictureUpload, uploadProfilePicture);

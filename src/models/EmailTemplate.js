@@ -30,7 +30,7 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     templateType: {
         type: String,
-        enum: ['general', 'onboarding'],
+        enum: ['general', 'onboarding', 'offboarding'],
         default: 'general',
         index: true
     },

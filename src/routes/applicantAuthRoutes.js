@@ -22,6 +22,7 @@ router.post('/google', applicantLimiter, publicController.applicantGoogleLogin);
 router.post('/forgot-password', applicantLimiter, publicController.applicantForgotPassword);
 router.post('/reset-password', applicantLimiter, publicController.applicantResetPassword);
 
+router.post('/logout', protectApplicant, publicController.applicantLogout);
 router.get('/me', protectApplicant, publicController.applicantGetMe);
 router.get('/my-applications', protectApplicant, publicController.applicantGetMyApplications);
 router.get('/profile', protectApplicant, publicController.applicantGetProfile);

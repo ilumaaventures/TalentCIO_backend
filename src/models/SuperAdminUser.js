@@ -17,6 +17,7 @@ const superAdminUserSchema = new mongoose.Schema({
         manageUsers: { type: Boolean, default: false },
         viewLogs: { type: Boolean, default: true },
     },
+    tokenVersion: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
     lastLogin: { type: Date },
     avatar: { type: String, default: '' },
@@ -39,6 +40,10 @@ superAdminUserSchema.pre('save', async function () {
         } else if (this.role === 'Support Admin') {
             this.permissions = { manageCompanies: false, managePlans: false, viewAnalytics: true, manageUsers: false, viewLogs: true };
         }
+    }
+
+    if (!this.isNew && ['email', 'password', 'role', 'isActive'].some((field) => this.isModified(field))) {
+        this.tokenVersion = (this.tokenVersion || 0) + 1;
     }
 });
 

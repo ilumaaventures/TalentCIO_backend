@@ -37,6 +37,7 @@ router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assign
 router.post('/', protect, authorizeAny(candidateCreatePermissions), candidateController.createCandidate);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
+router.get('/candidate/:id/details', protect, candidateController.getCandidateDetailsById);
 router.get('/candidate/:id', protect, candidateController.getCandidateById);
 router.put('/:id', protect, authorizeAny(candidateEditPermissions), candidateController.updateCandidate);
 router.delete('/:id', protect, authorizeAny([...candidateEditPermissions, 'ta.delete']), candidateController.deleteCandidate);

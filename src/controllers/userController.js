@@ -5,6 +5,7 @@ const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const Permission = require('../models/Permission');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
+const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
 
@@ -72,9 +73,9 @@ const hasDirectTAPermission = (permissions = []) => (
 
 const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode';
 
-const buildUsersListQuery = (companyId, includeDeleted = false) => (
+const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
     User.find(
-        { companyId },
+        { companyId, ...extraFilters },
         null,
         includeDeleted ? { includeDeleted: true } : undefined
     )
@@ -94,12 +95,17 @@ const buildUsersListQuery = (companyId, includeDeleted = false) => (
 const getUsers = async (req, res) => {
     try {
         const includeDeleted = req.query.includeDeleted === 'true';
+        const activeFilter = req.query.active === 'true'
+            ? { isActive: true }
+            : req.query.active === 'false'
+                ? { isActive: false }
+                : {};
         const parsedPage = Number.parseInt(req.query.page, 10);
         const parsedLimit = Number.parseInt(req.query.limit, 10);
         const hasPagination = Number.isFinite(parsedPage) || Number.isFinite(parsedLimit);
 
         if (!hasPagination) {
-            const users = await buildUsersListQuery(req.companyId, includeDeleted).lean();
+            const users = await buildUsersListQuery(req.companyId, includeDeleted, activeFilter).lean();
             const usersWithFlags = await attachPrimaryAdminFlags(users, req.companyId);
             return res.json(usersWithFlags);
         }
@@ -110,13 +116,13 @@ const getUsers = async (req, res) => {
             : 15;
         const skip = (page - 1) * limit;
 
-        const totalQuery = User.countDocuments({ companyId: req.companyId });
+        const totalQuery = User.countDocuments({ companyId: req.companyId, ...activeFilter });
         if (includeDeleted) {
             totalQuery.setOptions({ includeDeleted: true });
         }
 
         const [users, total] = await Promise.all([
-            buildUsersListQuery(req.companyId, includeDeleted)
+            buildUsersListQuery(req.companyId, includeDeleted, activeFilter)
                 .sort({ joiningDate: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -211,6 +217,15 @@ const createUser = async (req, res) => {
         }
 
         if (user) {
+            void dispatchEmployeeWebhook({
+                companyId: req.companyId,
+                company: req.company,
+                userId: user._id,
+                event: 'employee.created'
+            }).catch((webhookError) => {
+                console.error('[PayrollWebhook] createUser failed:', webhookError.message);
+            });
+
             res.status(201).json({
                 _id: user._id,
                 firstName: user.firstName,
@@ -311,6 +326,15 @@ const updateUser = async (req, res) => {
                 { $addToSet: { reportingManagers: user._id } }
             );
         }
+
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            company: req.company,
+            userId: user._id,
+            event: 'employee.updated'
+        }).catch((webhookError) => {
+            console.error('[PayrollWebhook] updateUser failed:', webhookError.message);
+        });
 
         res.json({ message: 'User updated successfully', user });
     } catch (error) {
@@ -533,6 +557,15 @@ const toggleUserStatus = async (req, res) => {
         user.isActive = !user.isActive;
 
         await user.save();
+
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            company: req.company,
+            userId: user._id,
+            event: user.isActive ? 'employee.activated' : 'employee.deactivated'
+        }).catch((webhookError) => {
+            console.error('[PayrollWebhook] toggleUserStatus failed:', webhookError.message);
+        });
 
         res.json({
             message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,

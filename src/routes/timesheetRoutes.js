@@ -29,7 +29,7 @@ router.post('/entry', addEntry);
 router.put('/entry/:entryId', updateEntry);
 router.post('/submit', submitTimesheet);
 router.get('/projects', getProjects);
-router.post('/projects', createProject); 
+router.post('/projects', authorize('project.create'), createProject);
 router.get('/approvals', getPendingTimesheets);
 router.put('/:id/approve', approveTimesheet);
 

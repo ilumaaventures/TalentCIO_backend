@@ -37,8 +37,7 @@ const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
-    !permission.key.startsWith('onboarding.');
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
@@ -478,7 +477,6 @@ exports.getTimesheetBootstrap = async (req, res) => {
     try {
         setPrivateCache(res, 20);
         const targetUserId = req.query.userId || req.user._id;
-        const periodId = req.query.month || format(new Date(), 'yyyy-MM');
         const year = parseInt(req.query.year, 10) || new Date().getFullYear();
         const month = parseInt(req.query.monthNumber, 10) || (new Date().getMonth() + 1);
         const viewingSelf = String(targetUserId) === String(req.user._id);
@@ -502,6 +500,7 @@ exports.getTimesheetBootstrap = async (req, res) => {
             .select('settings.attendance.weeklyOff settings.timesheet.approvalCycle')
             .lean();
         const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = req.query.month || getTimesheetPeriodIdForDate(new Date(), cycle);
         const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
         const usersListPromise = canLoadUserList(req.user)
             ? isAdminUser(req.user) || req.user?.permissions?.includes('timesheet.view') || req.user?.permissions?.includes('*')

@@ -133,6 +133,46 @@ const createCompany = async (req, res) => {
             companyData.enabledModules = normalizeEnabledModules(companyData.enabledModules);
         }
 
+        if (companyData.settings?.payrollIntegration) {
+            const nextPayrollIntegration = sanitizePayrollIntegrationSettings(
+                companyData.settings.payrollIntegration,
+                {}
+            );
+
+            if (nextPayrollIntegration.enabled && !nextPayrollIntegration.externalTenantId) {
+                return res.status(400).json({
+                    message: 'External Tenant ID is required when payroll integration is enabled.'
+                });
+            }
+
+            if (nextPayrollIntegration.enabled && !nextPayrollIntegration.accessToken) {
+                return res.status(400).json({
+                    message: 'Access Token is required when payroll integration is enabled.'
+                });
+            }
+
+            if (nextPayrollIntegration.encryptPayloads && !nextPayrollIntegration.encryptionSecret) {
+                return res.status(400).json({
+                    message: 'Encryption Secret is required when encrypted payroll responses are enabled.'
+                });
+            }
+
+            if (nextPayrollIntegration.enabled && nextPayrollIntegration.externalTenantId) {
+                const existingTenantOwner = await Company.findOne({
+                    'settings.payrollIntegration.enabled': true,
+                    'settings.payrollIntegration.externalTenantId': nextPayrollIntegration.externalTenantId
+                }).select('_id name subdomain');
+
+                if (existingTenantOwner) {
+                    return res.status(400).json({
+                        message: `Payroll tenant ID '${nextPayrollIntegration.externalTenantId}' is already assigned to ${existingTenantOwner.name} (${existingTenantOwner.subdomain}).`
+                    });
+                }
+            }
+
+            companyData.settings.payrollIntegration = nextPayrollIntegration;
+        }
+
         // 2. Creation Process
         if (companyData.status === 'Trial' && !companyData.trialEndsAt) {
             const plan = await require('../models/Plan').findById(companyData.planId);
@@ -208,10 +248,22 @@ const normalizeStringArray = (value) => (
         : []
 );
 
+const normalizeTrimmedString = (value = '') => String(value || '').trim();
+
 const toBoolean = (value, fallback = false) => {
     if (value === undefined) return fallback;
     return value === true || value === 'true' || value === 'True' || value === 1 || value === '1';
 };
+
+const sanitizePayrollIntegrationSettings = (incoming = {}, current = {}) => ({
+    enabled: toBoolean(incoming?.enabled, current?.enabled ?? false),
+    externalTenantId: normalizeTrimmedString(incoming?.externalTenantId ?? current?.externalTenantId),
+    accessToken: normalizeTrimmedString(incoming?.accessToken ?? current?.accessToken),
+    encryptPayloads: toBoolean(incoming?.encryptPayloads, current?.encryptPayloads ?? false),
+    encryptionSecret: normalizeTrimmedString(incoming?.encryptionSecret ?? current?.encryptionSecret),
+    webhookUrl: normalizeTrimmedString(incoming?.webhookUrl ?? current?.webhookUrl),
+    webhookSecret: normalizeTrimmedString(incoming?.webhookSecret ?? current?.webhookSecret)
+});
 
 const sanitizeAttendanceSelfService = (incoming = {}, current = {}) => ({
     weeklyOff: toBoolean(incoming?.weeklyOff, current?.weeklyOff ?? true),
@@ -403,7 +455,7 @@ const updateCompany = async (req, res) => {
 
         // --- Handle all other settings via flattening ---
         if (req.body.settings) {
-            const { timesheet, attendance, ...otherSettings } = req.body.settings;
+            const { timesheet, attendance, payrollIntegration, ...otherSettings } = req.body.settings;
 
             if (attendance) {
                 const currentAttendance = company.settings?.attendance?.toObject
@@ -411,6 +463,52 @@ const updateCompany = async (req, res) => {
                     : (company.settings?.attendance || {});
                 company.settings.attendance = sanitizeAttendanceSettings(attendance, currentAttendance);
                 company.markModified('settings.attendance');
+            }
+
+            if (payrollIntegration) {
+                const currentPayrollIntegration = company.settings?.payrollIntegration?.toObject
+                    ? company.settings.payrollIntegration.toObject()
+                    : (company.settings?.payrollIntegration || {});
+                const nextPayrollIntegration = sanitizePayrollIntegrationSettings(
+                    payrollIntegration,
+                    currentPayrollIntegration
+                );
+
+                if (nextPayrollIntegration.enabled && !nextPayrollIntegration.externalTenantId) {
+                    return res.status(400).json({
+                        message: 'External Tenant ID is required when payroll integration is enabled.'
+                    });
+                }
+
+                if (nextPayrollIntegration.enabled && !nextPayrollIntegration.accessToken) {
+                    return res.status(400).json({
+                        message: 'Access Token is required when payroll integration is enabled.'
+                    });
+                }
+
+                if (nextPayrollIntegration.encryptPayloads && !nextPayrollIntegration.encryptionSecret) {
+                    return res.status(400).json({
+                        message: 'Encryption Secret is required when encrypted payroll responses are enabled.'
+                    });
+                }
+
+                if (nextPayrollIntegration.enabled && nextPayrollIntegration.externalTenantId) {
+                    const existingTenantOwner = await Company.findOne({
+                        _id: { $ne: company._id },
+                        'settings.payrollIntegration.enabled': true,
+                        'settings.payrollIntegration.externalTenantId': nextPayrollIntegration.externalTenantId
+                    }).select('_id name subdomain');
+
+                    if (existingTenantOwner) {
+                        return res.status(400).json({
+                            message: `Payroll tenant ID '${nextPayrollIntegration.externalTenantId}' is already assigned to ${existingTenantOwner.name} (${existingTenantOwner.subdomain}).`
+                        });
+                    }
+                }
+
+                if (!company.settings) company.settings = {};
+                company.settings.payrollIntegration = nextPayrollIntegration;
+                company.markModified('settings.payrollIntegration');
             }
 
             // Flatten and apply the rest (themeColor, etc.)

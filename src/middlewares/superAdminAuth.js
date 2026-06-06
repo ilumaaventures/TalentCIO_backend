@@ -1,11 +1,11 @@
 const jwt = require('jsonwebtoken');
 const SuperAdminUser = require('../models/SuperAdminUser');
+const { getTokenFromRequest } = require('../utils/sessionCookies');
+
+const SUPER_ADMIN_SESSION_COOKIE_NAME = 'talentcio_superadmin_session';
 
 const protectSuperAdmin = async (req, res, next) => {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-        token = req.headers.authorization.split(' ')[1];
-    }
+    const token = getTokenFromRequest(req, SUPER_ADMIN_SESSION_COOKIE_NAME);
     if (!token) return res.status(401).json({ message: 'Not authorized, no token' });
 
     try {
@@ -16,6 +16,9 @@ const protectSuperAdmin = async (req, res, next) => {
         const admin = await SuperAdminUser.findById(decoded.id).select('-password');
         if (!admin || !admin.isActive) {
             return res.status(401).json({ message: 'Account not found or inactive.' });
+        }
+        if ((decoded.tokenVersion || 0) !== (admin.tokenVersion || 0)) {
+            return res.status(401).json({ message: 'Token invalid or expired' });
         }
         req.superAdmin = admin;
         next();

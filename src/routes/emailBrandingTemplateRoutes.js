@@ -13,7 +13,10 @@ const canViewTemplates = authorizeAny([
     'onboarding.document.request',
     'onboarding.credential.manage',
     'onboarding.complete',
-    'onboarding.manage'
+    'onboarding.manage',
+    'offboarding.read',
+    'offboarding.create',
+    'offboarding.update'
 ]);
 
 const canManageTemplates = authorizeAny([

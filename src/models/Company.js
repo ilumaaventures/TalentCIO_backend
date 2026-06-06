@@ -219,6 +219,15 @@ const companySchema = new mongoose.Schema({
             allowPastEntries: { type: Boolean, default: true },
             requireAttachment: { type: Boolean, default: false },
         },
+        payrollIntegration: {
+            enabled: { type: Boolean, default: false },
+            externalTenantId: { type: String, default: '', trim: true },
+            accessToken: { type: String, default: '', trim: true },
+            encryptPayloads: { type: Boolean, default: false },
+            encryptionSecret: { type: String, default: '' },
+            webhookUrl: { type: String, default: '', trim: true },
+            webhookSecret: { type: String, default: '' }
+        },
         // File Import/Export
         excelImportFormat: { type: String, default: 'default' },
     },
