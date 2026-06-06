@@ -235,6 +235,24 @@ const normalizePhase2InterviewStatus = (rawStatus) => {
     return null;
 };
 
+const getImplicitPhase2InterviewStatus = (rawDecision) => {
+    const normalizedDecision = String(rawDecision || '').trim();
+
+    if (normalizedDecision === 'Rejected') {
+        return 'Rejected';
+    }
+
+    if (normalizedDecision === 'Selected') {
+        return 'Shortlisted';
+    }
+
+    if (normalizedDecision === 'Shortlisted' || normalizedDecision === 'None' || normalizedDecision === '') {
+        return 'None';
+    }
+
+    return undefined;
+};
+
 const hasCandidateMovedToPhase2 = (candidate = {}) => {
     const phase2Decision = String(candidate?.phase2Decision || '').trim();
     const phase2InterviewStatus = String(candidate?.phase2InterviewStatus || '').trim();
@@ -749,6 +767,11 @@ exports.createCandidate = async (req, res) => {
             }
             if (normalizedPhase2InterviewStatus !== undefined) {
                 compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
+            } else {
+                const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(phase2Decision);
+                if (implicitPhase2InterviewStatus !== undefined) {
+                    compareAndUpdate('phase2InterviewStatus', implicitPhase2InterviewStatus, 'Phase 2 Interview Status');
+                }
             }
             if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
                 candidate.profileShared = true;
@@ -845,7 +868,7 @@ exports.createCandidate = async (req, res) => {
             profileShared: Boolean(profileShared) || Boolean(phase2Decision && phase2Decision !== 'None') || Boolean(String(phase2InterviewerFeedback || '').trim()) || Boolean(shouldMarkProfileSharedForPhase2),
             phase2Decision: phase2Decision || 'None',
             phase2InterviewerFeedback,
-            phase2InterviewStatus: normalizedPhase2InterviewStatus || 'None',
+            phase2InterviewStatus: normalizedPhase2InterviewStatus || getImplicitPhase2InterviewStatus(phase2Decision) || 'None',
             inHandOffer: normalizedInHandOffer,
             offerCompany,
             offerCTC,
@@ -1213,6 +1236,11 @@ exports.updateCandidate = async (req, res) => {
             if (updateData.phase2InterviewStatus === null) {
                 return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
             }
+        } else if (updateData.phase2Decision !== undefined) {
+            const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(updateData.phase2Decision);
+            if (implicitPhase2InterviewStatus !== undefined) {
+                updateData.phase2InterviewStatus = implicitPhase2InterviewStatus;
+            }
         }
 
         allowedUpdates.forEach(field => {
@@ -1458,9 +1486,12 @@ exports.updatePhase2Decision = async (req, res) => {
         }
 
         candidate.phase2Decision = phase2Decision;
-        if (phase2Decision === 'Shortlisted' || phase2Decision === 'Selected') {
+        if (phase2Decision === 'Selected') {
             candidate.profileShared = true;
             candidate.phase2InterviewStatus = 'Shortlisted';
+        } else if (phase2Decision === 'Shortlisted') {
+            candidate.profileShared = true;
+            candidate.phase2InterviewStatus = 'None';
         } else if (phase2Decision === 'Rejected') {
             candidate.phase2InterviewStatus = 'Rejected';
         } else if (!phase2Decision || phase2Decision === 'None') {
