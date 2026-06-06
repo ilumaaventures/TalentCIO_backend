@@ -37,8 +37,7 @@ const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
-    !permission.key.startsWith('onboarding.');
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
 
 const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);

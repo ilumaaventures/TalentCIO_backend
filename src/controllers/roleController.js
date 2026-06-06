@@ -16,8 +16,7 @@ const isVisiblePermission = (permission) =>
     permission &&
     permission.key !== '*' &&
     permission.isDeprecated !== true &&
-    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key) &&
-    !permission.key.startsWith('onboarding.');
+    !LEGACY_HIDDEN_PERMISSION_KEYS.has(permission.key);
 
 // @desc    Get All Roles
 // @route   GET /api/roles
