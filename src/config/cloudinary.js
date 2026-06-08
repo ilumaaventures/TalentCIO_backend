@@ -78,6 +78,14 @@ const CUSTOM_ONBOARDING_FILE_MIME_TYPES = new Set([
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ]);
 
+const ANNOUNCEMENT_ATTACHMENT_MIME_TYPES = new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+]);
+
 const uploadOnboardingCustomFiles = multer({
     storage,
     limits: {
@@ -86,6 +94,23 @@ const uploadOnboardingCustomFiles = multer({
     fileFilter: (req, file, cb) => {
         const isImage = file.mimetype?.startsWith('image/');
         const isAllowedDocument = CUSTOM_ONBOARDING_FILE_MIME_TYPES.has(file.mimetype);
+
+        if (!isImage && !isAllowedDocument) {
+            return cb(new Error('Only PDF, Word, Excel, and image files are allowed.'));
+        }
+
+        cb(null, true);
+    }
+});
+
+const uploadAnnouncementAttachment = multer({
+    storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+        const isImage = file.mimetype?.startsWith('image/');
+        const isAllowedDocument = ANNOUNCEMENT_ATTACHMENT_MIME_TYPES.has(file.mimetype);
 
         if (!isImage && !isAllowedDocument) {
             return cb(new Error('Only PDF, Word, Excel, and image files are allowed.'));
@@ -127,4 +152,11 @@ const uploadProfilePicture = multer({
     }
 });
 
-module.exports = { upload, uploadDossierDocuments, uploadProfilePicture, uploadOnboardingCustomFiles, cloudinary };
+module.exports = {
+    upload,
+    uploadDossierDocuments,
+    uploadProfilePicture,
+    uploadOnboardingCustomFiles,
+    uploadAnnouncementAttachment,
+    cloudinary
+};

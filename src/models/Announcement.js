@@ -32,6 +32,42 @@ const announcementCommentSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+const announcementAttachmentSchema = new mongoose.Schema({
+    url: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    name: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    publicId: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    resourceType: {
+        type: String,
+        enum: ['image', 'raw'],
+        default: 'raw'
+    },
+    mimeType: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    size: {
+        type: Number,
+        default: 0
+    },
+    uploadedAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { _id: false });
+
 const announcementSchema = new mongoose.Schema({
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -104,6 +140,10 @@ const announcementSchema = new mongoose.Schema({
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
+        default: null
+    },
+    attachment: {
+        type: announcementAttachmentSchema,
         default: null
     },
     reactions: {
