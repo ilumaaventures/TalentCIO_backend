@@ -46,6 +46,29 @@ const storage = new CloudinaryStorage({
 });
 
 const upload = multer({ storage: storage });
+const DOSSIER_DOCUMENT_MIME_TYPES = new Set([
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/jpg',
+    'image/webp'
+]);
+
+const uploadDossierDocuments = multer({
+    storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+        const isAllowed = DOSSIER_DOCUMENT_MIME_TYPES.has(file.mimetype);
+
+        if (!isAllowed) {
+            return cb(new Error('Only PDF and image files are allowed.'));
+        }
+
+        cb(null, true);
+    }
+});
 
 const CUSTOM_ONBOARDING_FILE_MIME_TYPES = new Set([
     'application/pdf',
@@ -104,4 +127,4 @@ const uploadProfilePicture = multer({
     }
 });
 
-module.exports = { upload, uploadProfilePicture, uploadOnboardingCustomFiles, cloudinary };
+module.exports = { upload, uploadDossierDocuments, uploadProfilePicture, uploadOnboardingCustomFiles, cloudinary };

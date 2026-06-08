@@ -27,6 +27,20 @@ const hasCompanyWideAttachmentViewAccess = (user = {}) => {
     );
 };
 
+const hasAttachmentAdminAccess = (user = {}) => {
+    const roleNames = getRoleNames(user);
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+
+    return (
+        roleNames.includes('Admin')
+        || roleNames.includes('System Admin')
+        || permissions.includes('*')
+        || permissions.includes('admin')
+        || permissions.includes('all')
+        || user?.role === 'Admin'
+    );
+};
+
 // @desc    Upload attendance attachment
 // @route   POST /api/attendance/attachments/:userId/:month
 // @access  Private (Self, Manager, Admin)
@@ -37,7 +51,7 @@ exports.uploadAttachment = async (req, res) => {
 
         // Permission check
         const isSelf = req.user._id.toString() === userId;
-        const isAdmin = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const isAdmin = hasAttachmentAdminAccess(req.user);
         const targetUser = await User.findById(userId);
         const isManager = targetUser?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
@@ -114,7 +128,7 @@ exports.deleteAttachment = async (req, res) => {
 
         // Permission check: Only self or admin can delete
         const isSelf = req.user._id.toString() === userId;
-        const isAdmin = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const isAdmin = hasAttachmentAdminAccess(req.user);
 
         if (!isSelf && !isAdmin) {
             return res.status(403).json({ message: 'Not authorized to delete this attachment' });
@@ -132,8 +146,12 @@ exports.deleteAttachment = async (req, res) => {
 
         const file = doc.files[fileIndex];
 
-        if (file.status === 'Approved' || file.status === 'Submitted') {
-            return res.status(403).json({ message: 'Cannot delete a submitted or approved document' });
+        if (file.status === 'Approved') {
+            return res.status(403).json({ message: 'Cannot delete an approved document' });
+        }
+
+        if (file.status === 'Submitted' && !isAdmin) {
+            return res.status(403).json({ message: 'Only admins can delete submitted documents' });
         }
 
         // Delete from Cloudinary
@@ -166,7 +184,7 @@ exports.replaceAttachment = async (req, res) => {
 
         // Permission check
         const isSelf = req.user._id.toString() === userId;
-        const isAdmin = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const isAdmin = hasAttachmentAdminAccess(req.user);
         const targetUser = await User.findById(userId);
         const isManager = targetUser?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
@@ -221,7 +239,7 @@ exports.submitAttachmentForApproval = async (req, res) => {
 
         // Permission check: Self, or Admin/Manager (consistent with upload)
         const isSelf = req.user._id.toString() === userId;
-        const isAdminUser = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const isAdminUser = hasAttachmentAdminAccess(req.user);
         const targetUser = await User.findById(userId).populate('reportingManagers');
         const isManager = targetUser?.reportingManagers?.some(m => {
             const mId = m._id ? m._id.toString() : m.toString();
@@ -303,7 +321,7 @@ exports.reviewAttachment = async (req, res) => {
         const { status, reason } = req.body; // status: 'Approved' or 'Rejected'
         const companyId = req.companyId;
 
-        const isAdmin = req.user.roles?.some(r => r.name === 'Admin' || r === 'Admin') || req.user.permissions?.includes('*');
+        const isAdmin = hasAttachmentAdminAccess(req.user);
         const targetUser = await User.findById(userId);
         const isManager = targetUser?.reportingManagers?.some(m => {
             const mId = m._id ? m._id.toString() : m.toString();
