@@ -15,8 +15,112 @@ const EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Previous Experience Certificate';
 const LEGACY_EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Experience Certificate';
 const OFFER_LETTER_DOCUMENT_TITLE = 'Offer Letter';
 const POLICY_SOURCE_LABEL = 'Policy shared during onboarding';
+const DOCUMENT_PENDING_REVIEW_STATUS = 'Pending Review';
 
 const normalizeDocumentKey = (value = '') => String(value || '').trim().toLowerCase();
+
+const normalizeDocumentWorkflowStatus = (status = '') => (
+    status === 'Pending' || !status ? DOCUMENT_PENDING_REVIEW_STATUS : status
+);
+
+const isActiveDocument = (doc = {}) => !doc?.isDeleted;
+
+const getActiveDocuments = (profile = {}) => (
+    Array.isArray(profile?.documents) ? profile.documents.filter(isActiveDocument) : []
+);
+
+const archiveCurrentDocumentVersion = (doc, archiveReason) => {
+    if (!doc) return;
+
+    doc.versionHistory = Array.isArray(doc.versionHistory) ? doc.versionHistory : [];
+    doc.versionHistory.push({
+        versionNumber: doc.versionNumber || 1,
+        title: doc.title,
+        fileName: doc.fileName,
+        url: doc.url,
+        uploadDate: doc.uploadDate,
+        uploadedBy: doc.uploadedBy,
+        verificationStatus: normalizeDocumentWorkflowStatus(doc.verificationStatus),
+        verifiedBy: doc.verifiedBy,
+        verifiedAt: doc.verifiedAt,
+        rejectedBy: doc.rejectedBy,
+        rejectedAt: doc.rejectedAt,
+        rejectionReason: doc.rejectionReason,
+        revokedBy: doc.revokedBy,
+        revokedAt: doc.revokedAt,
+        revocationReason: doc.revocationReason,
+        archivedAt: new Date(),
+        archiveReason
+    });
+};
+
+const syncDocumentSubmissionStatus = (profile) => {
+    const activeDocuments = getActiveDocuments(profile);
+
+    if (activeDocuments.length === 0) {
+        profile.documentSubmissionStatus = 'Draft';
+        return;
+    }
+
+    const statuses = activeDocuments.map((doc) => normalizeDocumentWorkflowStatus(doc.verificationStatus));
+    const allVerified = statuses.every((status) => status === 'Verified');
+    const anyRejected = statuses.some((status) => status === 'Rejected');
+    if (allVerified) {
+        profile.documentSubmissionStatus = 'Approved';
+        return;
+    }
+
+    if (anyRejected) {
+        profile.documentSubmissionStatus = 'Changes Requested';
+        return;
+    }
+};
+
+const reopenDocumentSubmission = (profile) => {
+    if (!profile) {
+        return;
+    }
+
+    profile.documentSubmissionStatus = 'Draft';
+};
+
+const normalizeProfileDocumentWorkflow = async (profile) => {
+    if (!profile || !Array.isArray(profile.documents)) {
+        return profile;
+    }
+
+    let changed = false;
+
+    profile.documents.forEach((doc) => {
+        const normalizedStatus = normalizeDocumentWorkflowStatus(doc.verificationStatus);
+        if (doc.verificationStatus !== normalizedStatus) {
+            doc.verificationStatus = normalizedStatus;
+            changed = true;
+        }
+
+        if (typeof doc.versionNumber !== 'number' || doc.versionNumber < 1) {
+            doc.versionNumber = 1;
+            changed = true;
+        }
+
+        if (typeof doc.isDeleted !== 'boolean') {
+            doc.isDeleted = false;
+            changed = true;
+        }
+
+        if (!Array.isArray(doc.versionHistory)) {
+            doc.versionHistory = [];
+            changed = true;
+        }
+    });
+
+    if (changed) {
+        syncDocumentSubmissionStatus(profile);
+        await profile.save();
+    }
+
+    return profile;
+};
 
 const buildTransferredOnboardingCustomFiles = async (profile, userId, companyId) => {
     if (!userId || !companyId) {
@@ -202,7 +306,7 @@ const ensureTransferredBankDocument = async (profile, userId, companyId) => {
         fileName: 'Cancelled_Cheque_Passbook_Front_Page.pdf',
         url: cancelledChequeUrl,
         uploadDate: onboardingEmployee.submittedAt || onboardingEmployee.updatedAt || new Date(),
-        verificationStatus: 'Pending'
+        verificationStatus: DOCUMENT_PENDING_REVIEW_STATUS
     });
 
     await profile.save();
@@ -237,7 +341,10 @@ const filterProfileFields = (profile, viewer, isSelf) => {
 
 const checkIsAdmin = (user) => {
     if (!user || !user.roles) return false;
-    return user.roles.some(r => r.name === 'Admin' || r.name === 'Super Admin');
+    return user.roles.some((role) => {
+        const roleName = typeof role === 'string' ? role : role?.name;
+        return ['Admin', 'Super Admin', 'System Admin'].includes(roleName);
+    });
 };
 
 const hasPermission = (user, permissionKey) => {
@@ -276,7 +383,16 @@ exports.getDossier = async (req, res) => {
                 populate: { path: 'roles', select: 'name' }
             })
             .populate('employment.businessUnit', 'name')
-            .populate('employment.reportingManager', 'firstName lastName');
+            .populate('employment.reportingManager', 'firstName lastName')
+            .populate('documents.uploadedBy', 'firstName lastName email')
+            .populate('documents.verifiedBy', 'firstName lastName email')
+            .populate('documents.rejectedBy', 'firstName lastName email')
+            .populate('documents.revokedBy', 'firstName lastName email')
+            .populate('documents.deletedBy', 'firstName lastName email')
+            .populate('documents.versionHistory.uploadedBy', 'firstName lastName email')
+            .populate('documents.versionHistory.verifiedBy', 'firstName lastName email')
+            .populate('documents.versionHistory.rejectedBy', 'firstName lastName email')
+            .populate('documents.versionHistory.revokedBy', 'firstName lastName email');
 
         if (!profile) {
             // Create a skeleton profile if it doesn't exist (Lazy Initialization)
@@ -311,7 +427,16 @@ exports.getDossier = async (req, res) => {
                     populate: { path: 'roles', select: 'name' }
                 })
                 .populate('employment.businessUnit', 'name')
-                .populate('employment.reportingManager', 'firstName lastName');
+                .populate('employment.reportingManager', 'firstName lastName')
+                .populate('documents.uploadedBy', 'firstName lastName email')
+                .populate('documents.verifiedBy', 'firstName lastName email')
+                .populate('documents.rejectedBy', 'firstName lastName email')
+                .populate('documents.revokedBy', 'firstName lastName email')
+                .populate('documents.deletedBy', 'firstName lastName email')
+                .populate('documents.versionHistory.uploadedBy', 'firstName lastName email')
+                .populate('documents.versionHistory.verifiedBy', 'firstName lastName email')
+                .populate('documents.versionHistory.rejectedBy', 'firstName lastName email')
+                .populate('documents.versionHistory.revokedBy', 'firstName lastName email');
         } else {
 
             // --- Critical Fix for Production (Moved to Top) ---
@@ -368,11 +493,13 @@ exports.getDossier = async (req, res) => {
 
         profile = await normalizeTransferredIdentityDocuments(profile);
         profile = await ensureTransferredBankDocument(profile, userId, req.companyId);
+        profile = await normalizeProfileDocumentWorkflow(profile);
 
         // (Removed duplicate skills fix)
 
         const filteredProfile = filterProfileFields(profile, req.user, isSelf);
         if (filteredProfile.documents !== undefined) {
+            filteredProfile.documents = filteredProfile.documents.filter(isActiveDocument);
             filteredProfile.onboardingCustomFiles = await buildTransferredOnboardingCustomFiles(profile, userId, req.companyId);
         }
         res.status(200).json(filteredProfile);
@@ -542,7 +669,7 @@ exports.updateSection = async (req, res) => {
 exports.addDocument = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { category, title, expiryDate } = req.body;
+        const { category, title, expiryDate, replaceDocId } = req.body;
 
 
 
@@ -568,15 +695,71 @@ exports.addDocument = async (req, res) => {
             return res.status(404).json({ message: 'Profile not found' });
         }
 
-        profile.documents.push({
-            category,
-            title,
-            fileName: req.file ? req.file.originalname : (fileUrl.split('/').pop() || 'document'),
-            url: fileUrl,
-            expiryDate,
-            uploadDate: new Date(),
-            verificationStatus: 'Pending'
-        });
+        const uploadedAt = new Date();
+        const nextFileName = req.file ? req.file.originalname : (fileUrl.split('/').pop() || 'document');
+        let auditAction = 'UPLOAD_DOCUMENT';
+        let auditDetails = {
+            targetuser: userId,
+            companyId: req.companyId,
+            docTitle: title
+        };
+
+        if (replaceDocId) {
+            const existingDoc = profile.documents.id(replaceDocId);
+            if (!existingDoc || existingDoc.isDeleted) {
+                return res.status(404).json({ message: 'Document not found for re-upload' });
+            }
+
+            if (normalizeDocumentWorkflowStatus(existingDoc.verificationStatus) !== 'Rejected') {
+                return res.status(400).json({ message: 'Only rejected documents can be corrected with a new version' });
+            }
+
+            archiveCurrentDocumentVersion(existingDoc, 'Employee re-uploaded a corrected version');
+
+            existingDoc.category = category || existingDoc.category;
+            existingDoc.title = title || existingDoc.title;
+            existingDoc.fileName = nextFileName;
+            existingDoc.url = fileUrl;
+            existingDoc.expiryDate = expiryDate || existingDoc.expiryDate;
+            existingDoc.uploadDate = uploadedAt;
+            existingDoc.uploadedBy = req.user._id;
+            existingDoc.verificationStatus = DOCUMENT_PENDING_REVIEW_STATUS;
+            existingDoc.versionNumber = (existingDoc.versionNumber || 1) + 1;
+            existingDoc.verifiedBy = undefined;
+            existingDoc.verifiedAt = undefined;
+            existingDoc.rejectedBy = undefined;
+            existingDoc.rejectedAt = undefined;
+            existingDoc.rejectionReason = undefined;
+            existingDoc.revokedBy = undefined;
+            existingDoc.revokedAt = undefined;
+            existingDoc.revocationReason = undefined;
+            existingDoc.deletedBy = undefined;
+            existingDoc.deletedAt = undefined;
+            existingDoc.isDeleted = false;
+
+            auditAction = 'UPLOAD_DOCUMENT_VERSION';
+            auditDetails = {
+                ...auditDetails,
+                docId: existingDoc._id,
+                versionNumber: existingDoc.versionNumber
+            };
+        } else {
+            profile.documents.push({
+                category,
+                title,
+                fileName: nextFileName,
+                url: fileUrl,
+                expiryDate,
+                uploadDate: uploadedAt,
+                uploadedBy: req.user._id,
+                verificationStatus: DOCUMENT_PENDING_REVIEW_STATUS,
+                versionNumber: 1,
+                versionHistory: []
+            });
+        }
+
+        syncDocumentSubmissionStatus(profile);
+        reopenDocumentSubmission(profile);
 
         // Reset HRIS declaration if user is not Admin
         if (!isAdmin && profile.hris && (profile.hris.isDeclared || profile.hris.status !== 'Draft')) {
@@ -586,15 +769,17 @@ exports.addDocument = async (req, res) => {
 
         await profile.save();
         await AuditLog.create({
-            action: 'UPLOAD_DOCUMENT',
+            action: auditAction,
             module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetuser: userId,
-                companyId: req.companyId, docTitle: title },
+            details: auditDetails,
             ipAddress: req.ip
         });
 
-        res.status(201).json(profile.documents);
+        res.status(201).json({
+            documents: getActiveDocuments(profile),
+            submissionStatus: profile.documentSubmissionStatus
+        });
 
     } catch (error) {
         console.error('Upload Document Error:', error);
@@ -623,29 +808,22 @@ exports.deleteDocument = async (req, res) => {
         const doc = profile.documents.id(docId);
         if (!doc) return res.status(404).json({ message: 'Document not found' });
 
-        const docTitle = doc.title;
-        const fileUrl = doc.url;
-
-        // cleanup from cloudinary
-        if (fileUrl) {
-            const publicId = extractPublicIdFromUrl(fileUrl);
-            if (publicId) {
-                console.log(`Attempting to delete image from Cloudinary. Public ID: ${publicId}`);
-                try {
-                    const result = await cloudinary.uploader.destroy(publicId);
-                    console.log('Cloudinary deletion result:', result);
-                } catch (cloudError) {
-                    console.error('Cloudinary deletion failed:', cloudError);
-                    // We continue to delete the record even if cloud deletion fails, 
-                    // but we log it. Optionally, we could prevent deletion or mark for retry.
-                }
-            } else {
-                console.warn('Could not extract public ID from URL:', fileUrl);
-            }
+        if (doc.isDeleted) {
+            return res.status(400).json({ message: 'Document is already deleted' });
         }
 
-        // Remove document
-        profile.documents.pull(docId);
+        const currentStatus = normalizeDocumentWorkflowStatus(doc.verificationStatus);
+        if (!['Rejected', DOCUMENT_PENDING_REVIEW_STATUS].includes(currentStatus)) {
+            return res.status(403).json({ message: 'Delete is only allowed for pending review or rejected documents' });
+        }
+
+        const docTitle = doc.title;
+        doc.isDeleted = true;
+        doc.deletedBy = req.user._id;
+        doc.deletedAt = new Date();
+
+        syncDocumentSubmissionStatus(profile);
+        reopenDocumentSubmission(profile);
 
         // Reset HRIS declaration if user is not Admin
         if (!isAdmin && profile.hris && (profile.hris.isDeclared || profile.hris.status !== 'Draft')) {
@@ -659,11 +837,14 @@ exports.deleteDocument = async (req, res) => {
             module: 'EmployeeDossier',
             performedBy: req.user._id,
             details: { targetuser: userId,
-                companyId: req.companyId, docTitle: docTitle },
+                companyId: req.companyId, docTitle: docTitle, versionNumber: doc.versionNumber },
             ipAddress: req.ip
         });
 
-        res.status(200).json(profile.documents);
+        res.status(200).json({
+            documents: getActiveDocuments(profile),
+            submissionStatus: profile.documentSubmissionStatus
+        });
 
     } catch (error) {
         console.error('Delete Document Error:', error);
@@ -674,7 +855,7 @@ exports.deleteDocument = async (req, res) => {
 exports.verifyDocument = async (req, res) => {
     try {
         const { userId, docId } = req.params;
-        const { status } = req.body; // 'Verified' or 'Rejected'
+        const { status, reason } = req.body; // 'Verified' or 'Rejected'
 
         if (!['Verified', 'Rejected'].includes(status)) {
             return res.status(400).json({ message: 'Invalid status. Must be Verified or Rejected.' });
@@ -693,33 +874,45 @@ exports.verifyDocument = async (req, res) => {
 
         const doc = profile.documents.id(docId);
         if (!doc) return res.status(404).json({ message: 'Document not found' });
+        if (doc.isDeleted) return res.status(400).json({ message: 'Deleted documents cannot be reviewed' });
+
+        const currentStatus = normalizeDocumentWorkflowStatus(doc.verificationStatus);
+        if (currentStatus !== DOCUMENT_PENDING_REVIEW_STATUS) {
+            return res.status(400).json({ message: 'Only documents in pending review can be approved or rejected' });
+        }
+
+        if (status === 'Rejected' && !String(reason || '').trim()) {
+            return res.status(400).json({ message: 'Rejection reason is required' });
+        }
 
         doc.verificationStatus = status;
-
-        // Check overall status to sync documentSubmissionStatus
-        const allVerified = profile.documents.every(d => d.verificationStatus === 'Verified');
-        const anyRejected = profile.documents.some(d => d.verificationStatus === 'Rejected');
-
-        if (allVerified) {
-            profile.documentSubmissionStatus = 'Approved';
-        } else if (anyRejected) {
-            profile.documentSubmissionStatus = 'Changes Requested';
+        if (status === 'Verified') {
+            doc.verifiedBy = req.user._id;
+            doc.verifiedAt = new Date();
+            doc.rejectedBy = undefined;
+            doc.rejectedAt = undefined;
+            doc.rejectionReason = undefined;
+        } else {
+            doc.rejectedBy = req.user._id;
+            doc.rejectedAt = new Date();
+            doc.rejectionReason = String(reason || '').trim();
         }
-        // If still some pending, status remains as is (likely 'Submitted')
+
+        syncDocumentSubmissionStatus(profile);
 
         await profile.save();
 
         await AuditLog.create({
-            action: 'VERIFY_DOCUMENT',
+            action: status === 'Verified' ? 'VERIFY_DOCUMENT' : 'REJECT_DOCUMENT',
             module: 'EmployeeDossier',
             performedBy: req.user._id,
             details: { targetuser: userId,
-                companyId: req.companyId, docTitle: doc.title, status, newSubmissionStatus: profile.documentSubmissionStatus },
+                companyId: req.companyId, docTitle: doc.title, status, reason: status === 'Rejected' ? String(reason || '').trim() : undefined, versionNumber: doc.versionNumber, newSubmissionStatus: profile.documentSubmissionStatus },
             ipAddress: req.ip
         });
 
         res.status(200).json({
-            documents: profile.documents,
+            documents: getActiveDocuments(profile),
             submissionStatus: profile.documentSubmissionStatus
         });
 
@@ -729,13 +922,74 @@ exports.verifyDocument = async (req, res) => {
     }
 };
 
+exports.revokeDocumentVerification = async (req, res) => {
+    try {
+        const { userId, docId } = req.params;
+        const { reason } = req.body;
+
+        if (!String(reason || '').trim()) {
+            return res.status(400).json({ message: 'Revocation reason is required' });
+        }
+
+        const isAdmin = checkIsAdmin(req.user);
+        const canApprove = isAdmin || hasPermission(req.user, 'dossier.verify_documents') || hasPermission(req.user, 'dossier.approve');
+
+        if (!canApprove) {
+            return res.status(403).json({ message: 'Not authorized to revoke document verification' });
+        }
+
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
+        if (!profile) return res.status(404).json({ message: 'Profile not found' });
+
+        const doc = profile.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Document not found' });
+        if (doc.isDeleted) return res.status(400).json({ message: 'Deleted documents cannot be revoked' });
+
+        if (normalizeDocumentWorkflowStatus(doc.verificationStatus) !== 'Verified') {
+            return res.status(400).json({ message: 'Only verified documents can be revoked' });
+        }
+
+        doc.verificationStatus = DOCUMENT_PENDING_REVIEW_STATUS;
+        doc.revokedBy = req.user._id;
+        doc.revokedAt = new Date();
+        doc.revocationReason = String(reason || '').trim();
+
+        syncDocumentSubmissionStatus(profile);
+
+        await profile.save();
+
+        await AuditLog.create({
+            action: 'REVOKE_DOCUMENT_VERIFICATION',
+            module: 'EmployeeDossier',
+            performedBy: req.user._id,
+            details: {
+                targetuser: userId,
+                companyId: req.companyId,
+                docTitle: doc.title,
+                reason: doc.revocationReason,
+                versionNumber: doc.versionNumber,
+                newSubmissionStatus: profile.documentSubmissionStatus
+            },
+            ipAddress: req.ip
+        });
+
+        res.status(200).json({
+            documents: getActiveDocuments(profile),
+            submissionStatus: profile.documentSubmissionStatus
+        });
+    } catch (error) {
+        console.error('Revoke Document Verification Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 exports.verifyAllDocuments = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { status } = req.body; // 'Verified' or 'Rejected'
+        const { status } = req.body; // 'Verified'
 
-        if (!['Verified', 'Rejected'].includes(status)) {
-            return res.status(400).json({ message: 'Invalid status. Must be Verified or Rejected.' });
+        if (status !== 'Verified') {
+            return res.status(400).json({ message: 'Bulk review only supports verification.' });
         }
 
         const isAdmin = checkIsAdmin(req.user);
@@ -751,30 +1005,20 @@ exports.verifyAllDocuments = async (req, res) => {
 
         let updatedCount = 0;
         profile.documents.forEach(doc => {
-            if (doc.verificationStatus === 'Pending') {
+            if (!isActiveDocument(doc)) return;
+            if (normalizeDocumentWorkflowStatus(doc.verificationStatus) === DOCUMENT_PENDING_REVIEW_STATUS) {
                 doc.verificationStatus = status;
+                doc.verifiedBy = req.user._id;
+                doc.verifiedAt = new Date();
+                doc.rejectedBy = undefined;
+                doc.rejectedAt = undefined;
+                doc.rejectionReason = undefined;
                 updatedCount++;
             }
         });
 
         if (updatedCount > 0) {
-
-            // Check overall status
-            const allVerified = profile.documents.every(d => d.verificationStatus === 'Verified');
-            const anyRejected = profile.documents.some(d => d.verificationStatus === 'Rejected');
-
-            if (allVerified) {
-                profile.documentSubmissionStatus = 'Approved';
-            } else if (anyRejected) {
-                profile.documentSubmissionStatus = 'Changes Requested';
-            } else {
-                // Mixed or some pending?
-                // If action was verifyAll, then likely none actally left pending unless filtered
-                // But let's be safe
-                if (profile.documents.some(d => d.verificationStatus === 'Pending')) {
-                    // Status remains Submitted or changes to Changes Requested if something was rejected previously
-                }
-            }
+            syncDocumentSubmissionStatus(profile);
 
             await profile.save();
 
@@ -790,7 +1034,7 @@ exports.verifyAllDocuments = async (req, res) => {
 
         res.status(200).json({
             message: `Updated ${updatedCount} documents`,
-            documents: profile.documents,
+            documents: getActiveDocuments(profile),
             submissionStatus: profile.documentSubmissionStatus
         });
 
@@ -814,12 +1058,15 @@ exports.submitDocuments = async (req, res) => {
                 companyId: req.companyId });
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
-        if (!profile.documents || profile.documents.length === 0) {
+        const activeDocuments = getActiveDocuments(profile);
+        if (!activeDocuments.length) {
             return res.status(400).json({ message: 'No documents to submit.' });
         }
 
         profile.documentSubmissionStatus = 'Submitted';
-        // Optionally set all Draft documents to Pending if we had a Draft status for docs, but they are Pending by default on upload.
+        activeDocuments.forEach((doc) => {
+            doc.verificationStatus = normalizeDocumentWorkflowStatus(doc.verificationStatus);
+        });
 
         await profile.save();
 
@@ -1415,8 +1662,20 @@ exports.exportHRISExcel = async (req, res) => {
             }
         });
 
+        const exportProfile = req.query.userId && profiles.length === 1 ? profiles[0] : null;
+        const exportDisplayName = exportProfile
+            ? [
+                exportProfile.user?.firstName,
+                exportProfile.user?.lastName
+            ].filter(Boolean).join(' ').trim()
+            : 'Employee_HRIS_Export';
+        const safeExportFileName = (exportDisplayName || 'Employee_HRIS_Export')
+            .replace(/\s+/g, '_')
+            .replace(/[^a-zA-Z0-9_-]/g, '')
+            || 'Employee_HRIS_Export';
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename="Employee_HRIS_Export.xlsx"');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeExportFileName}_HRIS.xlsx"`);
 
         await workbook.xlsx.write(res);
         res.end();

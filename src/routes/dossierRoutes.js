@@ -2,8 +2,8 @@ const express = require('express');
 const { requireModule } = require('../middlewares/moduleGuard');
 const router = express.Router();
 const { protect } = require('../middlewares/authMiddleware'); // Assuming this exists
-const { getDossier, updateSection, addDocument, getDossierHistory, deleteDocument, submitHRIS, approveHRIS, rejectHRIS, exportHRISExcel, getHRISRequests, verifyDocument, verifyAllDocuments, submitDocuments, proxyPdf } = require('../controllers/dossierController');
-const { upload } = require('../config/cloudinary');
+const { getDossier, updateSection, addDocument, getDossierHistory, deleteDocument, submitHRIS, approveHRIS, rejectHRIS, exportHRISExcel, getHRISRequests, verifyDocument, revokeDocumentVerification, verifyAllDocuments, submitDocuments, proxyPdf } = require('../controllers/dossierController');
+const { uploadDossierDocuments } = require('../config/cloudinary');
 
 // All routes require login
 router.use(protect);
@@ -26,10 +26,13 @@ const uploadMiddleware = (req, res, next) => {
             error: 'CLOUDINARY_CLOUD_NAME is not set'
         });
     }
-    upload.single('file')(req, res, (err) => {
+    uploadDossierDocuments.single('file')(req, res, (err) => {
         if (err) {
             console.error('Multer/Cloudinary Middleware Error:', err);
-            return res.status(500).json({ message: 'File Upload Error', error: err.message });
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ message: 'File size must be 5MB or less.' });
+            }
+            return res.status(400).json({ message: err.message || 'File Upload Error', error: err.message });
         }
         next();
     });
@@ -37,6 +40,7 @@ const uploadMiddleware = (req, res, next) => {
 
 router.post('/:userId/documents', requireModule('employeeDossier'), uploadMiddleware, addDocument);
 router.patch('/:userId/documents/:docId/verify', requireModule('employeeDossier'), verifyDocument);
+router.patch('/:userId/documents/:docId/revoke', requireModule('employeeDossier'), revokeDocumentVerification);
 router.patch('/:userId/documents/verify-all', requireModule('employeeDossier'), verifyAllDocuments);
 router.patch('/:userId/documents/submit', requireModule('employeeDossier'), submitDocuments);
 router.delete('/:userId/documents/:docId', requireModule('employeeDossier'), deleteDocument);

@@ -40,6 +40,30 @@ const ChildSchema = new mongoose.Schema({
     dob: Date
 });
 
+const DocumentVersionSchema = new mongoose.Schema({
+    versionNumber: { type: Number, required: true },
+    title: String,
+    fileName: String,
+    url: String,
+    uploadDate: Date,
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    verificationStatus: {
+        type: String,
+        enum: ['Pending', 'Pending Review', 'Verified', 'Rejected'],
+        default: 'Pending Review'
+    },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    verifiedAt: Date,
+    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    rejectedAt: Date,
+    rejectionReason: String,
+    revokedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    revokedAt: Date,
+    revocationReason: String,
+    archivedAt: { type: Date, default: Date.now },
+    archiveReason: String
+}, { _id: false });
+
 const employeeProfileSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
@@ -150,8 +174,26 @@ const employeeProfileSchema = new mongoose.Schema({
         fileName: String, // Original filename from upload
         url: String,
         uploadDate: { type: Date, default: Date.now },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         expiryDate: Date,
-        verificationStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'], default: 'Pending' }
+        verificationStatus: {
+            type: String,
+            enum: ['Pending', 'Pending Review', 'Verified', 'Rejected'],
+            default: 'Pending Review'
+        },
+        verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        verifiedAt: Date,
+        rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        rejectedAt: Date,
+        rejectionReason: String,
+        revokedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        revokedAt: Date,
+        revocationReason: String,
+        deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        deletedAt: Date,
+        versionNumber: { type: Number, default: 1 },
+        isDeleted: { type: Boolean, default: false },
+        versionHistory: [DocumentVersionSchema]
     }],
     documentSubmissionStatus: {
         type: String,

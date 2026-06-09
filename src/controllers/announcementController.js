@@ -1,6 +1,7 @@
 const Announcement = require('../models/Announcement');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const User = require('../models/User');
+const { cloudinary } = require('../config/cloudinary');
 const NotificationService = require('../services/notificationService');
 
 const ANNOUNCEMENT_CATEGORIES = ['General', 'HR', 'Policy', 'Product', 'Celebration', 'Alert'];
@@ -25,6 +26,34 @@ const monthDayFormatter = new Intl.DateTimeFormat('en-IN', {
 });
 
 const normalizeString = (value = '') => String(value || '').trim();
+
+const parseBoolean = (value) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value !== 'string') return false;
+
+    const normalizedValue = normalizeString(value).toLowerCase();
+    return ['true', '1', 'yes', 'on'].includes(normalizedValue);
+};
+
+const parseArrayValue = (value) => {
+    if (Array.isArray(value)) return value;
+    if (value === null || value === undefined) return [];
+
+    if (typeof value === 'string') {
+        const trimmedValue = normalizeString(value);
+        if (!trimmedValue) return [];
+
+        try {
+            const parsedValue = JSON.parse(trimmedValue);
+            return Array.isArray(parsedValue) ? parsedValue : [parsedValue];
+        } catch {
+            return [trimmedValue];
+        }
+    }
+
+    return [value];
+};
 
 const exceedsMaxLength = (value = '', maxLength = 0) => (
     Boolean(maxLength) && normalizeString(value).length > maxLength
@@ -99,14 +128,6 @@ const getCurrentMonthDateValue = (user = {}, onboardingEmployeeByUserId = new Ma
 );
 
 const normalizeStringArray = (values = []) => (
-    [...new Set(
-        (Array.isArray(values) ? values : [])
-            .map((value) => normalizeString(value))
-            .filter(Boolean)
-    )]
-);
-
-const normalizeObjectIdArray = (values = []) => (
     [...new Set(
         (Array.isArray(values) ? values : [])
             .map((value) => normalizeString(value))
@@ -254,6 +275,32 @@ const ensureInteractionCollections = (announcement) => {
     }
 
     return announcement;
+};
+
+const buildUploadedAttachment = (file) => {
+    if (!file?.path) return null;
+
+    return {
+        url: file.path,
+        name: file.originalname || 'attachment',
+        publicId: file.filename || '',
+        resourceType: file.mimetype?.startsWith('image/') ? 'image' : 'raw',
+        mimeType: file.mimetype || '',
+        size: Number(file.size) || 0,
+        uploadedAt: new Date()
+    };
+};
+
+const destroyAnnouncementAttachment = async (attachment = null) => {
+    if (!attachment?.publicId) return;
+
+    const resourceType = attachment.resourceType === 'image' ? 'image' : 'raw';
+
+    try {
+        await cloudinary.uploader.destroy(attachment.publicId, { resource_type: resourceType });
+    } catch (error) {
+        console.error('destroyAnnouncementAttachment error:', error);
+    }
 };
 
 const getReactionBreakdown = (reactions = [], viewerId = '') => {
@@ -405,6 +452,14 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
             profilePicture: announcement.updatedBy?.profilePicture || '',
             name: updaterName
         } : null,
+        attachment: announcement?.attachment?.url ? {
+            url: announcement.attachment.url,
+            name: announcement.attachment.name || 'attachment',
+            mimeType: announcement.attachment.mimeType || '',
+            size: Number(announcement.attachment.size) || 0,
+            resourceType: announcement.attachment.resourceType || 'raw',
+            uploadedAt: announcement.attachment.uploadedAt || announcement.updatedAt || announcement.createdAt
+        } : null,
         comments,
         commentCount: comments.length,
         reactionCounts: reactionSummary.counts,
@@ -450,10 +505,11 @@ const buildAnnouncementPayload = (body = {}) => {
     const category = ANNOUNCEMENT_CATEGORIES.includes(body.category) ? body.category : 'General';
     const status = body.status === 'published' ? 'published' : 'draft';
     const audienceType = AUDIENCE_TYPES.includes(body.audienceType) ? body.audienceType : 'all';
-    const audienceDepartments = normalizeStringArray(body.audienceDepartments);
-    const audienceEmploymentTypes = normalizeStringArray(body.audienceEmploymentTypes);
-    const audienceUserIds = normalizeObjectIdArray(body.audienceUserIds);
-    const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+    const audienceDepartments = normalizeStringArray(parseArrayValue(body.audienceDepartments));
+    const audienceEmploymentTypes = normalizeStringArray(parseArrayValue(body.audienceEmploymentTypes));
+    const audienceUserIds = normalizeAudienceUserObjectIds(parseArrayValue(body.audienceUserIds));
+    const expiresAtValue = normalizeString(body.expiresAt);
+    const expiresAt = expiresAtValue ? new Date(expiresAtValue) : null;
 
     return {
         title,
@@ -461,12 +517,13 @@ const buildAnnouncementPayload = (body = {}) => {
         content,
         category,
         status,
-        pinned: Boolean(body.pinned),
+        pinned: parseBoolean(body.pinned),
         audienceType,
         audienceDepartments,
         audienceEmploymentTypes,
         audienceUserIds,
-        expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null
+        expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+        removeAttachment: parseBoolean(body.removeAttachment)
     };
 };
 
@@ -828,11 +885,17 @@ exports.getAnnouncementById = async (req, res) => {
 };
 
 exports.createAnnouncement = async (req, res) => {
+    let uploadedAttachment = null;
+
     try {
+        uploadedAttachment = buildUploadedAttachment(req.file);
         const payload = buildAnnouncementPayload(req.body || {});
         const validationMessage = await validateAnnouncementPayload(payload, req.companyId);
 
         if (validationMessage) {
+            if (uploadedAttachment) {
+                await destroyAnnouncementAttachment(uploadedAttachment);
+            }
             return res.status(400).json({ message: validationMessage });
         }
 
@@ -842,8 +905,10 @@ exports.createAnnouncement = async (req, res) => {
             companyId: req.companyId,
             createdBy: req.user._id,
             updatedBy: req.user._id,
+            attachment: uploadedAttachment,
             publishedAt: shouldPublishNow ? new Date() : null
         });
+        uploadedAttachment = null;
 
         const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
 
@@ -861,11 +926,16 @@ exports.createAnnouncement = async (req, res) => {
         });
     } catch (error) {
         console.error('createAnnouncement error:', error);
+        if (uploadedAttachment) {
+            await destroyAnnouncementAttachment(uploadedAttachment);
+        }
         return res.status(500).json({ message: 'Failed to create announcement.' });
     }
 };
 
 exports.updateAnnouncement = async (req, res) => {
+    let uploadedAttachment = null;
+
     try {
         const existingAnnouncement = await Announcement.findOne({
             _id: req.params.id,
@@ -876,14 +946,29 @@ exports.updateAnnouncement = async (req, res) => {
             return res.status(404).json({ message: 'Announcement not found.' });
         }
 
+        uploadedAttachment = buildUploadedAttachment(req.file);
         const payload = buildAnnouncementPayload(req.body || {});
         const validationMessage = await validateAnnouncementPayload(payload, req.companyId);
 
         if (validationMessage) {
+            if (uploadedAttachment) {
+                await destroyAnnouncementAttachment(uploadedAttachment);
+            }
             return res.status(400).json({ message: validationMessage });
         }
 
         const shouldPublishNow = existingAnnouncement.status !== 'published' && payload.status === 'published';
+        const previousAttachment = existingAnnouncement.attachment?.publicId
+            ? {
+                url: existingAnnouncement.attachment.url,
+                name: existingAnnouncement.attachment.name,
+                publicId: existingAnnouncement.attachment.publicId,
+                resourceType: existingAnnouncement.attachment.resourceType,
+                mimeType: existingAnnouncement.attachment.mimeType,
+                size: existingAnnouncement.attachment.size,
+                uploadedAt: existingAnnouncement.attachment.uploadedAt
+            }
+            : null;
 
         existingAnnouncement.title = payload.title;
         existingAnnouncement.summary = payload.summary;
@@ -898,11 +983,22 @@ exports.updateAnnouncement = async (req, res) => {
         existingAnnouncement.expiresAt = payload.expiresAt;
         existingAnnouncement.updatedBy = req.user._id;
 
+        if (uploadedAttachment) {
+            existingAnnouncement.attachment = uploadedAttachment;
+        } else if (payload.removeAttachment) {
+            existingAnnouncement.attachment = null;
+        }
+
         if (shouldPublishNow) {
             existingAnnouncement.publishedAt = new Date();
         }
 
         await existingAnnouncement.save();
+        const nextAttachmentPublicId = existingAnnouncement.attachment?.publicId || '';
+        if (previousAttachment?.publicId && previousAttachment.publicId !== nextAttachmentPublicId) {
+            await destroyAnnouncementAttachment(previousAttachment);
+        }
+        uploadedAttachment = null;
 
         const populatedAnnouncement = await fetchPopulatedAnnouncementById(existingAnnouncement._id);
 
@@ -920,6 +1016,9 @@ exports.updateAnnouncement = async (req, res) => {
         });
     } catch (error) {
         console.error('updateAnnouncement error:', error);
+        if (uploadedAttachment) {
+            await destroyAnnouncementAttachment(uploadedAttachment);
+        }
         return res.status(500).json({
             message: error?.message || 'Failed to update announcement.'
         });

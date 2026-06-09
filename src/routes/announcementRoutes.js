@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorizeRoleOrPermission } = require('../middlewares/authorize');
+const { uploadAnnouncementAttachment } = require('../config/cloudinary');
 const {
     addAnnouncementComment,
     createAnnouncement,
@@ -22,6 +23,18 @@ const manageAnnouncements = authorizeRoleOrPermission({
     permissions: ['announcement.manage']
 });
 
+const handleAnnouncementAttachmentUpload = (req, res, next) => {
+    uploadAnnouncementAttachment.single('attachment')(req, res, (err) => {
+        if (!err) return next();
+
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({ message: 'Attachment size must be 5 MB or smaller.' });
+        }
+
+        return res.status(400).json({ message: err.message || 'Invalid attachment upload.' });
+    });
+};
+
 router.use(protect);
 
 router.get('/composer-setup', getAnnouncementComposerSetup);
@@ -32,8 +45,8 @@ router.get('/:id', getAnnouncementById);
 router.post('/:id/react', toggleAnnouncementReaction);
 router.post('/:id/comments', addAnnouncementComment);
 router.delete('/:id/comments/:commentId', deleteAnnouncementComment);
-router.post('/', manageAnnouncements, createAnnouncement);
-router.put('/:id', manageAnnouncements, updateAnnouncement);
+router.post('/', manageAnnouncements, handleAnnouncementAttachmentUpload, createAnnouncement);
+router.put('/:id', manageAnnouncements, handleAnnouncementAttachmentUpload, updateAnnouncement);
 router.delete('/:id', manageAnnouncements, deleteAnnouncement);
 
 module.exports = router;

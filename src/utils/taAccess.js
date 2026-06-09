@@ -53,22 +53,6 @@ const MINIMUM_INTERVIEWER_CANDIDATE_FIELDS = [
 
 const normalizeId = (value) => String(value?._id || value || '');
 
-const isCandidateOwnedByUser = (candidate, user) => (
-    normalizeId(candidate?.uploadedBy) === normalizeId(user?._id)
-);
-
-const isAssignedCandidateRestrictedActor = (actors, capability = TA_CAPABILITIES.VIEW) => {
-    if (!actors.isAssignedUser || actors.isOwner || actors.isHiringManager || actors.isAnalyticsViewer) {
-        return false;
-    }
-
-    if (capability === TA_CAPABILITIES.VIEW && actors.isInterviewPanel) {
-        return false;
-    }
-
-    return true;
-};
-
 const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
     const permissions = getUserPermissionKeys(user);
     if (permissions.includes('*')) {
@@ -80,24 +64,6 @@ const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
     }
 
     return permissions.includes('ta.candidate.manage.all');
-};
-
-const canOverrideAssignedCandidateOwnership = async ({
-    hiringRequest,
-    user,
-    capability,
-    companyId
-}) => {
-    if (capability !== TA_CAPABILITIES.EDIT) {
-        return false;
-    }
-
-    const permissions = getUserPermissionKeys(user);
-    if (!permissions.includes('ta.requisition.manage.assigned')) {
-        return false;
-    }
-
-    return canAccessHiringRequest(hiringRequest, companyId, user, { action: 'edit' });
 };
 
 const findAccessibleHiringRequestIds = async ({
@@ -270,6 +236,9 @@ const canAccessHiringRequestForCapability = async (hiringRequest, user, capabili
         case TA_CAPABILITIES.MAKE_DECISION:
             hasBaseAccess = actors.isOwner
                 || actors.isHiringManager
+                || actors.isAnalyticsViewer
+                || actors.isAssignedUser
+                || actors.isInterviewPanel
                 || actors.isClientAssigned;
             break;
         case TA_CAPABILITIES.TRANSFER:
@@ -337,20 +306,6 @@ const canAccessCandidateThroughHiringRequest = async ({
         return true;
     }
 
-    const actorState = getHiringRequestActorState(resolvedHiringRequest, user);
-    if (isAssignedCandidateRestrictedActor(actorState, capability) && !isCandidateOwnedByUser(candidate, user)) {
-        const hasOwnershipOverride = await canOverrideAssignedCandidateOwnership({
-            hiringRequest: resolvedHiringRequest,
-            user,
-            capability,
-            companyId
-        });
-
-        if (!hasOwnershipOverride) {
-            return false;
-        }
-    }
-
     if (hasUnrestrictedCandidateCapabilityPermission(user, capability) || hasGlobalCapabilityPermission(user, capability)) {
         return true;
     }
@@ -395,10 +350,7 @@ const buildAccessibleCandidateQueryForCapability = async (
 
         const globalAccessOr = [
             { hiringRequestId: { $nin: restrictedAssignedRequestIds } },
-            {
-                hiringRequestId: { $in: restrictedAssignedRequestIds },
-                uploadedBy: user._id
-            }
+            { hiringRequestId: { $in: restrictedAssignedRequestIds } }
         ];
 
         if (capability === TA_CAPABILITIES.VIEW) {
@@ -442,8 +394,11 @@ const buildAccessibleCandidateQueryForCapability = async (
     } else if (capability === TA_CAPABILITIES.MAKE_DECISION) {
         broadActorRequestOr.push(
             { createdBy: user._id },
-            { 'ownership.hiringManager': user._id }
+            { 'ownership.hiringManager': user._id },
+            { analyticsViewers: user._id },
+            { 'ownership.interviewPanel': user._id }
         );
+        assignedRequestOr.push({ assignedUsers: user._id });
     } else if (capability === TA_CAPABILITIES.TRANSFER) {
         broadActorRequestOr.push(
             { createdBy: user._id },
@@ -473,10 +428,7 @@ const buildAccessibleCandidateQueryForCapability = async (
         includeAssignedClients: false
     });
     if (assignedRequestIds.length > 0) {
-        accessOr.push({
-            hiringRequestId: { $in: assignedRequestIds },
-            uploadedBy: user._id
-        });
+        accessOr.push({ hiringRequestId: { $in: assignedRequestIds } });
     }
 
     if (clientAssignedNames.length > 0) {

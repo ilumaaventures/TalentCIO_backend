@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema({
     },
     workLocation: {
         type: String,
-        default: 'Headquarters' // Default value
+        default: ''
     },
     employeeCode: String,
     reportingManagers: [{
