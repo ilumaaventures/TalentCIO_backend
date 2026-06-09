@@ -447,6 +447,319 @@ const applyDateRangeFilterToCandidateQuery = (query, rawDateField, rawStartDate,
     return query;
 };
 
+const parseBooleanQueryValue = (value, fallback = false) => {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes'].includes(normalized)) return true;
+    if (['false', '0', 'no'].includes(normalized)) return false;
+    return fallback;
+};
+
+const parseStringArrayQuery = (value) => {
+    if (Array.isArray(value)) {
+        return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+    }
+
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return [];
+        }
+
+        if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) {
+                    return [...new Set(parsed.map((item) => String(item || '').trim()).filter(Boolean))];
+                }
+            } catch (error) {
+                // Fall back to comma-separated parsing below.
+            }
+        }
+
+        return [...new Set(trimmed.split(',').map((item) => item.trim()).filter(Boolean))];
+    }
+
+    return [];
+};
+
+const getCandidateUploadType = (candidate = {}) => (
+    hasRealResume(candidate?.resumeUrl) ? 'CV' : 'Excel'
+);
+
+const getCandidateUploadedByName = (candidate = {}) => (
+    `${candidate?.uploadedBy?.firstName || ''} ${candidate?.uploadedBy?.lastName || ''}`.trim()
+);
+
+const isProfileSharedCandidate = (candidate = {}) => (
+    candidate?.profileShared === true
+    || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+);
+
+const getLegacyRoundsForPhase = (candidate = {}, phase = 1) => (
+    Array.isArray(candidate?.interviewRounds)
+        ? candidate.interviewRounds.filter((round) => Number(round?.phase || 1) === Number(phase))
+        : []
+);
+
+const getPhase2InterviewStatusValue = (candidate = {}) => {
+    const normalized = String(candidate?.phase2InterviewStatus || '').trim();
+    if (['Scheduled', 'Rejected', 'Shortlisted'].includes(normalized)) {
+        return normalized;
+    }
+
+    if (candidate?.phase2Decision === 'Rejected') {
+        return 'Rejected';
+    }
+
+    if (candidate?.phase2Decision === 'Selected') {
+        return 'Shortlisted';
+    }
+
+    return '';
+};
+
+const getLegacyDisplayInterviewRoundsForPhase = (candidate = {}, phase = 1) => {
+    const rounds = getLegacyRoundsForPhase(candidate, phase);
+    if (phase !== 2 || rounds.length > 0) {
+        return rounds;
+    }
+
+    const phase2InterviewStatus = getPhase2InterviewStatusValue(candidate);
+    const phase2Feedback = String(candidate?.phase2InterviewerFeedback || '').trim();
+    if (!phase2InterviewStatus && !phase2Feedback) {
+        return [];
+    }
+
+    return [{
+        _id: 'phase2-imported-interview-summary',
+        phase: 2,
+        status: phase2InterviewStatus === 'Rejected'
+            ? 'Failed'
+            : phase2InterviewStatus === 'Shortlisted'
+                ? 'Passed'
+                : 'Scheduled',
+        feedback: candidate?.phase2InterviewerFeedback || '',
+        rating: null,
+        skillRatings: []
+    }];
+};
+
+const hasLegacyPhase2InterviewActivity = (candidate = {}) => (
+    getLegacyDisplayInterviewRoundsForPhase(candidate, 2).length > 0
+);
+
+const getLegacyInterviewFilterValue = (rounds = []) => {
+    if (!Array.isArray(rounds) || rounds.length === 0) {
+        return null;
+    }
+
+    const hasFailed = rounds.some((round) => round.status === 'Failed');
+    if (hasFailed) {
+        return 'Failed';
+    }
+
+    const hasScheduled = rounds.some((round) => ['Pending', 'Scheduled'].includes(round.status));
+    if (hasScheduled) {
+        return 'Scheduled';
+    }
+
+    const allClosed = rounds.every((round) => ['Passed', 'Skipped'].includes(round.status));
+    if (allClosed) {
+        return 'Shortlisted';
+    }
+
+    return 'Scheduled';
+};
+
+const matchesLegacyInterviewFilter = (rounds = [], filterValue = 'All') => {
+    if (filterValue === 'All') {
+        return true;
+    }
+
+    if (filterValue === 'Scheduled') {
+        return Array.isArray(rounds) && rounds.length > 0;
+    }
+
+    return getLegacyInterviewFilterValue(rounds) === filterValue;
+};
+
+const getLegacyAverageRatingForPhase = (candidate = {}, phase = 1) => {
+    const rounds = getLegacyRoundsForPhase(candidate, phase);
+    const ratedRounds = rounds.filter((round) => Number(round?.rating) > 0);
+    if (!ratedRounds.length) {
+        return null;
+    }
+
+    return ratedRounds.reduce((sum, round) => sum + Number(round.rating || 0), 0) / ratedRounds.length;
+};
+
+const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page = 1, limit = 15 }) => {
+    const {
+        activePhase = 1,
+        search = '',
+        filterPreference = 'All',
+        filterStatus = 'All',
+        filterDecision = 'All',
+        filterExperience = '',
+        filterInterviewStatus = 'All',
+        filterRating = 'All',
+        filterPulledBy = [],
+        filterUploadedBy = [],
+        filterUploadType = 'All',
+        filterTransferred = 'All',
+        filterProfileShared = false
+    } = filters;
+
+    const normalizedSearch = String(search || '').trim().toLowerCase();
+    const normalizedPulledBy = parseStringArrayQuery(filterPulledBy);
+    const normalizedUploadedBy = parseStringArrayQuery(filterUploadedBy);
+    const normalizedActivePhase = Number(activePhase) || 1;
+    const minExperience = filterExperience === '' ? null : Number(filterExperience);
+    const minRating = filterRating === 'All' ? null : Number(filterRating);
+
+    const matchesSearch = (candidate) => (
+        !normalizedSearch || String(candidate?.candidateName || '').toLowerCase().includes(normalizedSearch)
+    );
+
+    const matchesCommonStructuralFilters = (candidate) => {
+        const matchesPulledBy = !normalizedPulledBy.length || normalizedPulledBy.includes(String(candidate?.profilePulledBy || '').trim());
+        const matchesUploadedBy = !normalizedUploadedBy.length || normalizedUploadedBy.includes(getCandidateUploadedByName(candidate));
+        const matchesUploadType = filterUploadType === 'All' || getCandidateUploadType(candidate) === filterUploadType;
+        const matchesTransferred = filterTransferred === 'All'
+            ? true
+            : filterTransferred === 'Transferred'
+                ? candidate?.isTransferred === true
+                : candidate?.isTransferred !== true;
+
+        return matchesSearch(candidate) && matchesPulledBy && matchesUploadedBy && matchesUploadType && matchesTransferred;
+    };
+
+    const matchesBaseFiltersForPhase = (candidate, phase) => {
+        const matchesPreference = filterPreference === 'All' || candidate?.preference === filterPreference;
+        const matchesExperience = minExperience === null
+            || (candidate?.totalExperience !== undefined && candidate?.totalExperience !== null && Number(candidate.totalExperience) >= minExperience);
+
+        let matchesRating = true;
+        if (minRating !== null && Number.isFinite(minRating)) {
+            const averageRating = getLegacyAverageRatingForPhase(candidate, phase);
+            matchesRating = averageRating !== null && averageRating >= minRating;
+        }
+
+        return matchesPreference && matchesExperience && matchesRating;
+    };
+
+    const structuralPhase1Candidates = candidates.filter((candidate) => matchesCommonStructuralFilters(candidate));
+    const basePhase1Candidates = structuralPhase1Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 1));
+    const filteredPhase1Candidates = basePhase1Candidates.filter((candidate) => {
+        const matchesStatus = filterStatus === 'All' || candidate?.status === filterStatus;
+        const matchesDecision = filterDecision === 'All' || (candidate?.decision || 'None') === filterDecision;
+        const matchesProfileShared = !filterProfileShared || isProfileSharedCandidate(candidate);
+        const matchesInterviewStatus = filterInterviewStatus === 'All'
+            || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 1), filterInterviewStatus);
+
+        return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared;
+    });
+
+    const structuralPhase2Candidates = candidates.filter((candidate) => (
+        isProfileSharedCandidate(candidate) && matchesCommonStructuralFilters(candidate)
+    ));
+    const basePhase2Candidates = structuralPhase2Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 2));
+    const filteredPhase2Candidates = basePhase2Candidates.filter((candidate) => {
+        const matchesDecision = filterDecision === 'All'
+            || (filterDecision === 'Shortlisted_Selected'
+                ? (candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected')
+                : (candidate?.phase2Decision || 'None') === filterDecision);
+
+        const matchesInterviewStatus = filterInterviewStatus === 'All'
+            || (filterInterviewStatus === 'Scheduled'
+                ? hasLegacyPhase2InterviewActivity(candidate)
+                : matchesLegacyInterviewFilter(getLegacyDisplayInterviewRoundsForPhase(candidate, 2), filterInterviewStatus));
+
+        return matchesDecision && matchesInterviewStatus;
+    });
+
+    const structuralPhase3Candidates = candidates.filter((candidate) => (
+        candidate?.phase2Decision === 'Selected' && matchesCommonStructuralFilters(candidate)
+    ));
+    const basePhase3Candidates = structuralPhase3Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 3));
+    const filteredPhase3Candidates = basePhase3Candidates.filter((candidate) => {
+        const phase3Decision = candidate?.phase3Decision || 'None';
+        const matchesDecision = filterDecision === 'All'
+            || (filterDecision === 'No Show_Offer Declined'
+                ? (phase3Decision === 'No Show' || phase3Decision === 'Offer Declined')
+                : filterDecision === 'Offer Sent'
+                    ? ['Offer Sent', 'Offer Accepted', 'Joined'].includes(phase3Decision)
+                    : filterDecision === 'Offer Accepted'
+                        ? ['Offer Accepted', 'Joined'].includes(phase3Decision)
+                        : phase3Decision === filterDecision);
+
+        const matchesInterviewStatus = filterInterviewStatus === 'All'
+            || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 3), filterInterviewStatus);
+
+        return matchesDecision && matchesInterviewStatus;
+    });
+
+    const filteredCandidates = normalizedActivePhase === 2
+        ? filteredPhase2Candidates
+        : normalizedActivePhase === 3
+            ? filteredPhase3Candidates
+            : filteredPhase1Candidates;
+
+    const safeLimit = Math.max(Number(limit) || 15, 1);
+    const safePage = Math.max(Number(page) || 1, 1);
+    const totalCandidates = filteredCandidates.length;
+    const totalPages = Math.max(Math.ceil(totalCandidates / safeLimit), 1);
+    const currentPage = Math.min(safePage, totalPages);
+    const skip = (currentPage - 1) * safeLimit;
+    const paginatedCandidates = filteredCandidates.slice(skip, skip + safeLimit);
+
+    return {
+        currentPage,
+        totalPages,
+        count: totalCandidates,
+        limit: safeLimit,
+        candidates: paginatedCandidates,
+        summary: {
+            phase1Metrics: {
+                total: structuralPhase1Candidates.length,
+                interested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Interested').length,
+                interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
+                shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
+                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
+                profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
+                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
+            },
+            phase2Metrics: {
+                totalShortlisted: structuralPhase2Candidates.length,
+                totalScreened: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected').length,
+                selected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Selected').length,
+                rejected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Rejected').length,
+                interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length
+            },
+            phase3Metrics: {
+                total: structuralPhase3Candidates.length,
+                offerSent: structuralPhase3Candidates.filter((candidate) => ['Offer Sent', 'Offer Accepted', 'Joined'].includes(candidate?.phase3Decision)).length,
+                offerAccepted: structuralPhase3Candidates.filter((candidate) => ['Offer Accepted', 'Joined'].includes(candidate?.phase3Decision)).length,
+                joined: structuralPhase3Candidates.filter((candidate) => candidate?.phase3Decision === 'Joined').length,
+                noShow: structuralPhase3Candidates.filter((candidate) => candidate?.phase3Decision === 'No Show' || candidate?.phase3Decision === 'Offer Declined').length
+            },
+            phaseBaseCounts: {
+                phase1: basePhase1Candidates.length,
+                phase2: basePhase2Candidates.length,
+                phase3: basePhase3Candidates.length
+            }
+        }
+    };
+};
+
 // Upload resume to Cloudinary
 exports.uploadResume = async (req, res) => {
     try {
@@ -935,7 +1248,14 @@ exports.createCandidate = async (req, res) => {
 exports.getCandidatesByHiringRequest = async (req, res) => {
     try {
         const { hiringRequestId } = req.params;
-        const { dateField, startDate, endDate } = req.query;
+        const {
+            dateField,
+            startDate,
+            endDate,
+            paginate,
+            page = 1,
+            limit = 15
+        } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
             return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
@@ -976,6 +1296,31 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
             user: req.user,
             hiringRequest
         }));
+
+        if (parseBooleanQueryValue(paginate)) {
+            const paginatedResponse = buildLegacyCandidateListResponse({
+                candidates: serializedCandidates,
+                filters: {
+                    activePhase: req.query.activePhase,
+                    search: req.query.search,
+                    filterPreference: req.query.filterPreference,
+                    filterStatus: req.query.filterStatus,
+                    filterDecision: req.query.filterDecision,
+                    filterExperience: req.query.filterExperience,
+                    filterInterviewStatus: req.query.filterInterviewStatus,
+                    filterRating: req.query.filterRating,
+                    filterPulledBy: req.query.filterPulledBy,
+                    filterUploadedBy: req.query.filterUploadedBy,
+                    filterUploadType: req.query.filterUploadType,
+                    filterTransferred: req.query.filterTransferred,
+                    filterProfileShared: parseBooleanQueryValue(req.query.filterProfileShared)
+                },
+                page,
+                limit
+            });
+
+            return res.status(200).json(paginatedResponse);
+        }
 
         res.status(200).json({
             count: serializedCandidates.length,
