@@ -45,7 +45,9 @@ const normalizeCandidateMobile = (value) => String(value || '').trim();
 const normalizeEntityId = (value) => String(value?._id || value || '');
 const canViewCandidateDetailsPage = (user) => {
     const permissionKeys = getUserPermissionKeys(user);
-    return permissionKeys.includes('*') || permissionKeys.includes('ta.candidate.manage.all');
+    return permissionKeys.includes('*')
+        || permissionKeys.includes('ta.candidate.manage.all')
+        || permissionKeys.includes('ta.candidate.manage.assigned');
 };
 
 const getUserDisplayName = (user) => {
@@ -1152,7 +1154,22 @@ exports.getCandidateById = async (req, res) => {
 exports.getCandidateDetailsById = async (req, res) => {
     try {
         if (!canViewCandidateDetailsPage(req.user)) {
-            return res.status(403).json({ message: 'Forbidden: Candidate details page requires ta.candidate.manage.all' });
+            return res.status(403).json({
+                message: 'Forbidden: Candidate details page requires ta.candidate.manage.all or ta.candidate.manage.assigned'
+            });
+        }
+
+        const { id } = req.params;
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
+        if (!hasAccess) {
+            return res.status(403).json({
+                message: 'Forbidden: You do not have permission to open this candidate details page'
+            });
         }
 
         const response = await getCandidateByIdPayload(req);
