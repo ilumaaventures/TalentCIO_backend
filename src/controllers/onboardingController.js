@@ -2660,7 +2660,7 @@ exports.transferToActiveEmployee = async (req, res) => {
             password: userPassword,
             roles: [assignedRoleId],
             department: employee.department || '',
-            workLocation: employee.workLocation || 'Headquarters',
+            workLocation: employee.workLocation || '',
             employmentType: 'Full Time',
             employeeCode: employeeCode || employee.tempEmployeeId,
             joiningDate: employee.joiningDate || new Date(),

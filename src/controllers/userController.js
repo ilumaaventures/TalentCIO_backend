@@ -71,6 +71,14 @@ const hasDirectTAPermission = (permissions = []) => (
     && permissions.some((permission) => permission === '*' || String(permission || '').startsWith('ta.'))
 );
 
+const normalizeWorkLocation = (value) => {
+    if (typeof value !== 'string') {
+        return '';
+    }
+
+    return value.trim();
+};
+
 const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode';
 
 const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
@@ -199,7 +207,7 @@ const createUser = async (req, res) => {
             password,
             roles: [roleId],
             department,
-            workLocation,
+            workLocation: normalizeWorkLocation(workLocation),
             employmentType,
             employeeCode,
             joiningDate,
@@ -292,7 +300,9 @@ const updateUser = async (req, res) => {
         user.email = email || user.email;
         if (password) user.password = password;
         user.department = department || user.department;
-        user.workLocation = workLocation || user.workLocation;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'workLocation')) {
+            user.workLocation = normalizeWorkLocation(workLocation);
+        }
         user.employmentType = employmentType || user.employmentType;
         user.employeeCode = employeeCode || user.employeeCode;
         user.attendanceMode = attendanceMode || user.attendanceMode;
