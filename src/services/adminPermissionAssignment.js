@@ -16,6 +16,14 @@ const normalizePermissionIds = (permissionIds = []) => (
     )]
 );
 
+const normalizeRoleNames = (roleNames = []) => (
+    [...new Set(
+        roleNames
+            .map((roleName) => String(roleName || '').trim())
+            .filter(Boolean)
+    )]
+);
+
 const assignPermissionsToAdminRoles = async (permissionIds = []) => {
     const normalizedPermissionIds = normalizePermissionIds(permissionIds);
 
@@ -29,7 +37,22 @@ const assignPermissionsToAdminRoles = async (permissionIds = []) => {
     );
 };
 
+const assignPermissionsToRolesByName = async (roleNames = [], permissionIds = []) => {
+    const normalizedRoleNames = normalizeRoleNames(roleNames);
+    const normalizedPermissionIds = normalizePermissionIds(permissionIds);
+
+    if (normalizedRoleNames.length === 0 || normalizedPermissionIds.length === 0) {
+        return { matchedCount: 0, modifiedCount: 0 };
+    }
+
+    return Role.updateMany(
+        { name: { $in: normalizedRoleNames } },
+        { $addToSet: { permissions: { $each: normalizedPermissionIds } } }
+    );
+};
+
 module.exports = {
     ADMIN_ROLE_FILTER,
-    assignPermissionsToAdminRoles
+    assignPermissionsToAdminRoles,
+    assignPermissionsToRolesByName
 };

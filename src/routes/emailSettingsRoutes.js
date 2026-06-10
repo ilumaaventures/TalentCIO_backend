@@ -40,6 +40,7 @@ router.get(
         'offboarding.read',
         'offboarding.create',
         'offboarding.update',
+        'hr_email.send',
         'ta.mass_mail',
         'ta.edit',
         'ta.candidate.manage.assigned',

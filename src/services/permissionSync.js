@@ -1,6 +1,9 @@
 const Permission = require('../models/Permission');
 const permissionConfig = require('../config/permissions');
-const { assignPermissionsToAdminRoles } = require('./adminPermissionAssignment');
+const {
+    assignPermissionsToAdminRoles,
+    assignPermissionsToRolesByName
+} = require('./adminPermissionAssignment');
 
 const LEGACY_PERMISSION_REPLACEMENTS = {
     'ta.application.read': 'ta.candidate.view',
@@ -168,6 +171,18 @@ const syncPermissions = async () => {
 
             if (announcementRoleAssignment.matchedCount > 0) {
                 console.log('Updated announcement manager roles with announcement.manage permission.');
+            }
+        }
+
+        const hrEmailPermission = await Permission.findOne({ key: 'hr_email.send' }).select('_id');
+        if (hrEmailPermission) {
+            const hrEmailRoleAssignment = await assignPermissionsToRolesByName(
+                ['HR Admin', 'HR Manager'],
+                [hrEmailPermission._id]
+            );
+
+            if (hrEmailRoleAssignment.matchedCount > 0) {
+                console.log('Updated HR roles with hr_email.send permission.');
             }
         }
 
