@@ -5,6 +5,13 @@ const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const { cloudinary } = require('../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
+const {
+    DOCUMENT_PENDING_REVIEW_STATUS,
+    normalizeDocumentWorkflowStatus,
+    isActiveDocument,
+    getActiveDocuments,
+    syncDocumentSubmissionStatus
+} = require('../utils/dossierUtils');
 const axios = require('axios');
 
 const BANK_DOCUMENT_TITLE = 'Cancelled Cheque / Passbook Front Page';
@@ -15,19 +22,8 @@ const EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Previous Experience Certificate';
 const LEGACY_EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Experience Certificate';
 const OFFER_LETTER_DOCUMENT_TITLE = 'Offer Letter';
 const POLICY_SOURCE_LABEL = 'Policy shared during onboarding';
-const DOCUMENT_PENDING_REVIEW_STATUS = 'Pending Review';
 
 const normalizeDocumentKey = (value = '') => String(value || '').trim().toLowerCase();
-
-const normalizeDocumentWorkflowStatus = (status = '') => (
-    status === 'Pending' || !status ? DOCUMENT_PENDING_REVIEW_STATUS : status
-);
-
-const isActiveDocument = (doc = {}) => !doc?.isDeleted;
-
-const getActiveDocuments = (profile = {}) => (
-    Array.isArray(profile?.documents) ? profile.documents.filter(isActiveDocument) : []
-);
 
 const archiveCurrentDocumentVersion = (doc, archiveReason) => {
     if (!doc) return;
@@ -52,28 +48,6 @@ const archiveCurrentDocumentVersion = (doc, archiveReason) => {
         archivedAt: new Date(),
         archiveReason
     });
-};
-
-const syncDocumentSubmissionStatus = (profile) => {
-    const activeDocuments = getActiveDocuments(profile);
-
-    if (activeDocuments.length === 0) {
-        profile.documentSubmissionStatus = 'Draft';
-        return;
-    }
-
-    const statuses = activeDocuments.map((doc) => normalizeDocumentWorkflowStatus(doc.verificationStatus));
-    const allVerified = statuses.every((status) => status === 'Verified');
-    const anyRejected = statuses.some((status) => status === 'Rejected');
-    if (allVerified) {
-        profile.documentSubmissionStatus = 'Approved';
-        return;
-    }
-
-    if (anyRejected) {
-        profile.documentSubmissionStatus = 'Changes Requested';
-        return;
-    }
 };
 
 const reopenDocumentSubmission = (profile) => {

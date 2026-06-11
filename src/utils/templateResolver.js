@@ -71,7 +71,9 @@ const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
     'documentListBlock',
     'personalNote',
     'offboardingStatus',
-    'hrRemarks'
+    'hrRemarks',
+    'joiningDate',
+    'currentYear'
 ];
 
 const ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [

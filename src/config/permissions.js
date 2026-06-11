@@ -498,5 +498,10 @@ module.exports = [
         key: "offboarding.update",
         module: "OFFBOARDING",
         description: "Update offboarding progress, documents, and completion"
+    },
+    {
+        key: "hr_email.send",
+        module: "HR",
+        description: "Send HR emails to active employees and save attachments to dossiers"
     }
 ];
