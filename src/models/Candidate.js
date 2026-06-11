@@ -286,7 +286,7 @@ const candidateSchema = new mongoose.Schema({
     // Hiring Decision
     decision: {
         type: String,
-        enum: ['Shortlisted', 'Profile Shared', 'Rejected', 'On Hold', 'None', '']
+        enum: ['Shortlisted', 'Profile Shared', 'Rejected', 'On Hold', 'Did Not Turn Up', 'None', '']
     },
 
     profileShared: {

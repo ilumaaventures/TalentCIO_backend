@@ -733,7 +733,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
                 interested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Interested').length,
                 interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
                 shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
-                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
+                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected' || candidate?.decision === 'Did Not Turn Up').length,
                 profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
                 transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
             },
@@ -2347,13 +2347,13 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                         interested: {
                             $sum: {
                                 $cond: [
-                                    {
-                                        $and: [
-                                            { $eq: ['$status', 'Interested'] },
-                                            { $not: [{ $in: ['$decision', ['Rejected', 'On Hold']] }] },
-                                            { $eq: ['$interviewRoundsCount', 0] }
-                                        ]
-                                    },
+                                            {
+                                                $and: [
+                                                    { $eq: ['$status', 'Interested'] },
+                                            { $not: [{ $in: ['$decision', ['Rejected', 'On Hold', 'Did Not Turn Up']] }] },
+                                                    { $eq: ['$interviewRoundsCount', 0] }
+                                                ]
+                                            },
                                     1,
                                     0
                                 ]
@@ -2365,7 +2365,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                                     {
                                         $and: [
                                             { $gt: ['$interviewRoundsCount', 0] },
-                                            { $not: [{ $in: ['$decision', ['Rejected', 'On Hold']] }] },
+                                            { $not: [{ $in: ['$decision', ['Rejected', 'On Hold', 'Did Not Turn Up']] }] },
                                             { $eq: ['$failedRoundsCount', 0] }
                                         ]
                                     },
@@ -2376,7 +2376,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                         },
                         rejected: {
                             $sum: {
-                                $cond: [{ $eq: ['$decision', 'Rejected'] }, 1, 0]
+                                $cond: [{ $in: ['$decision', ['Rejected', 'Did Not Turn Up']] }, 1, 0]
                             }
                         },
                         onHold: {

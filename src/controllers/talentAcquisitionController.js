@@ -1899,6 +1899,7 @@ exports.getClientAnalytics = async (req, res) => {
             // Drop-offs first
             if (
                 c.decision === 'Rejected' ||
+                c.decision === 'Did Not Turn Up' ||
                 c.phase2Decision === 'Rejected' ||
                 c.phase3Decision === 'No Show' ||
                 c.phase3Decision === 'Offer Declined' ||
