@@ -733,7 +733,9 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
                 interested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Interested').length,
                 interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
                 shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
-                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected' || candidate?.decision === 'Did Not Turn Up').length,
+                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
+                didNotTurnUp: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Did Not Turn Up').length,
+                onHold: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'On Hold').length,
                 profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
                 transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
             },
