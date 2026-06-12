@@ -9,6 +9,11 @@ const AUDIENCE_TYPES = ['all', 'departments', 'employmentTypes', 'specificUsers'
 const REACTION_TYPES = ['like', 'celebrate', 'support'];
 const MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin']);
 const EMPLOYMENT_TYPES = ['Full Time', 'Part Time', 'Contract', 'Intern', 'Consultant', 'Freelance', 'Probation'];
+const ANNOUNCEMENT_COMMUNITY_SECTION_PERMISSIONS = {
+    birthdays: 'announcement.community.birthdays.view',
+    anniversaries: 'announcement.community.work_anniversaries.view',
+    joinees: 'announcement.community.new_joiners.view'
+};
 const ANNOUNCEMENT_FIELD_LIMITS = {
     title: 160,
     summary: 240,
@@ -165,6 +170,22 @@ const canManageAnnouncements = (user = {}) => {
         || permissions.includes('admin')
     );
 };
+
+const hasAnnouncementCommunityPermission = (user = {}, permissionKey = '') => {
+    if (!permissionKey) return false;
+
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        Boolean(user?.hasAllPermissions)
+        || permissions.includes(permissionKey)
+        || permissions.includes('*')
+        || permissions.includes('admin')
+    );
+};
+
+const canViewAnnouncementCommunitySection = (user = {}, sectionKey = '') => (
+    hasAnnouncementCommunityPermission(user, ANNOUNCEMENT_COMMUNITY_SECTION_PERMISSIONS[sectionKey])
+);
 
 const announcementPopulatePaths = [
     { path: 'createdBy', select: 'firstName lastName profilePicture department employmentType' },
@@ -709,6 +730,37 @@ exports.getAnnouncementCommunity = async (req, res) => {
     try {
         setPrivateCache(res, 300);
         const now = new Date();
+        const sectionVisibility = {
+            birthdays: canViewAnnouncementCommunitySection(req.user, 'birthdays'),
+            anniversaries: canViewAnnouncementCommunitySection(req.user, 'anniversaries'),
+            joinees: canViewAnnouncementCommunitySection(req.user, 'joinees')
+        };
+
+        const emptyResponse = {
+            month: {
+                year: now.getFullYear(),
+                month: now.getMonth() + 1
+            },
+            visibility: sectionVisibility,
+            birthdays: {
+                currentMonth: [],
+                today: [],
+                count: 0
+            },
+            workAnniversaries: {
+                currentMonth: [],
+                today: [],
+                count: 0
+            },
+            newJoinees: {
+                currentMonth: [],
+                count: 0
+            }
+        };
+
+        if (!Object.values(sectionVisibility).some(Boolean)) {
+            return res.json(emptyResponse);
+        }
 
         const users = await User.find({ companyId: req.companyId, isActive: true })
             .select('firstName lastName email department employmentType profilePicture joiningDate employeeProfile createdAt')
@@ -731,76 +783,91 @@ exports.getAnnouncementCommunity = async (req, res) => {
             onboardingTransfers.map((entry) => [String(entry.transferredToUserId || ''), entry])
         );
 
-        const birthdayUsersCurrentMonth = users
-            .filter((user) => isSameRecurringMonth(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
-            .sort((left, right) => (
-                new Date(getBirthdayDateValue(left, onboardingEmployeeByUserId)).getDate()
-                - new Date(getBirthdayDateValue(right, onboardingEmployeeByUserId)).getDate()
-            ));
+        const birthdayUsersCurrentMonth = sectionVisibility.birthdays
+            ? users
+                .filter((user) => isSameRecurringMonth(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
+                .sort((left, right) => (
+                    new Date(getBirthdayDateValue(left, onboardingEmployeeByUserId)).getDate()
+                    - new Date(getBirthdayDateValue(right, onboardingEmployeeByUserId)).getDate()
+                ))
+            : [];
 
-        const birthdaysCurrentMonth = birthdayUsersCurrentMonth.map((user) => serializeCommunityMember(user, {
-            dateValue: getBirthdayDateValue(user, onboardingEmployeeByUserId),
-            source: 'birthday'
-        }));
-
-        const birthdaysToday = birthdayUsersCurrentMonth
-            .filter((user) => isSameMonthDay(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
-            .map((user) => serializeCommunityMember(user, {
+        const birthdaysCurrentMonth = sectionVisibility.birthdays
+            ? birthdayUsersCurrentMonth.map((user) => serializeCommunityMember(user, {
                 dateValue: getBirthdayDateValue(user, onboardingEmployeeByUserId),
                 source: 'birthday'
-            }));
+            }))
+            : [];
 
-        const anniversaryUsersCurrentMonth = users
-            .filter((user) => {
-                const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
-                return isSameRecurringMonth(joiningDate, now) && getYearsCompleted(joiningDate, now) > 0;
-            })
-            .sort((left, right) => {
-                const leftDate = getCurrentMonthDateValue(left, onboardingEmployeeByUserId);
-                const rightDate = getCurrentMonthDateValue(right, onboardingEmployeeByUserId);
-                return new Date(leftDate).getDate() - new Date(rightDate).getDate();
-            });
+        const birthdaysToday = sectionVisibility.birthdays
+            ? birthdayUsersCurrentMonth
+                .filter((user) => isSameMonthDay(getBirthdayDateValue(user, onboardingEmployeeByUserId), now))
+                .map((user) => serializeCommunityMember(user, {
+                    dateValue: getBirthdayDateValue(user, onboardingEmployeeByUserId),
+                    source: 'birthday'
+                }))
+            : [];
 
-        const anniversariesCurrentMonth = anniversaryUsersCurrentMonth.map((user) => {
-            const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
-            return serializeCommunityMember(user, {
-                dateValue: joiningDate,
-                yearsCompleted: getYearsCompleted(joiningDate, now),
-                source: 'anniversary'
-            });
-        });
+        const anniversaryUsersCurrentMonth = sectionVisibility.anniversaries
+            ? users
+                .filter((user) => {
+                    const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
+                    return isSameRecurringMonth(joiningDate, now) && getYearsCompleted(joiningDate, now) > 0;
+                })
+                .sort((left, right) => {
+                    const leftDate = getCurrentMonthDateValue(left, onboardingEmployeeByUserId);
+                    const rightDate = getCurrentMonthDateValue(right, onboardingEmployeeByUserId);
+                    return new Date(leftDate).getDate() - new Date(rightDate).getDate();
+                })
+            : [];
 
-        const anniversariesToday = anniversaryUsersCurrentMonth
-            .filter((user) => isSameMonthDay(getCurrentMonthDateValue(user, onboardingEmployeeByUserId), now))
-            .map((user) => {
+        const anniversariesCurrentMonth = sectionVisibility.anniversaries
+            ? anniversaryUsersCurrentMonth.map((user) => {
                 const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
                 return serializeCommunityMember(user, {
                     dateValue: joiningDate,
                     yearsCompleted: getYearsCompleted(joiningDate, now),
                     source: 'anniversary'
                 });
-            });
-
-        const newJoineesCurrentMonth = users
-            .filter((user) => {
-                const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
-                return isSameCalendarMonth(joiningDate, now);
             })
-            .sort((left, right) => (
-                new Date(getCurrentMonthDateValue(left, onboardingEmployeeByUserId))
-                - new Date(getCurrentMonthDateValue(right, onboardingEmployeeByUserId))
-            ))
-            .map((user) => serializeCommunityMember(user, {
-                dateValue: getCurrentMonthDateValue(user, onboardingEmployeeByUserId),
-                source: 'newJoinee',
-                transferredFromOnboarding: onboardingTransferredUserIdSet.has(String(user._id))
-            }));
+            : [];
+
+        const anniversariesToday = sectionVisibility.anniversaries
+            ? anniversaryUsersCurrentMonth
+                .filter((user) => isSameMonthDay(getCurrentMonthDateValue(user, onboardingEmployeeByUserId), now))
+                .map((user) => {
+                    const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
+                    return serializeCommunityMember(user, {
+                        dateValue: joiningDate,
+                        yearsCompleted: getYearsCompleted(joiningDate, now),
+                        source: 'anniversary'
+                    });
+                })
+            : [];
+
+        const newJoineesCurrentMonth = sectionVisibility.joinees
+            ? users
+                .filter((user) => {
+                    const joiningDate = getCurrentMonthDateValue(user, onboardingEmployeeByUserId);
+                    return isSameCalendarMonth(joiningDate, now);
+                })
+                .sort((left, right) => (
+                    new Date(getCurrentMonthDateValue(left, onboardingEmployeeByUserId))
+                    - new Date(getCurrentMonthDateValue(right, onboardingEmployeeByUserId))
+                ))
+                .map((user) => serializeCommunityMember(user, {
+                    dateValue: getCurrentMonthDateValue(user, onboardingEmployeeByUserId),
+                    source: 'newJoinee',
+                    transferredFromOnboarding: onboardingTransferredUserIdSet.has(String(user._id))
+                }))
+            : [];
 
         return res.json({
             month: {
                 year: now.getFullYear(),
                 month: now.getMonth() + 1
             },
+            visibility: sectionVisibility,
             birthdays: {
                 currentMonth: birthdaysCurrentMonth,
                 today: birthdaysToday,

@@ -32,7 +32,7 @@ const LEGACY_STATUS_VALUES = new Set([
     ''
 ]);
 
-const DEFAULT_LEGACY_CANDIDATE_STATUS = 'Interested';
+const DEFAULT_LEGACY_CANDIDATE_STATUS = '';
 const DUPLICATE_CANDIDATE_MESSAGE = 'This candidate already exists in the system.';
 
 const normalizeStatusKey = (value) => String(value || '')
@@ -1552,7 +1552,7 @@ exports.updateCandidate = async (req, res) => {
         }
 
         // Track status change
-        if (updateData.status && updateData.status !== candidate.status) {
+        if (updateData.status !== undefined && updateData.status !== candidate.status) {
             candidate.statusHistory.push({
                 status: updateData.status,
                 changedBy: req.user._id,
