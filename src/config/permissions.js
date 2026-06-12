@@ -416,6 +416,21 @@ module.exports = [
         description: "Create, publish, edit, and delete internal announcements"
     },
     {
+        key: "announcement.community.birthdays.view",
+        module: "ANNOUNCEMENT",
+        description: "View the Today's Birthdays section in announcements"
+    },
+    {
+        key: "announcement.community.work_anniversaries.view",
+        module: "ANNOUNCEMENT",
+        description: "View the Work Anniversaries section in announcements"
+    },
+    {
+        key: "announcement.community.new_joiners.view",
+        module: "ANNOUNCEMENT",
+        description: "View the New Joiners section in announcements"
+    },
+    {
         key: "bin.view",
         module: "SYSTEM",
         description: "View recycle bin items"
