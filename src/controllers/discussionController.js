@@ -18,7 +18,7 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
 
 exports.createDiscussion = async (req, res) => {
     try {
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project } = req.body;
         const selectedSupervisorId = supervisor || participantUserId;
         const normalizedVisibleTo = Array.isArray(visibleToUserIds)
             ? visibleToUserIds
@@ -40,7 +40,8 @@ exports.createDiscussion = async (req, res) => {
             createdBy: req.user._id,
             supervisor: selectedSupervisorId,
             visibleToUsers: normalizedVisibleTo,
-            participants: buildDiscussionParticipants(req.user._id, selectedSupervisorId, normalizedVisibleTo)
+            participants: buildDiscussionParticipants(req.user._id, selectedSupervisorId, normalizedVisibleTo),
+            project: (project && mongoose.isValidObjectId(project)) ? project : null
         });
         await newDiscussion.save();
 
@@ -64,6 +65,7 @@ exports.createDiscussion = async (req, res) => {
             .populate('createdBy', 'firstName lastName email profilePicture')
             .populate('supervisor', 'firstName lastName email profilePicture')
             .populate('visibleToUsers', 'firstName lastName email profilePicture')
+            .populate('project', 'name')
             .lean();
 
         res.status(201).json({ message: 'Discussion created successfully', discussion: attachDiscussionPermissions(populatedDiscussion, req.user) });
@@ -98,7 +100,8 @@ exports.getDiscussions = async (req, res) => {
         discussions = await Discussion.populate(discussions, [
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
             { path: 'supervisor', select: 'firstName lastName email profilePicture' },
-            { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' }
+            { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' },
+            { path: 'project', select: 'name' }
         ]);
 
         discussions = discussions.map((discussion) => attachDiscussionPermissions(discussion, req.user));
@@ -121,6 +124,7 @@ exports.getDiscussionById = async (req, res) => {
             .populate('createdBy', 'firstName lastName email profilePicture')
             .populate('supervisor', 'firstName lastName email profilePicture')
             .populate('visibleToUsers', 'firstName lastName email profilePicture')
+            .populate('project', 'name')
             .lean();
         if (!discussion) return res.status(404).json({ message: 'Discussion not found' });
         if (!canAccessDiscussion(discussion, req.user)) {
@@ -136,7 +140,7 @@ exports.getDiscussionById = async (req, res) => {
 exports.updateDiscussion = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project } = req.body;
 
         const existingDiscussion = await Discussion.findOne({ _id: id, companyId: req.companyId });
         if (!existingDiscussion) return res.status(404).json({ message: 'Discussion not found' });
@@ -153,6 +157,9 @@ exports.updateDiscussion = async (req, res) => {
         }
 
         const updateData = { title, discussion, status, dueDate };
+        if (project !== undefined) {
+            updateData.project = (project && mongoose.isValidObjectId(project)) ? project : null;
+        }
         const selectedSupervisorId = supervisor || participantUserId || existingDiscussion.supervisor;
         const normalizedVisibleTo = Array.isArray(visibleToUserIds)
             ? visibleToUserIds
@@ -173,6 +180,7 @@ exports.updateDiscussion = async (req, res) => {
         ).populate('createdBy', 'firstName lastName email profilePicture')
          .populate('supervisor', 'firstName lastName email profilePicture')
          .populate('visibleToUsers', 'firstName lastName email profilePicture')
+         .populate('project', 'name')
          .lean();
 
         res.status(200).json({ message: 'Discussion updated successfully', discussion: attachDiscussionPermissions(updatedDiscussion, req.user) });

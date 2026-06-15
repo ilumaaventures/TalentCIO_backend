@@ -691,7 +691,8 @@ exports.getDiscussionsBootstrap = async (req, res) => {
         const discussions = await Discussion.populate(discussionRows, [
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
             { path: 'supervisor', select: 'firstName lastName email profilePicture' },
-            { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' }
+            { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' },
+            { path: 'project', select: 'name' }
         ]);
 
         res.status(200).json({
