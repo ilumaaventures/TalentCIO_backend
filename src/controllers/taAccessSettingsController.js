@@ -3,6 +3,12 @@ const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 const Candidate = require('../models/Candidate');
 const { HiringRequest } = require('../models/HiringRequest');
+const {
+    addUsersToClientRequisitions,
+    mergeAssignedUsersWithClientAssignments,
+    normalizeClientName,
+    removeUsersFromClientRequisitions
+} = require('../utils/clientAssignmentSync');
 
 const ADMIN_ROLE_NAMES = new Set(['Admin', 'HR', 'Super Admin', 'System Admin']);
 
@@ -11,6 +17,8 @@ const getRoleName = (role) => {
     if (typeof role === 'string') return role;
     return role.name || '';
 };
+
+const normalizeClientKey = (value) => normalizeClientName(value).toLowerCase();
 
 const hasAnyPermission = (user, permissionKeys = []) => {
     const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
@@ -70,6 +78,8 @@ const buildUserResponse = (user, requestStats = {}, interviewerStats = {}) => {
         roles: roleNames,
         taAssignedClients: Array.isArray(user.taAssignedClients) ? user.taAssignedClients : [],
         assignedRequests: requestStats.assignedRequests || 0,
+        directAssignedRequests: requestStats.directAssignedRequests || 0,
+        clientDerivedRequests: requestStats.clientDerivedRequests || 0,
         clientAssignments: requestStats.clientAssignments || 0,
         hiringManagerOn: requestStats.hiringManagerOn || 0,
         analyticsViewerOn: requestStats.analyticsViewerOn || 0,
@@ -161,38 +171,79 @@ exports.getOverview = async (req, res) => {
         });
 
         const requestSummaryByUser = new Map();
-        requests.forEach((request) => {
-            const register = (userId, key) => {
-                const normalizedUserId = String(userId || '');
-                if (!normalizedUserId) return;
+        const ensureRequestSummary = (userId) => {
+            const normalizedUserId = String(userId || '');
+            if (!normalizedUserId) {
+                return null;
+            }
 
-                const current = requestSummaryByUser.get(normalizedUserId) || {
-                    assignedRequests: 0,
+            if (!requestSummaryByUser.has(normalizedUserId)) {
+                requestSummaryByUser.set(normalizedUserId, {
+                    assignedRequestIds: new Set(),
+                    directAssignedRequestIds: new Set(),
+                    clientDerivedRequestIds: new Set(),
                     hiringManagerOn: 0,
-                    analyticsViewerOn: 0
-                };
+                    analyticsViewerOn: 0,
+                    clientAssignments: 0
+                });
+            }
+
+            return requestSummaryByUser.get(normalizedUserId);
+        };
+
+        requests.forEach((request) => {
+            const requestId = String(request._id || '');
+            const registerCount = (userId, key) => {
+                const current = ensureRequestSummary(userId);
+                if (!current) return;
                 current[key] += 1;
-                requestSummaryByUser.set(normalizedUserId, current);
             };
 
-            register(request.ownership?.hiringManager?._id || request.ownership?.hiringManager, 'hiringManagerOn');
+            registerCount(request.ownership?.hiringManager?._id || request.ownership?.hiringManager, 'hiringManagerOn');
 
             (request.assignedUsers || []).forEach((user) => {
-                register(user?._id || user, 'assignedRequests');
+                const current = ensureRequestSummary(user?._id || user);
+                if (!current) return;
+                current.directAssignedRequestIds.add(requestId);
+                current.assignedRequestIds.add(requestId);
             });
             (request.analyticsViewers || []).forEach((user) => {
-                register(user?._id || user, 'analyticsViewerOn');
+                registerCount(user?._id || user, 'analyticsViewerOn');
             });
         });
 
         users.forEach((user) => {
             const normalizedUserId = String(user._id);
-            const current = requestSummaryByUser.get(normalizedUserId) || {
-                assignedRequests: 0,
+            const current = ensureRequestSummary(normalizedUserId) || {
+                assignedRequestIds: new Set(),
+                directAssignedRequestIds: new Set(),
+                clientDerivedRequestIds: new Set(),
                 hiringManagerOn: 0,
                 analyticsViewerOn: 0,
                 clientAssignments: 0
             };
+            const assignedClientNames = new Set(
+                (Array.isArray(user.taAssignedClients) ? user.taAssignedClients : [])
+                    .map(normalizeClientKey)
+                    .filter(Boolean)
+            );
+
+            if (assignedClientNames.size > 0) {
+                requests.forEach((request) => {
+                    if (!assignedClientNames.has(normalizeClientKey(request.client))) {
+                        return;
+                    }
+
+                    const requestId = String(request._id || '');
+                    if (!requestId) {
+                        return;
+                    }
+
+                    current.clientDerivedRequestIds.add(requestId);
+                    current.assignedRequestIds.add(requestId);
+                });
+            }
+
             current.clientAssignments = Array.isArray(user.taAssignedClients) ? user.taAssignedClients.length : 0;
             requestSummaryByUser.set(normalizedUserId, current);
         });
@@ -208,11 +259,23 @@ exports.getOverview = async (req, res) => {
             ))
         ])].sort((left, right) => left.localeCompare(right));
 
-        const userResponses = users.map((user) => buildUserResponse(
-            user,
-            requestSummaryByUser.get(String(user._id)) || {},
-            interviewerSummaryByUser.get(String(user._id)) || {}
-        ));
+        const userResponses = users.map((user) => {
+            const requestSummary = requestSummaryByUser.get(String(user._id));
+            return buildUserResponse(
+                user,
+                requestSummary
+                    ? {
+                        assignedRequests: requestSummary.assignedRequestIds.size,
+                        directAssignedRequests: requestSummary.directAssignedRequestIds.size,
+                        clientDerivedRequests: requestSummary.clientDerivedRequestIds.size,
+                        clientAssignments: requestSummary.clientAssignments,
+                        hiringManagerOn: requestSummary.hiringManagerOn,
+                        analyticsViewerOn: requestSummary.analyticsViewerOn
+                    }
+                    : {},
+                interviewerSummaryByUser.get(String(user._id)) || {}
+            );
+        });
 
         const requestResponses = requests.map((request) => buildRequestResponse(
             request,
@@ -310,7 +373,11 @@ exports.updateRequisitionAccess = async (req, res) => {
             ? [...new Set(req.body.interviewPanel.map((userId) => String(userId)).filter(Boolean))]
             : [];
 
-        request.assignedUsers = assignedUsers;
+        request.assignedUsers = await mergeAssignedUsersWithClientAssignments({
+            companyId: req.companyId,
+            clientName: request.client,
+            assignedUsers
+        });
         request.analyticsViewers = analyticsViewers;
         request.ownership = {
             ...(request.ownership?.toObject ? request.ownership.toObject() : request.ownership),
@@ -372,9 +439,28 @@ exports.updateUserClientAssignments = async (req, res) => {
         const assignedClients = Array.isArray(req.body?.assignedClients)
             ? [...new Set(req.body.assignedClients.map((client) => String(client || '').trim()).filter(Boolean))]
             : [];
+        const previousAssignedClients = Array.isArray(user.taAssignedClients)
+            ? [...new Set(user.taAssignedClients.map((client) => String(client || '').trim()).filter(Boolean))]
+            : [];
+        const addedClients = assignedClients.filter((client) => !previousAssignedClients.includes(client));
+        const removedClients = previousAssignedClients.filter((client) => !assignedClients.includes(client));
 
         user.taAssignedClients = assignedClients;
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
         await user.save();
+
+        await Promise.all([
+            ...addedClients.map((clientName) => addUsersToClientRequisitions({
+                companyId: req.companyId,
+                clientName,
+                userIds: [user._id]
+            })),
+            ...removedClients.map((clientName) => removeUsersFromClientRequisitions({
+                companyId: req.companyId,
+                clientName,
+                userIds: [user._id]
+            }))
+        ]);
 
         const updatedUser = await User.findById(user._id)
             .select('firstName lastName email employeeCode isActive roles taAssignedClients')
@@ -405,6 +491,15 @@ exports.updateClientUserAssignments = async (req, res) => {
         const selectedUserIds = Array.isArray(req.body?.userIds)
             ? [...new Set(req.body.userIds.map((userId) => String(userId)).filter(Boolean))]
             : [];
+        const previouslyAssignedUsers = await User.find({
+            companyId: req.companyId,
+            taAssignedClients: clientName
+        })
+            .select('_id')
+            .lean();
+        const removedUserIds = previouslyAssignedUsers
+            .map((user) => String(user._id))
+            .filter((userId) => !selectedUserIds.includes(userId));
 
         const usersToAddQuery = {
             companyId: req.companyId,
@@ -431,6 +526,19 @@ exports.updateClientUserAssignments = async (req, res) => {
                     $inc: { tokenVersion: 1 }
                 }
             )
+        ]);
+
+        await Promise.all([
+            addUsersToClientRequisitions({
+                companyId: req.companyId,
+                clientName,
+                userIds: selectedUserIds
+            }),
+            removeUsersFromClientRequisitions({
+                companyId: req.companyId,
+                clientName,
+                userIds: removedUserIds
+            })
         ]);
 
         const updatedUsers = await User.find({ companyId: req.companyId })
