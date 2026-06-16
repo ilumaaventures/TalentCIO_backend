@@ -36,6 +36,10 @@ const {
 const { buildAuditMeta, logTAAuditEvent } = require('../utils/taAudit');
 const { serializeHiringRequestForViewer } = require('../utils/taVisibility');
 const { canUseDelegatedPermission } = require('../utils/permissionDelegation');
+const {
+    getClientAssignedUserIds,
+    mergeAssignedUsersWithClientAssignments
+} = require('../utils/clientAssignmentSync');
 
 
 const HIRING_REQUEST_SEQUENCE_KEY = 'hiring_request';
@@ -654,6 +658,14 @@ exports.createHiringRequest = async (req, res) => {
             copiedPhases = copyTemplatePhasesForHiringRequest(templateReference.phases || []);
         }
 
+        const normalizedAssignedUsers = await mergeAssignedUsersWithClientAssignments({
+            companyId: req.companyId,
+            clientName: client,
+            assignedUsers: Array.isArray(assignedUsers)
+                ? [...new Set(assignedUsers.map((userId) => String(userId)).filter(Boolean))]
+                : []
+        });
+
         const newRequest = new HiringRequest({
             requestId,
             client,
@@ -667,9 +679,7 @@ exports.createHiringRequest = async (req, res) => {
                 ...ownership,
                 hiringManager: req.user._id // Assumption: The logged in user is the HM or creating on behalf.
             },
-            assignedUsers: Array.isArray(assignedUsers)
-                ? [...new Set(assignedUsers.map((userId) => String(userId)).filter(Boolean))]
-                : [],
+            assignedUsers: normalizedAssignedUsers,
             analyticsViewers: Array.isArray(analyticsViewers)
                 ? [...new Set(analyticsViewers.map((userId) => String(userId)).filter(Boolean))]
                 : [],
@@ -848,6 +858,8 @@ exports.updateHiringRequest = async (req, res) => {
             return res.status(400).json({ message: 'Cannot edit a closed request' });
         }
 
+        const previousClientName = request.client;
+
         // Apply updates to request securely (prevent mass assignment)
         const allowedUpdates = [
             'client', 'clientConfidential', 'roleDetails', 'purpose', 'requirements',
@@ -875,6 +887,21 @@ exports.updateHiringRequest = async (req, res) => {
                     request[field] = updates[field];
                 }
             }
+        });
+
+        if (updates.client !== undefined && previousClientName !== request.client) {
+            const previousClientAssignedUserIds = await getClientAssignedUserIds(req.companyId, previousClientName);
+            if (previousClientAssignedUserIds.length > 0) {
+                request.assignedUsers = (Array.isArray(request.assignedUsers) ? request.assignedUsers : [])
+                    .map((userId) => String(userId))
+                    .filter((userId) => !previousClientAssignedUserIds.includes(userId));
+            }
+        }
+
+        request.assignedUsers = await mergeAssignedUsersWithClientAssignments({
+            companyId: req.companyId,
+            clientName: request.client,
+            assignedUsers: request.assignedUsers
         });
 
         // Handle workflow changes or initialization

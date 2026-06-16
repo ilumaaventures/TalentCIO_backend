@@ -125,7 +125,19 @@ const getProjects = async (req, res) => {
         const canViewAssigned = hasPermission(req, 'project.view_assigned');
         const canViewTeam = hasPermission(req, 'project.view_team');
 
-        if (canViewAll) {
+        if (req.query.assignedOnly === 'true') {
+            const orConditions = [];
+
+            // 1. Assigned Projects (Manager, Member, or Task Assigned)
+            const assignedModuleIds = await Task.distinct('module', { assignees: req.user._id, companyId: req.companyId });
+            const taskProjectIds = await Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId: req.companyId });
+
+            orConditions.push({ manager: req.user._id });
+            orConditions.push({ members: req.user._id });
+            orConditions.push({ _id: { $in: taskProjectIds } });
+
+            query.$or = orConditions;
+        } else if (canViewAll) {
             // Fetch all projects
         } else if (canViewAssigned || canViewTeam) {
             const orConditions = [];

@@ -420,7 +420,8 @@ const updateCompany = async (req, res) => {
         });
 
         // --- Handle basic fields ---
-        const fieldsToUpdate = ['name', 'subdomain', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
+        // NOTE: 'subdomain' is intentionally excluded — it must be immutable after creation
+        const fieldsToUpdate = ['name', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
         fieldsToUpdate.forEach(field => {
             if (req.body[field] !== undefined) {
                 if (field === 'planId' && req.body[field] === "") {

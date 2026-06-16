@@ -13,7 +13,7 @@ const discussionSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['inprogress', 'on-hold', 'mark as complete'],
+        enum: ['inprogress', 'on-hold', 'mark as complete', 'planning'],
         default: 'inprogress'
     },
     dueDate: {
@@ -42,6 +42,11 @@ const discussionSchema = new mongoose.Schema({
         ref: 'Company',
         required: true,
         index: true
+    },
+    project: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Project',
+        default: null
     }
 }, { timestamps: true });
 
