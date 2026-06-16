@@ -14,7 +14,7 @@ const clearCompanyNotificationSettingsCache = (companyId) => {
     notificationSettingsCache.delete(getCacheKey(companyId));
 };
 
-const resolveRelativeAppLink = (link = '') => {
+const resolveRelativeAppLink = (link = '', origin = '', subdomain = '') => {
     const normalizedLink = String(link || '').trim();
     if (!normalizedLink) {
         return '';
@@ -24,7 +24,34 @@ const resolveRelativeAppLink = (link = '') => {
         return normalizedLink;
     }
 
-    const appBaseUrl = String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    let appBaseUrl = '';
+    if (origin) {
+        appBaseUrl = String(origin).trim().replace(/\/+$/, '');
+    } else {
+        const rawBaseUrl = String(process.env.FRONTEND_URL || 'http://localhost:5174').replace(/\/+$/, '');
+        if (subdomain) {
+            try {
+                const parsed = new URL(rawBaseUrl);
+                if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                    parsed.hostname = `${subdomain}.localhost`;
+                } else {
+                    const hostParts = parsed.hostname.split('.');
+                    if (hostParts.length > 2) {
+                        hostParts[0] = subdomain;
+                        parsed.hostname = hostParts.join('.');
+                    } else {
+                        parsed.hostname = `${subdomain}.${parsed.hostname}`;
+                    }
+                }
+                appBaseUrl = parsed.origin;
+            } catch {
+                appBaseUrl = rawBaseUrl;
+            }
+        } else {
+            appBaseUrl = rawBaseUrl;
+        }
+    }
+
     const path = normalizedLink.startsWith('/') ? normalizedLink : `/${normalizedLink}`;
     return `${appBaseUrl}${path}`;
 };
@@ -70,6 +97,10 @@ class NotificationService {
 
         for (const [companyKey, groupedItems] of groupedByCompany.entries()) {
             const companyId = companyKey === 'no-company' ? null : companyKey;
+            const company = companyId
+                ? await Company.findById(companyId).select('subdomain').lean()
+                : null;
+            const companySubdomain = company?.subdomain || '';
             const settings = companyId
                 ? await this.getCompanyNotificationSettings(companyId)
                 : null;
@@ -98,6 +129,7 @@ class NotificationService {
                     delete persistedPayload.emailSubject;
                     delete persistedPayload.emailText;
                     delete persistedPayload.emailHtml;
+                    delete persistedPayload.origin;
                     recordsToInsert.push(persistedPayload);
                     insertIndexes.push(index);
                 }
@@ -107,7 +139,8 @@ class NotificationService {
                         companyId,
                         user,
                         data: item,
-                        settings
+                        settings,
+                        companySubdomain
                     }));
                 }
             });
@@ -215,10 +248,10 @@ class NotificationService {
         return channel === 'email' || channel === 'both';
     }
 
-    static buildEmailPayload({ user, data }) {
+    static buildEmailPayload({ user, data, companySubdomain }) {
         const title = String(data?.emailSubject || data?.title || 'Notification').trim();
         const message = String(data?.message || '').trim();
-        const linkUrl = resolveRelativeAppLink(data?.link);
+        const linkUrl = resolveRelativeAppLink(data?.link, data?.origin, companySubdomain);
         const recipientName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() || 'there';
 
         const html = data?.emailHtml || `
@@ -240,9 +273,9 @@ class NotificationService {
         return { subject: title, html, text };
     }
 
-    static async sendNotificationEmail({ companyId, user, data, settings }) {
+    static async sendNotificationEmail({ companyId, user, data, settings, companySubdomain }) {
         try {
-            const { subject, html, text } = this.buildEmailPayload({ user, data });
+            const { subject, html, text } = this.buildEmailPayload({ user, data, companySubdomain });
             return await sendEmailForCompany({
                 companyId,
                 emailAccountId: this.resolveNotificationEmailAccountId(settings, data?.preferenceKey),

@@ -390,9 +390,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             emailHtmlBody
         } = req.body;
 
-        if ((!sections || sections.length === 0) && (!documents || documents.length === 0)) {
-            return res.status(400).json({ message: 'Please select at least one section or document' });
-        }
 
         const employee = await OnboardingEmployee
             .findOne({ _id: req.params.id, companyId: req.companyId })
@@ -1579,6 +1576,45 @@ exports.saveSection = async (req, res) => {
             return res.status(400).json({ message: 'Invalid section' });
         }
 
+        // Validate mandatory fields when marking a section as complete
+        if (data.isComplete) {
+            const missing = [];
+            if (section === 'personalDetails') {
+                if (!data.fullName?.trim()) missing.push('Full Name');
+                if (!data.dateOfBirth) missing.push('Date of Birth');
+                if (!data.gender) missing.push('Gender');
+                if (!data.bloodGroup?.trim()) missing.push('Blood Group');
+                if (!data.personalEmail?.trim()) missing.push('Personal Email');
+                if (!data.personalMobile?.trim()) missing.push('Personal Mobile');
+                if (!data.currentAddress?.line1?.trim()) missing.push('Current Address Street');
+                if (!data.currentAddress?.city?.trim()) missing.push('Current Address City');
+                if (!data.currentAddress?.state?.trim()) missing.push('Current Address State');
+                if (!data.currentAddress?.pincode?.trim()) missing.push('Current Address Pincode');
+                if (!data.sameAsCurrent) {
+                    if (!data.permanentAddress?.line1?.trim()) missing.push('Permanent Address Street');
+                    if (!data.permanentAddress?.city?.trim()) missing.push('Permanent Address City');
+                    if (!data.permanentAddress?.state?.trim()) missing.push('Permanent Address State');
+                    if (!data.permanentAddress?.pincode?.trim()) missing.push('Permanent Address Pincode');
+                }
+            } else if (section === 'emergencyContact') {
+                if (!data.contactName?.trim()) missing.push('Contact Person Name');
+                if (!data.relationship?.trim()) missing.push('Relationship');
+                if (!data.phoneNumber?.trim()) missing.push('Phone Number');
+                if (!data.address?.trim()) missing.push('Address');
+            } else if (section === 'bankDetails') {
+                if (!data.bankName?.trim()) missing.push('Bank Name');
+                if (!data.accountNumber?.trim()) missing.push('Account Number');
+                if (!data.confirmAccountNumber?.trim()) missing.push('Confirm Account Number');
+                if (data.accountNumber?.trim() && data.confirmAccountNumber?.trim() && data.accountNumber.trim() !== data.confirmAccountNumber.trim()) missing.push('Account Numbers do not match');
+                if (!data.ifscCode?.trim()) missing.push('IFSC Code');
+                if (!data.branchName?.trim()) missing.push('Branch Name');
+                if (!data.accountType) missing.push('Account Type');
+            }
+            if (missing.length > 0) {
+                return res.status(400).json({ message: `Please fill all mandatory fields: ${missing.join(', ')}` });
+            }
+        }
+
         // Merge the update
         const update = {};
         for (const key of Object.keys(data)) {
@@ -1803,7 +1839,8 @@ exports.submitOnboarding = async (req, res) => {
                 title: 'Onboarding Submission Received',
                 message: `${employee.firstName} ${employee.lastName} (${employee.tempEmployeeId}) has submitted their pre-onboarding documents.`,
                 type: 'Info',
-                link: '/onboarding'
+                link: '/onboarding',
+                origin: req.headers.origin
             });
         }
 
