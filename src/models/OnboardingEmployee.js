@@ -241,6 +241,13 @@ onboardingEmployeeSchema.index({ companyId: 1, tempEmployeeId: 1 }, { unique: tr
 onboardingEmployeeSchema.index({ companyId: 1, email: 1 });
 onboardingEmployeeSchema.index({ companyId: 1, status: 1 });
 
+// Keep only the latest 50 audit logs
+onboardingEmployeeSchema.pre('save', function () {
+    if (this.auditLog && this.auditLog.length > 50) {
+        this.auditLog = this.auditLog.slice(-50);
+    }
+});
+
 // Hash password before save
 onboardingEmployeeSchema.pre('save', async function () {
     if (!this.isModified('tempPassword')) return;
