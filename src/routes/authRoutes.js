@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, resendOtp } = require('../controllers/authController');
+const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, resendOtp, getBirthdayStatus } = require('../controllers/authController');
 const { authLimiter } = require('../middlewares/rateLimitMiddleware');
 const { getMyself } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
@@ -25,7 +25,9 @@ router.post('/logout', protect, logoutUser);
 router.post('/verify-otp-reset', authLimiter, verifyOtpAndResetPassword);
 router.post('/resend-otp', authLimiter, resendOtp);
 router.post('/upload-profile-picture', protect, handleProfilePictureUpload, uploadProfilePicture);
+router.get('/birthday-status', protect, getBirthdayStatus);
 router.get('/profile', protect, getMyself);
+
 router.get('/verify-workspace', (req, res) => {
     // If req.company exists, it's a valid tenant.
     // If not, but it reached here, it's the root domain (bypassed in tenantMiddleware).

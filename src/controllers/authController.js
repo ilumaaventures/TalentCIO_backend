@@ -461,11 +461,58 @@ const logoutUser = async (req, res) => {
     }
 };
 
+// @desc    Check birthday status for the logged-in employee
+// @route   GET /api/auth/birthday-status
+// @access  Private
+const getBirthdayStatus = async (req, res) => {
+    try {
+        const EmployeeProfile = require('../models/EmployeeProfile');
+        const OnboardingEmployee = require('../models/OnboardingEmployee');
+
+        const userId = req.user._id;
+        const companyId = req.companyId;
+
+        // 1. Check EmployeeProfile
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId }).select('personal.dob');
+        let dob = profile?.personal?.dob;
+
+        // 2. Fallback to OnboardingEmployee
+        if (!dob) {
+            const onboardingRecord = await OnboardingEmployee.findOne({ 
+                transferredToUserId: userId, 
+                companyId 
+            }).select('personalDetails.dateOfBirth');
+            dob = onboardingRecord?.personalDetails?.dateOfBirth;
+        }
+
+        let isBirthday = false;
+        if (dob) {
+            const dobDate = new Date(dob);
+            const today = new Date();
+
+            // Compare day and month only
+            if (dobDate.getDate() === today.getDate() && dobDate.getMonth() === today.getMonth()) {
+                isBirthday = true;
+            }
+        }
+
+        return res.json({
+            isBirthday,
+            employeeName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim()
+        });
+    } catch (error) {
+        console.error('getBirthdayStatus error:', error);
+        return res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
 module.exports = {
     register,
     loginUser,
     logoutUser,
     uploadProfilePicture,
     verifyOtpAndResetPassword,
-    resendOtp
+    resendOtp,
+    getBirthdayStatus
 };
+
