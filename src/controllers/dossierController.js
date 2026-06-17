@@ -516,6 +516,10 @@ exports.submitHRIS = async (req, res) => {
         if (updates.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...updates.family };
         if (updates.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...updates.employment };
         if (updates.compensation) {
+            const uan = updates.compensation.uanNumber;
+            if (uan && !/^\d{12}$/.test(uan)) {
+                return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+            }
             profile.compensation = {
                 ...(profile.compensation?.toObject?.() || {}),
                 ...updates.compensation,
@@ -587,10 +591,17 @@ exports.updateSection = async (req, res) => {
 
         const profile = await EmployeeProfile.findOne({ user: userId,
                 companyId: req.companyId })
-            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber');
+            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +compensation.uanNumber');
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
         // Update Logic
+        if (section === 'compensation') {
+            const uan = updates.uanNumber;
+            if (uan && !/^\d{12}$/.test(uan)) {
+                return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+            }
+        }
+
         if (['experience', 'education'].includes(section)) {
             // These are arrays, replace entirely
             profile[section] = Array.isArray(updates) ? updates : [];
@@ -1351,7 +1362,7 @@ exports.exportHRISExcel = async (req, res) => {
 
         const profiles = await EmployeeProfile.find(query)
             .sort({ 'hris.submittedAt': -1, 'hris.approvalDate': -1 })
-            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.bankDetails.accountNumber +compensation.ctc')
+            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.bankDetails.accountNumber +compensation.ctc +compensation.uanNumber')
             .populate('user', 'employeeCode firstName lastName email')
             .populate('employment.businessUnit', 'name');
 
@@ -1402,6 +1413,7 @@ exports.exportHRISExcel = async (req, res) => {
                     { header: 'Branch Address', key: 'branchAddress', width: 30 },
                     { header: 'Account Number', key: 'accNum', width: 20 },
                     { header: 'IFSC Code', key: 'ifsc', width: 15 },
+                    { header: 'UAN', key: 'uan', width: 15 },
                 ]
             },
             {
@@ -1590,6 +1602,7 @@ exports.exportHRISExcel = async (req, res) => {
                     branchAddress: isFirst ? p.compensation?.bankDetails?.branchAddress : '',
                     accNum: isFirst ? p.compensation?.bankDetails?.accountNumber : '',
                     ifsc: isFirst ? p.compensation?.bankDetails?.ifscCode : '',
+                    uan: isFirst ? p.compensation?.uanNumber : '',
 
                     // Identity
                     pan: isFirst ? p.identity?.panNumber : '',
