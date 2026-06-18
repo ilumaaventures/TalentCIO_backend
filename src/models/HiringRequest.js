@@ -95,7 +95,7 @@ const HiringRequestSchema = new mongoose.Schema({
         niceToHaveSkills: [String],
         experienceMin: Number,
         experienceMax: Number,
-        location: { type: String, enum: ['Onsite', 'Remote', 'Hybrid'] },
+        location: { type: String },
         shift: String
     },
 
