@@ -1566,7 +1566,12 @@ exports.getPreviousCandidates = async (req, res) => {
 
                 applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
 
-                const candidates = await Candidate.find(candidateQuery).lean();
+                const candidates = await Candidate.find(candidateQuery)
+                    .populate('uploadedBy', 'firstName lastName email')
+                    .populate('hiringRequestId', 'requestId roleDetails')
+                    .populate('interviewRounds.assignedTo', 'firstName lastName email')
+                    .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+                    .lean();
                 return {
                     requisition: {
                         _id: legacyRequisition._id,

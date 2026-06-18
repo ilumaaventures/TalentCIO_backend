@@ -105,6 +105,24 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
     }
 
     if (!hasAssignedRequisitionPermission(user, action)) {
+        if (action === 'view' && user?._id) {
+            const mongoose = require('mongoose');
+            const Candidate = mongoose.model('Candidate');
+            const interviewerRequestIds = await Candidate.find({
+                companyId,
+                'interviewRounds.assignedTo': user._id,
+                isDeleted: { $ne: true }
+            }).distinct('hiringRequestId');
+
+            if (interviewerRequestIds.length > 0) {
+                return {
+                    $and: [
+                        query,
+                        { _id: { $in: interviewerRequestIds } }
+                    ]
+                };
+            }
+        }
         return {
             $and: [
                 query,
@@ -115,12 +133,21 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
 
     const baseAccessQuery = { companyId, $or: [] };
     if (action === 'view') {
+        const mongoose = require('mongoose');
+        const Candidate = mongoose.model('Candidate');
+        const interviewerRequestIds = await Candidate.find({
+            companyId,
+            'interviewRounds.assignedTo': user._id,
+            isDeleted: { $ne: true }
+        }).distinct('hiringRequestId');
+
         baseAccessQuery.$or.push(
             { createdBy: user?._id },
             { 'ownership.hiringManager': user?._id },
             { assignedUsers: user?._id },
             { analyticsViewers: user?._id },
-            { 'ownership.interviewPanel': user?._id }
+            { 'ownership.interviewPanel': user?._id },
+            { _id: { $in: interviewerRequestIds } }
         );
     } else {
         baseAccessQuery.$or.push(
@@ -168,13 +195,32 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user, options = 
         });
     }
 
-    if (!hasAssignedRequisitionPermission(user, action)) {
+    let isInterviewer = false;
+    if (action === 'view') {
+        const mongoose = require('mongoose');
+        const Candidate = mongoose.model('Candidate');
+        const count = await Candidate.countDocuments({
+            companyId,
+            hiringRequestId: hiringRequest._id,
+            'interviewRounds.assignedTo': user._id,
+            isDeleted: { $ne: true }
+        });
+        if (count > 0) {
+            isInterviewer = true;
+        }
+    }
+
+    if (!hasAssignedRequisitionPermission(user, action) && !isInterviewer) {
         return false;
     }
 
     const userId = String(user._id);
     let hasBaseAccess = false;
-    if (String(hiringRequest.createdBy?._id || hiringRequest.createdBy || '') === userId) {
+    if (isInterviewer) {
+        hasBaseAccess = true;
+    }
+
+    if (!hasBaseAccess && String(hiringRequest.createdBy?._id || hiringRequest.createdBy || '') === userId) {
         hasBaseAccess = true;
     }
 

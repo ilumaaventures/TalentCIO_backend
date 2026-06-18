@@ -9,7 +9,7 @@ const { upload } = require('../config/cloudinary');
 const multer = require('multer');
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 const analyticsCandidatePermissions = ['ta.analytics.assigned', 'ta.analytics.global'];
-const candidateCreatePermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create', ...analyticsCandidatePermissions];
+const candidateCreatePermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create', 'ta.interview.evaluate', ...analyticsCandidatePermissions];
 const candidateEditPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit', ...analyticsCandidatePermissions];
 const candidateDecisionPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision'];
 const candidateTransferPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer'];
@@ -30,11 +30,13 @@ router.post('/parse-resume', protect, authorizeAny(candidateCreatePermissions), 
 router.get('/user/:userName', protect, candidateController.getCandidatesByPulledBy);
 router.get('/duplicate-check', protect, authorizeAny(candidateCreatePermissions), candidateController.checkDuplicateCandidate);
 router.get('/sources', protect, candidateController.getCandidateSources);
+router.get('/skills/distinct', protect, candidateController.getDistinctCandidateSkills);
 router.post('/sources', protect, authorizeAny(candidateCreatePermissions), candidateController.addCandidateSource);
 router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.delete', 'ta.candidate.edit']), candidateController.deleteCandidateSource);
 
 // CRUD operations
-router.post('/', protect, authorizeAny(candidateCreatePermissions), candidateController.createCandidate);
+router.get('/global/search', protect, candidateController.globalSearchCandidates);
+router.post('/', protect, candidateController.createCandidate);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
 router.get('/candidate/:id/details', protect, candidateController.getCandidateDetailsById);
@@ -62,7 +64,7 @@ router.post('/bulk-schedule-interview', protect, authorizeAny(interviewSchedulin
 router.post('/:id/rounds', protect, authorizeAny(interviewSchedulingPermissions), candidateController.addInterviewRound);
 router.put('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.updateInterviewRound);
 router.delete('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.deleteInterviewRound);
-router.patch('/:id/rounds/:roundId/evaluate', protect, authorizeAny(interviewEvaluationPermissions), candidateController.evaluateInterviewRound);
+router.patch('/:id/rounds/:roundId/evaluate', protect, candidateController.evaluateInterviewRound);
 
 // Skill Ratings
 router.put('/:id/skill-ratings', protect, authorizeAny(candidateEditPermissions), candidateController.updateSkillRatings);
