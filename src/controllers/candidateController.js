@@ -2775,3 +2775,118 @@ exports.transferToOnboarding = async (req, res) => {
         res.status(500).json({ message: 'Server error during transfer', error: error.message });
     }
 };
+
+// --- BULK INTERVIEW SCHEDULING ---
+
+exports.bulkScheduleInterview = async (req, res) => {
+    try {
+        const { candidateIds, levelName, assignedTo, scheduledDate, phase } = req.body;
+
+        if (!levelName || typeof levelName !== 'string' || !levelName.trim()) {
+            return res.status(400).json({ message: 'Level name (round name) is required' });
+        }
+
+        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+            return res.status(400).json({ message: 'At least one candidate must be selected' });
+        }
+
+        const validCandidateIds = candidateIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+        if (validCandidateIds.length === 0) {
+            return res.status(400).json({ message: 'No valid candidate IDs provided' });
+        }
+
+        const candidates = await Candidate.find({
+            _id: { $in: validCandidateIds },
+            companyId: req.companyId
+        }).populate('hiringRequestId', 'requestId roleDetails');
+
+        if (candidates.length === 0) {
+            return res.status(404).json({ message: 'No candidates found for the given IDs' });
+        }
+
+        const roundPhase = Number(phase) > 0 ? Number(phase) : 1;
+        const normalizedAssignedTo = Array.isArray(assignedTo)
+            ? assignedTo.filter((id) => mongoose.Types.ObjectId.isValid(id))
+            : [];
+
+        let scheduled = 0;
+        const failed = [];
+        const scheduledCandidateNames = [];
+
+        for (const candidate of candidates) {
+            try {
+                const { hasAccess } = await ensureCandidateCapability(
+                    candidate,
+                    req.companyId,
+                    req.user,
+                    TA_CAPABILITIES.SCHEDULE_INTERVIEW
+                );
+
+                if (!hasAccess) {
+                    failed.push({
+                        candidateId: candidate._id,
+                        candidateName: candidate.candidateName,
+                        reason: 'Permission denied'
+                    });
+                    continue;
+                }
+
+                const newRound = {
+                    levelName: levelName.trim(),
+                    assignedTo: normalizedAssignedTo,
+                    status: 'Pending',
+                    scheduledDate: scheduledDate || undefined,
+                    phase: roundPhase
+                };
+
+                candidate.interviewRounds.push(newRound);
+                await candidate.save();
+                scheduled += 1;
+                scheduledCandidateNames.push(candidate.candidateName);
+            } catch (candidateError) {
+                failed.push({
+                    candidateId: candidate._id,
+                    candidateName: candidate.candidateName,
+                    reason: candidateError.message || 'Unknown error'
+                });
+            }
+        }
+
+        // Send grouped notifications to assigned interviewers
+        if (normalizedAssignedTo.length > 0 && scheduled > 0) {
+            const io = req.app.get('io');
+            const notifications = normalizedAssignedTo.map((userId) => ({
+                user: userId,
+                companyId: req.companyId,
+                preferenceKey: 'interview_assigned',
+                title: 'New Interviews Assigned',
+                message: scheduled === 1
+                    ? `You have been assigned to evaluate ${scheduledCandidateNames[0]} for the ${levelName} round.`
+                    : `You have been assigned to evaluate ${scheduled} candidates for the ${levelName} round.`,
+                type: 'Interview',
+                link: '/ta'
+            }));
+
+            await NotificationService.createManyNotifications(io, notifications);
+
+            // Emit real-time updates to each assigned interviewer
+            normalizedAssignedTo.forEach((userId) => {
+                NotificationService.emitToUser(io, userId, 'interview_update', {
+                    type: 'BULK_SCHEDULED',
+                    count: scheduled,
+                    levelName
+                });
+            });
+        }
+
+        res.status(200).json({
+            message: `Interview round "${levelName}" scheduled for ${scheduled} candidate(s)`,
+            scheduled,
+            failed: failed.length,
+            errors: failed
+        });
+    } catch (error) {
+        console.error('Error in bulk interview scheduling:', error);
+        res.status(500).json({ message: 'Server error during bulk scheduling', error: error.message });
+    }
+};
