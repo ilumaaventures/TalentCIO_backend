@@ -47,7 +47,9 @@ const canViewCandidateDetailsPage = (user) => {
     const permissionKeys = getUserPermissionKeys(user);
     return permissionKeys.includes('*')
         || permissionKeys.includes('ta.candidate.manage.all')
-        || permissionKeys.includes('ta.candidate.manage.assigned');
+        || permissionKeys.includes('ta.candidate.manage.assigned')
+        || permissionKeys.includes('ta.interview.evaluate')
+        || user?.isTAParticipant === true;
 };
 
 const getUserDisplayName = (user) => {
@@ -965,20 +967,46 @@ exports.createCandidate = async (req, res) => {
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
+
+        let candidate = null;
+        if (req.body._id && mongoose.Types.ObjectId.isValid(req.body._id)) {
+            candidate = await Candidate.findOne({
+                _id: req.body._id,
+                hiringRequestId,
+                companyId: req.companyId
+            }).populate('uploadedBy', 'firstName lastName email');
+        }
+
+        if (!candidate) {
+            const orConditions = [];
+            if (email && typeof email === 'string') {
+                orConditions.push({ email: email.toLowerCase().trim() });
+            }
+            if (mobile && typeof mobile === 'string') {
+                orConditions.push({ mobile: mobile.trim() });
+            }
+
+            if (orConditions.length > 0) {
+                candidate = await Candidate.findOne({
+                    hiringRequestId,
+                    $or: orConditions,
+                    companyId: req.companyId
+                }).populate('uploadedBy', 'firstName lastName email');
+            }
+        }
+
+        const { isCandidateRoundAssignee } = require('../utils/taAccess');
+        const isInterviewerForCandidate = candidate ? isCandidateRoundAssignee(candidate, req.user) : false;
+
         const canManageHiringRequest = await canAccessHiringRequestForCapability(hiringRequest, req.user, TA_CAPABILITIES.EDIT, req.companyId);
-        if (!canManageHiringRequest) {
+        if (!canManageHiringRequest && !isInterviewerForCandidate) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to add candidates to this requisition' });
         }
+
         const isDynamicRequest = isDynamicHiringRequest(hiringRequest);
         const normalizedLegacyStatus = isDynamicRequest
             ? ''
             : toLegacySafeStatus(hasMeaningfulStatus(status) ? status : DEFAULT_LEGACY_CANDIDATE_STATUS);
-
-        let candidate = await Candidate.findOne({
-            hiringRequestId,
-            $or: [{ email: email.toLowerCase().trim() }, { mobile: mobile.trim() }],
-            companyId: req.companyId
-        }).populate('uploadedBy', 'firstName lastName email');
 
         if (candidate) {
             const ownedByCurrentUser = isCandidateOwnedByUser(candidate, req.user?._id);
@@ -987,7 +1015,7 @@ exports.createCandidate = async (req, res) => {
                 companyId: req.companyId,
                 hiringRequest
             });
-            const canAutoUpdateExistingCandidate = allowOwnedDuplicateUpdate && (ownedByCurrentUser || hasDuplicateOverrideAccess);
+            const canAutoUpdateExistingCandidate = allowOwnedDuplicateUpdate && (ownedByCurrentUser || hasDuplicateOverrideAccess || isInterviewerForCandidate);
 
             if (!canAutoUpdateExistingCandidate) {
                 return res.status(409).json({
@@ -1027,114 +1055,184 @@ exports.createCandidate = async (req, res) => {
                 }
             };
 
-            compareAndUpdate('candidateName', candidateName, 'Name');
-            compareAndUpdate('source', normalizedSource, 'Source');
-            if (candidate.referralName !== normalizedReferralName) {
-                candidate.referralName = normalizedReferralName;
-                updatedFields.push('Referral Name');
-            }
-            compareAndUpdate('profilePulledBy', profilePulledBy, 'Pulled By');
-            compareAndUpdate('calledBy', calledBy, 'Called By');
-            compareAndUpdate('rate', rate, 'Rate');
-            compareAndUpdate('currentCTC', currentCTC, 'Current CTC');
-            compareAndUpdate('expectedCTC', expectedCTC, 'Expected CTC');
-            compareAndUpdate('inHandOffer', normalizedInHandOffer, 'Offer in Hand');
-            compareAndUpdate('offerCompany', offerCompany, 'Offer Company');
-            compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
-            compareAndUpdate('offerJoiningDate', offerJoiningDate, 'Offer Joining Date');
-            compareAndUpdate('totalExperience', totalExperience, 'Experience');
-            compareAndUpdate('qualification', qualification, 'Qualification');
-            compareAndUpdate('currentCompany', currentCompany, 'Company');
-            compareAndUpdate('currentLocation', currentLocation, 'Location');
-            compareAndUpdate('preferredLocation', preferredLocation, 'Preferred Location');
-            compareAndUpdate('tatToJoin', tatToJoin, 'TAT Join');
-            compareAndUpdate('noticePeriod', noticePeriod, 'Notice Period');
-            compareAndUpdate('lastWorkingDay', lastWorkingDay, 'DOJ/LWD');
-            if (isDynamicRequest) {
-                const previousDynamicStatus = candidate.currentPhaseStatus || '';
-                const dynamicStatusApplied = applyDynamicImportedStatus(candidate, hiringRequest, status);
-                if (hasMeaningfulStatus(status) && !dynamicStatusApplied) {
-                    return res.status(400).json({
-                        message: `Status "${status}" is not valid for the current dynamic phase`
+            if (canManageHiringRequest) {
+                compareAndUpdate('candidateName', candidateName, 'Name');
+                compareAndUpdate('source', normalizedSource, 'Source');
+                if (candidate.referralName !== normalizedReferralName) {
+                    candidate.referralName = normalizedReferralName;
+                    updatedFields.push('Referral Name');
+                }
+                compareAndUpdate('profilePulledBy', profilePulledBy, 'Pulled By');
+                compareAndUpdate('calledBy', calledBy, 'Called By');
+                compareAndUpdate('rate', rate, 'Rate');
+                compareAndUpdate('currentCTC', currentCTC, 'Current CTC');
+                compareAndUpdate('expectedCTC', expectedCTC, 'Expected CTC');
+                compareAndUpdate('inHandOffer', normalizedInHandOffer, 'Offer in Hand');
+                compareAndUpdate('offerCompany', offerCompany, 'Offer Company');
+                compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
+                compareAndUpdate('offerJoiningDate', offerJoiningDate, 'Offer Joining Date');
+                compareAndUpdate('totalExperience', totalExperience, 'Experience');
+                compareAndUpdate('qualification', qualification, 'Qualification');
+                compareAndUpdate('currentCompany', currentCompany, 'Company');
+                compareAndUpdate('currentLocation', currentLocation, 'Location');
+                compareAndUpdate('preferredLocation', preferredLocation, 'Preferred Location');
+                compareAndUpdate('tatToJoin', tatToJoin, 'TAT Join');
+                compareAndUpdate('noticePeriod', noticePeriod, 'Notice Period');
+                compareAndUpdate('lastWorkingDay', lastWorkingDay, 'DOJ/LWD');
+                if (isDynamicRequest) {
+                    const previousDynamicStatus = candidate.currentPhaseStatus || '';
+                    const dynamicStatusApplied = applyDynamicImportedStatus(candidate, hiringRequest, status);
+                    if (hasMeaningfulStatus(status) && !dynamicStatusApplied) {
+                        return res.status(400).json({
+                            message: `Status "${status}" is not valid for the current dynamic phase`
+                        });
+                    }
+                    if (dynamicStatusApplied && previousDynamicStatus !== candidate.currentPhaseStatus) {
+                        updatedFields.push('Status');
+                    }
+                } else {
+                    compareAndUpdate('status', normalizedLegacyStatus, 'Status');
+                }
+                if (allowOwnedDuplicateUpdate) {
+                    const importedDecision = String(req.body.decision || '').trim() || 'None';
+                    forceUpdateField('decision', importedDecision, 'Decision');
+                    forceUpdateField('profileShared', Boolean(profileShared), 'Profile Shared');
+                } else {
+                    const phase1Locked = hasCandidateMovedToPhase2(candidate);
+                    if (!phase1Locked) {
+                        compareAndUpdate('decision', req.body.decision, 'Decision');
+                    }
+                    if (!phase1Locked || profileShared !== false) {
+                        compareAndUpdate('profileShared', profileShared, 'Profile Shared');
+                    }
+                }
+                compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
+                compareAndUpdate('remark', remark, 'Remark');
+                if (phase2InterviewerFeedback !== undefined) {
+                    compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
+                }
+                if (normalizedPhase2InterviewStatus !== undefined) {
+                    compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
+                } else {
+                    const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(phase2Decision);
+                    if (implicitPhase2InterviewStatus !== undefined) {
+                        compareAndUpdate('phase2InterviewStatus', implicitPhase2InterviewStatus, 'Phase 2 Interview Status');
+                    }
+                }
+                if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
+                    candidate.profileShared = true;
+                    updatedFields.push('Profile Shared');
+                }
+
+                if (hasRealResume(resumeUrl) && !hasRealResume(candidate.resumeUrl)) {
+                    candidate.resumeUrl = resumeUrl;
+                    candidate.resumePublicId = resumePublicId;
+                    updatedFields.push('Resume');
+                }
+
+                if (mustHaveSkills && Array.isArray(mustHaveSkills)) {
+                    const existingSkills = candidate.mustHaveSkills || [];
+                    const skillsChanged = existingSkills.length !== normalizedMustHaveSkills.length ||
+                        normalizedMustHaveSkills.some((s, idx) =>
+                            !existingSkills[idx] ||
+                            existingSkills[idx].skill !== s.skill ||
+                            existingSkills[idx].experience !== s.experience
+                        );
+
+                    if (skillsChanged) {
+                        candidate.mustHaveSkills = normalizedMustHaveSkills;
+                        updatedFields.push('Skills');
+                    }
+                }
+                if (niceToHaveSkills && Array.isArray(niceToHaveSkills)) {
+                    candidate.niceToHaveSkills = normalizedNiceToHaveSkills;
+                }
+                if (interviewRounds && Array.isArray(interviewRounds)) {
+                    const existingRounds = candidate.interviewRounds || [];
+                    const roundsChanged = existingRounds.length !== interviewRounds.length ||
+                        interviewRounds.some((r, idx) => {
+                            const er = existingRounds[idx];
+                            if (!er) return true;
+                            return er.levelName !== r.levelName ||
+                                er.status !== r.status ||
+                                er.remarks !== r.remarks ||
+                                er.feedback !== r.feedback ||
+                                er.rating !== r.rating ||
+                                er.evaluatedBy?.toString() !== r.evaluatedBy?.toString();
+                        });
+
+                    if (roundsChanged) {
+                        candidate.interviewRounds = interviewRounds;
+                        updatedFields.push('Interview History');
+                    }
+                }
+            } else {
+                // User is an interviewer: Only update assigned interview rounds, keep everything else as old data
+                if (interviewRounds && Array.isArray(interviewRounds)) {
+                    const existingRounds = candidate.interviewRounds || [];
+                    const userId = req.user._id.toString();
+                    let roundsUpdated = false;
+
+                    const updatedRounds = existingRounds.map((er, idx) => {
+                        const isAssigned = er.assignedTo && er.assignedTo.some(id => id.toString() === userId || id._id?.toString() === userId);
+                        if (isAssigned) {
+                            // Find matching round in incoming interviewRounds by name, round number, or fallback to index
+                            const erRoundNum = idx + 1;
+                            const incoming = interviewRounds.find(r => {
+                                const nameMatch = String(r.levelName).trim().toLowerCase() === String(er.levelName).trim().toLowerCase();
+                                if (nameMatch) return true;
+                                
+                                const erMatch = String(er.levelName).toLowerCase().match(/round\s*(\d+)/i);
+                                const rMatch = String(r.levelName).toLowerCase().match(/round\s*(\d+)/i);
+                                if (rMatch) {
+                                    const rNum = parseInt(rMatch[1], 10);
+                                    if (erMatch) {
+                                        return parseInt(erMatch[1], 10) === rNum;
+                                    }
+                                    return erRoundNum === rNum;
+                                }
+                                return false;
+                            }) || interviewRounds[idx];
+
+                            if (incoming) {
+                                let roundChanged = false;
+                                if (incoming.status && er.status !== incoming.status) {
+                                    er.status = incoming.status;
+                                    roundChanged = true;
+                                }
+                                if (incoming.scheduledDate && (!er.scheduledDate || new Date(er.scheduledDate).getTime() !== new Date(incoming.scheduledDate).getTime())) {
+                                    er.scheduledDate = incoming.scheduledDate;
+                                    roundChanged = true;
+                                }
+                                if (incoming.feedback !== undefined && er.feedback !== incoming.feedback) {
+                                    er.feedback = incoming.feedback;
+                                    roundChanged = true;
+                                }
+                                if (incoming.rating !== undefined && er.rating !== incoming.rating) {
+                                    er.rating = incoming.rating;
+                                    roundChanged = true;
+                                }
+                                if (incoming.evaluatedBy && er.evaluatedBy?.toString() !== incoming.evaluatedBy?.toString()) {
+                                    er.evaluatedBy = incoming.evaluatedBy;
+                                    roundChanged = true;
+                                }
+                                if (incoming.skillRatings && Array.isArray(incoming.skillRatings)) {
+                                    er.skillRatings = incoming.skillRatings;
+                                    roundChanged = true;
+                                }
+
+                                if (roundChanged) {
+                                    roundsUpdated = true;
+                                }
+                            }
+                        }
+                        return er;
                     });
-                }
-                if (dynamicStatusApplied && previousDynamicStatus !== candidate.currentPhaseStatus) {
-                    updatedFields.push('Status');
-                }
-            } else {
-                compareAndUpdate('status', normalizedLegacyStatus, 'Status');
-            }
-            if (allowOwnedDuplicateUpdate) {
-                const importedDecision = String(req.body.decision || '').trim() || 'None';
-                forceUpdateField('decision', importedDecision, 'Decision');
-                forceUpdateField('profileShared', Boolean(profileShared), 'Profile Shared');
-            } else {
-                const phase1Locked = hasCandidateMovedToPhase2(candidate);
-                if (!phase1Locked) {
-                    compareAndUpdate('decision', req.body.decision, 'Decision');
-                }
-                if (!phase1Locked || profileShared !== false) {
-                    compareAndUpdate('profileShared', profileShared, 'Profile Shared');
-                }
-            }
-            compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
-            compareAndUpdate('remark', remark, 'Remark');
-            if (phase2InterviewerFeedback !== undefined) {
-                compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
-            }
-            if (normalizedPhase2InterviewStatus !== undefined) {
-                compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
-            } else {
-                const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(phase2Decision);
-                if (implicitPhase2InterviewStatus !== undefined) {
-                    compareAndUpdate('phase2InterviewStatus', implicitPhase2InterviewStatus, 'Phase 2 Interview Status');
-                }
-            }
-            if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
-                candidate.profileShared = true;
-                updatedFields.push('Profile Shared');
-            }
 
-            if (hasRealResume(resumeUrl) && !hasRealResume(candidate.resumeUrl)) {
-                candidate.resumeUrl = resumeUrl;
-                candidate.resumePublicId = resumePublicId;
-                updatedFields.push('Resume');
-            }
-
-            if (mustHaveSkills && Array.isArray(mustHaveSkills)) {
-                const existingSkills = candidate.mustHaveSkills || [];
-                const skillsChanged = existingSkills.length !== normalizedMustHaveSkills.length ||
-                    normalizedMustHaveSkills.some((s, idx) =>
-                        !existingSkills[idx] ||
-                        existingSkills[idx].skill !== s.skill ||
-                        existingSkills[idx].experience !== s.experience
-                    );
-
-                if (skillsChanged) {
-                    candidate.mustHaveSkills = normalizedMustHaveSkills;
-                    updatedFields.push('Skills');
-                }
-            }
-            if (niceToHaveSkills && Array.isArray(niceToHaveSkills)) {
-                candidate.niceToHaveSkills = normalizedNiceToHaveSkills;
-            }
-            if (interviewRounds && Array.isArray(interviewRounds)) {
-                const existingRounds = candidate.interviewRounds || [];
-                const roundsChanged = existingRounds.length !== interviewRounds.length ||
-                    interviewRounds.some((r, idx) => {
-                        const er = existingRounds[idx];
-                        if (!er) return true;
-                        return er.levelName !== r.levelName ||
-                            er.status !== r.status ||
-                            er.remarks !== r.remarks ||
-                            er.feedback !== r.feedback ||
-                            er.rating !== r.rating ||
-                            er.evaluatedBy?.toString() !== r.evaluatedBy?.toString();
-                    });
-
-                if (roundsChanged) {
-                    candidate.interviewRounds = interviewRounds;
-                    updatedFields.push('Interview History');
+                    if (roundsUpdated) {
+                        candidate.interviewRounds = updatedRounds;
+                        updatedFields.push('Interview History');
+                    }
                 }
             }
 
@@ -1500,16 +1598,19 @@ exports.getCandidateById = async (req, res) => {
 
 exports.getCandidateDetailsById = async (req, res) => {
     try {
-        if (!canViewCandidateDetailsPage(req.user)) {
-            return res.status(403).json({
-                message: 'Forbidden: Candidate details page requires ta.candidate.manage.all or ta.candidate.manage.assigned'
-            });
-        }
-
         const { id } = req.params;
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
             return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const { isCandidateRoundAssignee } = require('../utils/taAccess');
+        const isInterviewer = isCandidateRoundAssignee(candidate, req.user);
+
+        if (!canViewCandidateDetailsPage(req.user) && !isInterviewer) {
+            return res.status(403).json({
+                message: 'Forbidden: Candidate details page requires ta.candidate.manage.all or ta.candidate.manage.assigned'
+            });
         }
 
         const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
@@ -2775,3 +2876,578 @@ exports.transferToOnboarding = async (req, res) => {
         res.status(500).json({ message: 'Server error during transfer', error: error.message });
     }
 };
+
+// --- BULK INTERVIEW SCHEDULING ---
+
+exports.bulkScheduleInterview = async (req, res) => {
+    try {
+        const { candidateIds, levelName, assignedTo, scheduledDate, phase } = req.body;
+
+        if (!levelName || typeof levelName !== 'string' || !levelName.trim()) {
+            return res.status(400).json({ message: 'Level name (round name) is required' });
+        }
+
+        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+            return res.status(400).json({ message: 'At least one candidate must be selected' });
+        }
+
+        const validCandidateIds = candidateIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+        if (validCandidateIds.length === 0) {
+            return res.status(400).json({ message: 'No valid candidate IDs provided' });
+        }
+
+        const candidates = await Candidate.find({
+            _id: { $in: validCandidateIds },
+            companyId: req.companyId
+        }).populate('hiringRequestId', 'requestId roleDetails');
+
+        if (candidates.length === 0) {
+            return res.status(404).json({ message: 'No candidates found for the given IDs' });
+        }
+
+        const roundPhase = Number(phase) > 0 ? Number(phase) : 1;
+        const normalizedAssignedTo = Array.isArray(assignedTo)
+            ? assignedTo.filter((id) => mongoose.Types.ObjectId.isValid(id))
+            : [];
+
+        let scheduled = 0;
+        const failed = [];
+        const scheduledCandidateNames = [];
+
+        for (const candidate of candidates) {
+            try {
+                const { hasAccess } = await ensureCandidateCapability(
+                    candidate,
+                    req.companyId,
+                    req.user,
+                    TA_CAPABILITIES.SCHEDULE_INTERVIEW
+                );
+
+                if (!hasAccess) {
+                    failed.push({
+                        candidateId: candidate._id,
+                        candidateName: candidate.candidateName,
+                        reason: 'Permission denied'
+                    });
+                    continue;
+                }
+
+                const newRound = {
+                    levelName: levelName.trim(),
+                    assignedTo: normalizedAssignedTo,
+                    status: 'Pending',
+                    scheduledDate: scheduledDate || undefined,
+                    phase: roundPhase
+                };
+
+                candidate.interviewRounds.push(newRound);
+                await candidate.save();
+                scheduled += 1;
+                scheduledCandidateNames.push(candidate.candidateName);
+            } catch (candidateError) {
+                failed.push({
+                    candidateId: candidate._id,
+                    candidateName: candidate.candidateName,
+                    reason: candidateError.message || 'Unknown error'
+                });
+            }
+        }
+
+        // Send grouped notifications to assigned interviewers
+        if (normalizedAssignedTo.length > 0 && scheduled > 0) {
+            const io = req.app.get('io');
+            const notifications = normalizedAssignedTo.map((userId) => ({
+                user: userId,
+                companyId: req.companyId,
+                preferenceKey: 'interview_assigned',
+                title: 'New Interviews Assigned',
+                message: scheduled === 1
+                    ? `You have been assigned to evaluate ${scheduledCandidateNames[0]} for the ${levelName} round.`
+                    : `You have been assigned to evaluate ${scheduled} candidates for the ${levelName} round.`,
+                type: 'Interview',
+                link: '/ta'
+            }));
+
+            await NotificationService.createManyNotifications(io, notifications);
+
+            // Emit real-time updates to each assigned interviewer
+            normalizedAssignedTo.forEach((userId) => {
+                NotificationService.emitToUser(io, userId, 'interview_update', {
+                    type: 'BULK_SCHEDULED',
+                    count: scheduled,
+                    levelName
+                });
+            });
+        }
+
+        res.status(200).json({
+            message: `Interview round "${levelName}" scheduled for ${scheduled} candidate(s)`,
+            scheduled,
+            failed: failed.length,
+            errors: failed
+        });
+    } catch (error) {
+        console.error('Error in bulk interview scheduling:', error);
+        res.status(500).json({ message: 'Server error during bulk scheduling', error: error.message });
+    }
+};
+
+const calculateCandidateMatchScore = (candidate, query) => {
+    let totalActiveWeight = 0;
+    let earnedWeight = 0;
+
+    // 1. Search Query
+    if (query.search && String(query.search).trim() !== '') {
+        const term = String(query.search).trim().toLowerCase();
+        const weight = 30;
+        totalActiveWeight += weight;
+
+        let scorePercent = 0;
+
+        const name = String(candidate.candidateName || '').toLowerCase();
+        const email = String(candidate.email || '').toLowerCase();
+        const mobile = String(candidate.mobile || '');
+        const currentCompany = String(candidate.currentCompany || '').toLowerCase();
+        const currentLocation = String(candidate.currentLocation || '').toLowerCase();
+
+        if (name === term || email === term || mobile === term) {
+            scorePercent = 1.0;
+        } else if (name.includes(term) || email.includes(term) || mobile.includes(term)) {
+            scorePercent = 0.9;
+        } else if (currentCompany.includes(term)) {
+            scorePercent = 0.7;
+        } else if (currentLocation.includes(term)) {
+            scorePercent = 0.7;
+        }
+
+        earnedWeight += scorePercent * weight;
+    }
+
+    // 2. Skills
+    if (query.skills) {
+        const querySkills = parseStringArrayQuery(query.skills);
+        if (querySkills.length > 0) {
+            const weight = 35;
+            totalActiveWeight += weight;
+
+            const candidateSkills = [];
+            if (Array.isArray(candidate.mustHaveSkills)) {
+                candidate.mustHaveSkills.forEach(s => { if (s && s.skill) candidateSkills.push(s.skill.toLowerCase()); });
+            }
+            if (Array.isArray(candidate.niceToHaveSkills)) {
+                candidate.niceToHaveSkills.forEach(s => { if (s && s.skill) candidateSkills.push(s.skill.toLowerCase()); });
+            }
+            if (Array.isArray(candidate.skillRatings)) {
+                candidate.skillRatings.forEach(s => { if (s && s.skill) candidateSkills.push(s.skill.toLowerCase()); });
+            }
+
+            let matchedCount = 0;
+            querySkills.forEach(qs => {
+                const qSkillLower = qs.toLowerCase();
+                if (candidateSkills.some(cs => cs.includes(qSkillLower) || qSkillLower.includes(cs))) {
+                    matchedCount++;
+                }
+            });
+
+            const matchRatio = matchedCount / querySkills.length;
+            earnedWeight += matchRatio * weight;
+        }
+    }
+
+    // 3. Experience Range
+    const hasMinExp = query.minExperience !== undefined && query.minExperience !== '';
+    const hasMaxExp = query.maxExperience !== undefined && query.maxExperience !== '';
+    if (hasMinExp || hasMaxExp) {
+        const weight = 15;
+        totalActiveWeight += weight;
+
+        const candidateExp = Number(candidate.totalExperience) || 0;
+        let isWithinRange = true;
+
+        if (hasMinExp) {
+            const min = Number(query.minExperience);
+            if (Number.isFinite(min) && candidateExp < min) {
+                isWithinRange = false;
+            }
+        }
+        if (hasMaxExp) {
+            const max = Number(query.maxExperience);
+            if (Number.isFinite(max) && candidateExp > max) {
+                isWithinRange = false;
+            }
+        }
+
+        if (isWithinRange) {
+            earnedWeight += weight;
+        }
+    }
+
+    // 4. Location
+    if (query.location && String(query.location).trim() !== '') {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const qLoc = String(query.location).trim().toLowerCase();
+        const curLoc = String(candidate.currentLocation || '').toLowerCase();
+        const prefLoc = String(candidate.preferredLocation || '').toLowerCase();
+
+        if (curLoc.includes(qLoc) || prefLoc.includes(qLoc)) {
+            earnedWeight += weight;
+        }
+    }
+
+    // 5. Notice Period
+    if (query.maxNoticePeriod !== undefined && query.maxNoticePeriod !== '') {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const maxNP = Number(query.maxNoticePeriod);
+        const candidateNP = Number(candidate.noticePeriod) || 0;
+
+        if (Number.isFinite(maxNP)) {
+            if (candidateNP <= maxNP) {
+                earnedWeight += weight;
+            } else if (candidateNP <= maxNP + 15) {
+                earnedWeight += weight * 0.5;
+            }
+        }
+    }
+
+    // 6. Expected CTC Range
+    const hasMinECTC = query.minExpectedCTC !== undefined && query.minExpectedCTC !== '';
+    const hasMaxECTC = query.maxExpectedCTC !== undefined && query.maxExpectedCTC !== '';
+    if (hasMinECTC || hasMaxECTC) {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const candidateECTC = Number(candidate.expectedCTC) || 0;
+        let isWithinRange = true;
+
+        if (hasMinECTC) {
+            const min = Number(query.minExpectedCTC);
+            if (Number.isFinite(min) && candidateECTC < min) {
+                isWithinRange = false;
+            }
+        }
+        if (hasMaxECTC) {
+            const max = Number(query.maxExpectedCTC);
+            if (Number.isFinite(max) && candidateECTC > max) {
+                isWithinRange = false;
+            }
+        }
+
+        if (isWithinRange) {
+            earnedWeight += weight;
+        }
+    }
+
+    // 7. Source
+    if (query.source) {
+        const querySources = parseStringArrayQuery(query.source);
+        if (querySources.length > 0) {
+            const weight = 10;
+            totalActiveWeight += weight;
+
+            const candSource = String(candidate.source || '').trim().toLowerCase();
+            const isMatched = querySources.some(qs => qs.trim().toLowerCase() === candSource);
+
+            if (isMatched) {
+                earnedWeight += weight;
+            }
+        }
+    }
+
+    // 8. In Hand Offer
+    if (query.inHandOffer !== undefined && query.inHandOffer !== '') {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const qInHand = query.inHandOffer === 'true';
+        const candInHand = !!candidate.inHandOffer;
+
+        if (qInHand === candInHand) {
+            earnedWeight += weight;
+        }
+    }
+
+    // 9. Client
+    if (query.client && String(query.client).trim() !== '') {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const qClient = String(query.client).trim().toLowerCase();
+        const hrClient = String(candidate.hiringRequestId?.client || '').toLowerCase();
+
+        if (hrClient.includes(qClient)) {
+            earnedWeight += weight;
+        }
+    }
+
+    // 10. Decision
+    if (query.decision && String(query.decision).trim() !== '') {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const qDec = String(query.decision).trim().toLowerCase();
+        const candDec = String(candidate.decision || '').toLowerCase();
+        const candP2Dec = String(candidate.phase2Decision || '').toLowerCase();
+        const candP3Dec = String(candidate.phase3Decision || '').toLowerCase();
+
+        if (candDec === qDec || candP2Dec === qDec || candP3Dec === qDec) {
+            earnedWeight += weight;
+        }
+    }
+
+    // Fallback: profile completeness score if no filters/keywords are active
+    if (totalActiveWeight === 0) {
+        let completeness = 0;
+        let totalCompWeight = 0;
+
+        totalCompWeight += 30;
+        if (candidate.candidateName) completeness += 10;
+        if (candidate.email) completeness += 10;
+        if (candidate.mobile) completeness += 10;
+
+        totalCompWeight += 20;
+        const hasSkills = (candidate.mustHaveSkills?.length > 0 || candidate.niceToHaveSkills?.length > 0 || candidate.skillRatings?.length > 0);
+        if (hasSkills) completeness += 20;
+
+        totalCompWeight += 15;
+        if (candidate.totalExperience !== undefined && candidate.totalExperience !== null) completeness += 15;
+
+        totalCompWeight += 15;
+        if (candidate.resumeUrl) completeness += 15;
+
+        totalCompWeight += 10;
+        if (candidate.noticePeriod !== undefined && candidate.noticePeriod !== null) completeness += 10;
+
+        totalCompWeight += 10;
+        if (candidate.currentLocation || candidate.preferredLocation) completeness += 10;
+
+        return Math.round((completeness / totalCompWeight) * 100);
+    }
+
+    return Math.round((earnedWeight / totalActiveWeight) * 100);
+};
+
+exports.globalSearchCandidates = async (req, res) => {
+    try {
+        const query = { companyId: req.companyId, isDeleted: { $ne: true } };
+
+        if (req.query.search) {
+            const searchRegex = new RegExp(req.query.search.trim(), 'i');
+            query.$or = [
+                { candidateName: searchRegex },
+                { email: searchRegex },
+                { mobile: searchRegex },
+                { currentLocation: searchRegex },
+                { currentCompany: searchRegex }
+            ];
+        }
+
+        if (req.query.source) {
+            const sources = parseStringArrayQuery(req.query.source);
+            if (sources.length > 0) {
+                query.source = { $in: sources.map(s => new RegExp(`^${s.trim()}$`, 'i')) };
+            }
+        }
+
+        if (req.query.minExperience !== undefined || req.query.maxExperience !== undefined) {
+            query.totalExperience = {};
+            if (req.query.minExperience !== undefined && req.query.minExperience !== '') {
+                const minExp = Number(req.query.minExperience);
+                if (Number.isFinite(minExp)) {
+                    query.totalExperience.$gte = minExp;
+                }
+            }
+            if (req.query.maxExperience !== undefined && req.query.maxExperience !== '') {
+                const maxExp = Number(req.query.maxExperience);
+                if (Number.isFinite(maxExp)) {
+                    query.totalExperience.$lte = maxExp;
+                }
+            }
+            if (Object.keys(query.totalExperience).length === 0) {
+                delete query.totalExperience;
+            }
+        }
+
+        if (req.query.skills) {
+            const skillsList = parseStringArrayQuery(req.query.skills);
+            if (skillsList.length > 0) {
+                const skillsRegexList = skillsList.map(s => new RegExp(s.trim(), 'i'));
+                query.$and = query.$and || [];
+                query.$and.push({
+                    $or: [
+                        { 'mustHaveSkills.skill': { $in: skillsRegexList } },
+                        { 'niceToHaveSkills.skill': { $in: skillsRegexList } },
+                        { 'skillRatings.skill': { $in: skillsRegexList } }
+                    ]
+                });
+            }
+        }
+
+        if (req.query.client) {
+            const clientHiringRequests = await HiringRequest.find({
+                companyId: req.companyId,
+                client: new RegExp(req.query.client.trim(), 'i')
+            }).select('_id').lean();
+            
+            const hiringRequestIds = clientHiringRequests.map(hr => hr._id);
+            query.hiringRequestId = { $in: hiringRequestIds };
+        }
+
+        if (req.query.location) {
+            const locRegex = new RegExp(req.query.location.trim(), 'i');
+            query.$and = query.$and || [];
+            query.$and.push({
+                $or: [
+                    { currentLocation: locRegex },
+                    { preferredLocation: locRegex }
+                ]
+            });
+        }
+
+        if (req.query.maxNoticePeriod !== undefined && req.query.maxNoticePeriod !== '') {
+            const noticeVal = Number(req.query.maxNoticePeriod);
+            if (Number.isFinite(noticeVal)) {
+                query.noticePeriod = { $lte: noticeVal };
+            }
+        }
+
+        if (req.query.minCurrentCTC !== undefined || req.query.maxCurrentCTC !== undefined) {
+            query.currentCTC = {};
+            if (req.query.minCurrentCTC !== undefined && req.query.minCurrentCTC !== '') {
+                const minCTC = Number(req.query.minCurrentCTC);
+                if (Number.isFinite(minCTC)) {
+                    query.currentCTC.$gte = minCTC;
+                }
+            }
+            if (req.query.maxCurrentCTC !== undefined && req.query.maxCurrentCTC !== '') {
+                const maxCTC = Number(req.query.maxCurrentCTC);
+                if (Number.isFinite(maxCTC)) {
+                    query.currentCTC.$lte = maxCTC;
+                }
+            }
+            if (Object.keys(query.currentCTC).length === 0) {
+                delete query.currentCTC;
+            }
+        }
+
+        if (req.query.minExpectedCTC !== undefined || req.query.maxExpectedCTC !== undefined) {
+            query.expectedCTC = {};
+            if (req.query.minExpectedCTC !== undefined && req.query.minExpectedCTC !== '') {
+                const minCTC = Number(req.query.minExpectedCTC);
+                if (Number.isFinite(minCTC)) {
+                    query.expectedCTC.$gte = minCTC;
+                }
+            }
+            if (req.query.maxExpectedCTC !== undefined && req.query.maxExpectedCTC !== '') {
+                const maxCTC = Number(req.query.maxExpectedCTC);
+                if (Number.isFinite(maxCTC)) {
+                    query.expectedCTC.$lte = maxCTC;
+                }
+            }
+            if (Object.keys(query.expectedCTC).length === 0) {
+                delete query.expectedCTC;
+            }
+        }
+
+        if (req.query.inHandOffer !== undefined && req.query.inHandOffer !== '') {
+            query.inHandOffer = req.query.inHandOffer === 'true';
+        }
+
+        if (req.query.decision) {
+            const decVal = req.query.decision.trim();
+            query.$and = query.$and || [];
+            query.$and.push({
+                $or: [
+                    { decision: decVal },
+                    { phase2Decision: decVal },
+                    { phase3Decision: decVal }
+                ]
+            });
+        }
+
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const limit = Math.max(Number(req.query.limit) || 15, 1);
+        const skip = (page - 1) * limit;
+
+        const total = await Candidate.countDocuments(query);
+        const candidates = await Candidate.find(query)
+            .populate({
+                path: 'hiringRequestId',
+                select: 'requestId roleDetails client clientConfidential'
+            })
+            .populate('uploadedBy', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const serializedCandidates = candidates.map(candidate => {
+            const serialized = serializeCandidateForViewer({
+                candidate,
+                user: req.user,
+                hiringRequest: candidate.hiringRequestId
+            });
+            serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
+            return serialized;
+        });
+
+        res.status(200).json({
+            currentPage: page,
+            totalPages: Math.max(Math.ceil(total / limit), 1),
+            count: total,
+            limit,
+            candidates: serializedCandidates
+        });
+    } catch (error) {
+        console.error('Error in global search candidates:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.getDistinctCandidateSkills = async (req, res) => {
+    try {
+        const skills = await Candidate.aggregate([
+            { $match: { companyId: req.companyId, isDeleted: { $ne: true } } },
+            {
+                $project: {
+                    allSkills: {
+                        $concatArrays: [
+                            { $ifNull: ["$mustHaveSkills.skill", []] },
+                            { $ifNull: ["$niceToHaveSkills.skill", []] },
+                            { $ifNull: ["$skillRatings.skill", []] }
+                        ]
+                    }
+                }
+            },
+            { $unwind: "$allSkills" },
+            { $group: { _id: null, uniqueSkills: { $addToSet: "$allSkills" } } }
+        ]);
+
+        const uniqueSkillsList = skills.length > 0 ? skills[0].uniqueSkills : [];
+        
+        const formattedSkills = uniqueSkillsList
+            .map(s => String(s || '').trim())
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
+
+        const uniqueSet = new Set();
+        const finalSkills = [];
+        formattedSkills.forEach(s => {
+            const lower = s.toLowerCase();
+            if (!uniqueSet.has(lower)) {
+                uniqueSet.add(lower);
+                finalSkills.push(s);
+            }
+        });
+
+        res.status(200).json(finalSkills);
+    } catch (error) {
+        console.error('Error fetching distinct candidate skills:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+

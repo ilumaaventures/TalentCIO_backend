@@ -302,7 +302,7 @@ const canAccessCandidateThroughHiringRequest = async ({
             && await canAccessHiringRequestForCapability(resolvedHiringRequest, user, TA_CAPABILITIES.EDIT, companyId);
     }
 
-    if (capability === TA_CAPABILITIES.VIEW && isCandidateRoundAssignee(candidate, user, roundId)) {
+    if ([TA_CAPABILITIES.VIEW, TA_CAPABILITIES.EDIT, TA_CAPABILITIES.MAKE_DECISION].includes(capability) && isCandidateRoundAssignee(candidate, user, roundId)) {
         return true;
     }
 
