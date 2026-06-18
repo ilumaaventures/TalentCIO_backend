@@ -1662,6 +1662,13 @@ exports.deleteCandidate = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to delete this candidate' });
         }
 
+        // Clear isTransferredToOnboarding and delete onboarding record if candidate was transferred
+        if (candidate.isTransferredToOnboarding) {
+            candidate.isTransferredToOnboarding = false;
+            await candidate.save();
+            await OnboardingEmployee.deleteOne({ candidateId: id, companyId: req.companyId });
+        }
+
         await candidate.softDelete(req.user._id);
 
         res.status(200).json({ message: 'Candidate moved to bin' });
