@@ -518,5 +518,12 @@ module.exports = [
         key: "hr_email.send",
         module: "HR",
         description: "Send HR emails to active employees and save attachments to dossiers"
+    },
+
+    // LEAVE
+    {
+        key: "leave.config.manage",
+        module: "LEAVE",
+        description: "Create, update, and delete leave policies (leave types, accrual rules, carry-forward settings)"
     }
 ];

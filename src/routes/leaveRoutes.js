@@ -3,6 +3,7 @@ const { requireModule } = require('../middlewares/moduleGuard');
 const router = express.Router();
 // Note: requireModule added after protect middleware
 const { protect, admin } = require('../middlewares/authMiddleware');
+const { authorize } = require('../middlewares/authorize');
 const { upload } = require('../config/cloudinary');
 const { getLeavePolicies, updateLeavePolicy, deleteLeavePolicy, seedDefaultPolicies, triggerMonthlyAccrual, triggerYearlyAccrual } = require('../controllers/leaveConfigController');
 const { applyLeave, getMyLeaves, getMyBalances, getManagerApprovals, updateLeaveStatus, cancelLeave } = require('../controllers/leaveController');
@@ -14,11 +15,11 @@ router.get('/bootstrap', getLeavesBootstrap);
 // Configuration Routes
 router.route('/config')
     .get(getLeavePolicies)
-    .post(admin, updateLeavePolicy);
+    .post(authorize('leave.config.manage'), updateLeavePolicy);
 
-router.delete('/config/:id', protect, admin, deleteLeavePolicy);
+router.delete('/config/:id', protect, authorize('leave.config.manage'), deleteLeavePolicy);
 
-router.post('/config/seed', protect, admin, seedDefaultPolicies);
+router.post('/config/seed', protect, authorize('leave.config.manage'), seedDefaultPolicies);
 
 // Accrual Triggers (Manual/Cron)
 router.post('/accrual/monthly', protect, admin, triggerMonthlyAccrual);
