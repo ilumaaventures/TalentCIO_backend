@@ -373,6 +373,34 @@ exports.updateRequisitionAccess = async (req, res) => {
             ? [...new Set(req.body.interviewPanel.map((userId) => String(userId)).filter(Boolean))]
             : [];
 
+        const unassignClientUsers = Array.isArray(req.body?.unassignClientUsers)
+            ? [...new Set(req.body.unassignClientUsers.map((userId) => String(userId)).filter(Boolean))]
+            : [];
+
+        if (unassignClientUsers.length > 0) {
+            await User.updateMany(
+                {
+                    companyId: req.companyId,
+                    _id: { $in: unassignClientUsers }
+                },
+                {
+                    $pull: { taAssignedClients: request.client },
+                    $inc: { tokenVersion: 1 }
+                }
+            );
+
+            await HiringRequest.updateMany(
+                {
+                    companyId: req.companyId,
+                    client: request.client,
+                    _id: { $ne: request._id }
+                },
+                {
+                    $addToSet: { assignedUsers: { $each: unassignClientUsers } }
+                }
+            );
+        }
+
         request.assignedUsers = await mergeAssignedUsersWithClientAssignments({
             companyId: req.companyId,
             clientName: request.client,
