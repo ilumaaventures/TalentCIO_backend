@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, resendOtp, getBirthdayStatus } = require('../controllers/authController');
+const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, verifyOtp, resendOtp, getBirthdayStatus, changePassword } = require('../controllers/authController');
 const { authLimiter } = require('../middlewares/rateLimitMiddleware');
 const { getMyself } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
@@ -23,10 +23,12 @@ router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, loginUser);
 router.post('/logout', protect, logoutUser);
 router.post('/verify-otp-reset', authLimiter, verifyOtpAndResetPassword);
+router.post('/verify-otp', authLimiter, verifyOtp);
 router.post('/resend-otp', authLimiter, resendOtp);
 router.post('/upload-profile-picture', protect, handleProfilePictureUpload, uploadProfilePicture);
 router.get('/birthday-status', protect, getBirthdayStatus);
 router.get('/profile', protect, getMyself);
+router.put('/change-password', protect, changePassword);
 
 router.get('/verify-workspace', (req, res) => {
     // If req.company exists, it's a valid tenant.
