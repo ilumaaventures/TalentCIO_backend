@@ -3113,6 +3113,34 @@ const calculateCandidateMatchScore = (candidate, query) => {
         }
     }
 
+    // 5b. Current CTC Range
+    const hasMinCCTC = query.minCurrentCTC !== undefined && query.minCurrentCTC !== '';
+    const hasMaxCCTC = query.maxCurrentCTC !== undefined && query.maxCurrentCTC !== '';
+    if (hasMinCCTC || hasMaxCCTC) {
+        const weight = 10;
+        totalActiveWeight += weight;
+
+        const candidateCCTC = Number(candidate.currentCTC) || 0;
+        let isWithinRange = true;
+
+        if (hasMinCCTC) {
+            const min = Number(query.minCurrentCTC);
+            if (Number.isFinite(min) && candidateCCTC < min) {
+                isWithinRange = false;
+            }
+        }
+        if (hasMaxCCTC) {
+            const max = Number(query.maxCurrentCTC);
+            if (Number.isFinite(max) && candidateCCTC > max) {
+                isWithinRange = false;
+            }
+        }
+
+        if (isWithinRange) {
+            earnedWeight += weight;
+        }
+    }
+
     // 6. Expected CTC Range
     const hasMinECTC = query.minExpectedCTC !== undefined && query.minExpectedCTC !== '';
     const hasMaxECTC = query.maxExpectedCTC !== undefined && query.maxExpectedCTC !== '';
@@ -3372,27 +3400,73 @@ exports.globalSearchCandidates = async (req, res) => {
         const limit = Math.max(Number(req.query.limit) || 15, 1);
         const skip = (page - 1) * limit;
 
-        const total = await Candidate.countDocuments(query);
-        const candidates = await Candidate.find(query)
-            .populate({
-                path: 'hiringRequestId',
-                select: 'requestId roleDetails client clientConfidential'
-            })
-            .populate('uploadedBy', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        const hasActiveFilters = !!(
+            req.query.search ||
+            req.query.skills ||
+            req.query.minExperience ||
+            req.query.maxExperience ||
+            req.query.location ||
+            req.query.maxNoticePeriod ||
+            req.query.minCurrentCTC ||
+            req.query.maxCurrentCTC ||
+            req.query.minExpectedCTC ||
+            req.query.maxExpectedCTC ||
+            req.query.source ||
+            req.query.inHandOffer ||
+            req.query.client ||
+            req.query.decision
+        );
 
-        const serializedCandidates = candidates.map(candidate => {
-            const serialized = serializeCandidateForViewer({
-                candidate,
-                user: req.user,
-                hiringRequest: candidate.hiringRequestId
+        let total = 0;
+        let serializedCandidates = [];
+
+        if (hasActiveFilters) {
+            const allCandidates = await Candidate.find(query)
+                .populate({
+                    path: 'hiringRequestId',
+                    select: 'requestId roleDetails client clientConfidential'
+                })
+                .populate('uploadedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .lean();
+
+            const mappedCandidates = allCandidates.map(candidate => {
+                const serialized = serializeCandidateForViewer({
+                    candidate,
+                    user: req.user,
+                    hiringRequest: candidate.hiringRequestId
+                });
+                serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
+                return serialized;
             });
-            serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
-            return serialized;
-        });
+
+            mappedCandidates.sort((a, b) => b.confidenceRating - a.confidenceRating);
+
+            total = mappedCandidates.length;
+            serializedCandidates = mappedCandidates.slice(skip, skip + limit);
+        } else {
+            total = await Candidate.countDocuments(query);
+            const candidates = await Candidate.find(query)
+                .populate({
+                    path: 'hiringRequestId',
+                    select: 'requestId roleDetails client clientConfidential'
+                })
+                .populate('uploadedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            serializedCandidates = candidates.map(candidate => {
+                const serialized = serializeCandidateForViewer({
+                    candidate,
+                    user: req.user,
+                    hiringRequest: candidate.hiringRequestId
+                });
+                serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
+                return serialized;
+            });
+        }
 
         res.status(200).json({
             currentPage: page,
