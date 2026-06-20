@@ -25,6 +25,79 @@ const POLICY_SOURCE_LABEL = 'Policy shared during onboarding';
 
 const normalizeDocumentKey = (value = '') => String(value || '').trim().toLowerCase();
 
+const isValidPhone = (phone) => {
+    if (phone === undefined || phone === null || phone === '') return true;
+    return /^\d{10}$/.test(String(phone).trim());
+};
+
+const isValidEmail = (email) => {
+    if (email === undefined || email === null || email === '') return true;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
+};
+
+const isValidAadhaar = (aadhaar) => {
+    if (aadhaar === undefined || aadhaar === null || aadhaar === '') return true;
+    return /^\d{12}$/.test(String(aadhaar).trim());
+};
+
+const isValidPAN = (pan) => {
+    if (pan === undefined || pan === null || pan === '') return true;
+    return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(String(pan).trim().toUpperCase());
+};
+
+const hasModifiedSensitiveField = (oldData, newData, keys) => {
+    if (!newData) return false;
+    if (!oldData) return true;
+
+    const areDatesEqual = (d1, d2) => {
+        try {
+            const time1 = new Date(d1).getTime();
+            const time2 = new Date(d2).getTime();
+            return time1 === time2;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const isDateVal = (val) => {
+        if (val instanceof Date) return true;
+        if (typeof val === 'string' && val.length >= 10 && !isNaN(Date.parse(val)) && isNaN(Number(val))) {
+            return val.includes('-') || val.includes('/');
+        }
+        return false;
+    };
+
+    for (const key of keys) {
+        if (newData[key] === undefined) continue;
+
+        let oldVal = oldData[key];
+        let newVal = newData[key];
+
+        if (isDateVal(oldVal) && isDateVal(newVal)) {
+            if (!areDatesEqual(oldVal, newVal)) {
+                return true;
+            }
+            continue;
+        }
+
+        if (key === 'bankDetails' && (oldVal || newVal)) {
+            const bankKeys = ['accountNumber', 'ifscCode', 'bankName', 'accountHolderName', 'branchAddress'];
+            if (hasModifiedSensitiveField(oldVal || {}, newVal || {}, bankKeys)) {
+                return true;
+            }
+            continue;
+        }
+
+        const oldStr = oldVal !== undefined && oldVal !== null ? String(oldVal).trim() : '';
+        const newStr = newVal !== undefined && newVal !== null ? String(newVal).trim() : '';
+
+        if (oldStr !== newStr) {
+            return true;
+        }
+    }
+    return false;
+};
+
 const archiveCurrentDocumentVersion = (doc, archiveReason) => {
     if (!doc) return;
 
@@ -342,8 +415,8 @@ exports.getDossier = async (req, res) => {
         // Permission Check: View Dossier
         // Users can always view their own. To view others, need 'dossier.view' or Admin.
         if (!isSelf) {
-            // const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view");
-            if (false && !canView) { // Strict check relaxed
+            const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view") || hasPermission(req.user, "dossier.view.sensitive");
+            if (!canView) {
                 return res.status(403).json({ message: 'Not authorized to view this dossier' });
             }
         }
@@ -509,6 +582,56 @@ exports.submitHRIS = async (req, res) => {
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
+        // Validate contact details if provided
+        if (updates.contact) {
+            if (updates.contact.personalEmail && !isValidEmail(updates.contact.personalEmail)) {
+                return res.status(400).json({ message: 'Invalid personal email format' });
+            }
+            if (updates.contact.workEmail && !isValidEmail(updates.contact.workEmail)) {
+                return res.status(400).json({ message: 'Invalid work email format' });
+            }
+            if (updates.contact.mobileNumber && !isValidPhone(updates.contact.mobileNumber)) {
+                return res.status(400).json({ message: 'Mobile number must be a 10-digit number' });
+            }
+            if (updates.contact.alternateNumber && !isValidPhone(updates.contact.alternateNumber)) {
+                return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
+            }
+            if (updates.contact.emergencyContact && updates.contact.emergencyContact.phone && !isValidPhone(updates.contact.emergencyContact.phone)) {
+                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            }
+        }
+
+        // Validate identity details if provided
+        if (updates.identity) {
+            if (updates.identity.aadhaarNumber && !isValidAadhaar(updates.identity.aadhaarNumber)) {
+                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            }
+            if (updates.identity.panNumber && !isValidPAN(updates.identity.panNumber)) {
+                return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
+            }
+        }
+
+        // Sensitive sections modifications check
+        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive');
+        if (!canEditSensitive) {
+            const profileObj = profile.toObject();
+
+            const employmentKeys = ['designation', 'department', 'businessUnit', 'reportingManager', 'joiningDate', 'confirmationDate', 'status', 'noticePeriodDays', 'workLocation', 'branch', 'employmentType'];
+            if (updates.employment && hasModifiedSensitiveField(profileObj.employment || {}, updates.employment, employmentKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive employment details. Contact HR.' });
+            }
+
+            const identityKeys = ['aadhaarNumber', 'panNumber', 'passportNumber', 'passportExpiry', 'visaStatus', 'visaExpiryDate'];
+            if (updates.identity && hasModifiedSensitiveField(profileObj.identity || {}, updates.identity, identityKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive identity details. Contact HR.' });
+            }
+
+            const compensationKeys = ['ctc', 'salaryBreakup', 'bankDetails', 'pfAccountNumber', 'uanNumber'];
+            if (updates.compensation && hasModifiedSensitiveField(profileObj.compensation || {}, updates.compensation, compensationKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive compensation details. Contact HR.' });
+            }
+        }
+
         // Map updates to sections
         if (updates.personal) profile.personal = { ...(profile.personal?.toObject?.() || {}), ...updates.personal };
         if (updates.identity) profile.identity = { ...(profile.identity?.toObject?.() || {}), ...updates.identity };
@@ -593,6 +716,34 @@ exports.updateSection = async (req, res) => {
                 companyId: req.companyId })
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +compensation.uanNumber');
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
+
+        // Validation Logic
+        if (section === 'contact') {
+            if (updates.personalEmail && !isValidEmail(updates.personalEmail)) {
+                return res.status(400).json({ message: 'Invalid personal email format' });
+            }
+            if (updates.workEmail && !isValidEmail(updates.workEmail)) {
+                return res.status(400).json({ message: 'Invalid work email format' });
+            }
+            if (updates.mobileNumber && !isValidPhone(updates.mobileNumber)) {
+                return res.status(400).json({ message: 'Mobile number must be a 10-digit number' });
+            }
+            if (updates.alternateNumber && !isValidPhone(updates.alternateNumber)) {
+                return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
+            }
+            if (updates.emergencyContact && updates.emergencyContact.phone && !isValidPhone(updates.emergencyContact.phone)) {
+                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            }
+        }
+
+        if (section === 'identity') {
+            if (updates.aadhaarNumber && !isValidAadhaar(updates.aadhaarNumber)) {
+                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            }
+            if (updates.panNumber && !isValidPAN(updates.panNumber)) {
+                return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
+            }
+        }
 
         // Update Logic
         if (section === 'compensation') {
@@ -1278,7 +1429,7 @@ exports.approveHRIS = async (req, res) => {
         }
 
         // Find profile 
-        const profile = await EmployeeProfile.findOne({ user: userId });
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
@@ -1316,7 +1467,7 @@ exports.rejectHRIS = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to reject HRIS requests. Missing permission.' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId });
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
@@ -1353,6 +1504,7 @@ exports.exportHRISExcel = async (req, res) => {
         const sheet = workbook.addWorksheet('HRIS Data');
 
         const query = {
+            companyId: req.companyId,
             'hris.status': { $in: ['Pending Approval', 'Approved'] } // Fetch only submitted or approved profiles
         };
 
