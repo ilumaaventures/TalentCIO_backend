@@ -13,7 +13,9 @@ const {
     getAnnouncementById,
     getAnnouncements,
     toggleAnnouncementReaction,
-    updateAnnouncement
+    updateAnnouncement,
+    acknowledgeAnnouncement,
+    getAnnouncementAcknowledgements
 } = require('../controllers/announcementController');
 
 const router = express.Router();
@@ -45,6 +47,8 @@ router.get('/:id', getAnnouncementById);
 router.post('/:id/react', toggleAnnouncementReaction);
 router.post('/:id/comments', addAnnouncementComment);
 router.delete('/:id/comments/:commentId', deleteAnnouncementComment);
+router.post('/:id/acknowledge', acknowledgeAnnouncement);
+router.get('/:id/acknowledgements', manageAnnouncements, getAnnouncementAcknowledgements);
 router.post('/', manageAnnouncements, handleAnnouncementAttachmentUpload, createAnnouncement);
 router.put('/:id', manageAnnouncements, handleAnnouncementAttachmentUpload, updateAnnouncement);
 router.delete('/:id', manageAnnouncements, deleteAnnouncement);
