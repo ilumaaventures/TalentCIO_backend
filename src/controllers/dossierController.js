@@ -25,6 +25,114 @@ const POLICY_SOURCE_LABEL = 'Policy shared during onboarding';
 
 const normalizeDocumentKey = (value = '') => String(value || '').trim().toLowerCase();
 
+const isValidPhone = (phone) => {
+    if (phone === undefined || phone === null || phone === '') return true;
+    return /^\d{10}$/.test(String(phone).trim());
+};
+
+const isValidEmail = (email) => {
+    if (email === undefined || email === null || email === '') return true;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
+};
+
+const isValidAadhaar = (aadhaar) => {
+    if (aadhaar === undefined || aadhaar === null || aadhaar === '') return true;
+    return /^\d{12}$/.test(String(aadhaar).trim());
+};
+
+const isValidPAN = (pan) => {
+    if (pan === undefined || pan === null || pan === '') return true;
+    return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(String(pan).trim().toUpperCase());
+};
+
+const hasModifiedSensitiveField = (oldData, newData, keys) => {
+    if (!newData) return false;
+    if (!oldData) return true;
+
+    const areDatesEqual = (d1, d2) => {
+        try {
+            const time1 = new Date(d1).getTime();
+            const time2 = new Date(d2).getTime();
+            return time1 === time2;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const isDateVal = (val) => {
+        if (val instanceof Date) return true;
+        if (typeof val === 'string' && val.length >= 10 && !isNaN(Date.parse(val)) && isNaN(Number(val))) {
+            return val.includes('-') || val.includes('/');
+        }
+        return false;
+    };
+
+    for (const key of keys) {
+        if (newData[key] === undefined) continue;
+
+        let oldVal = oldData[key];
+        let newVal = newData[key];
+
+        if (isDateVal(oldVal) && isDateVal(newVal)) {
+            if (!areDatesEqual(oldVal, newVal)) {
+                return true;
+            }
+            continue;
+        }
+
+        if (key === 'bankDetails' && (oldVal || newVal)) {
+            const bankKeys = ['accountNumber', 'ifscCode', 'bankName', 'accountHolderName', 'branchAddress'];
+            if (hasModifiedSensitiveField(oldVal || {}, newVal || {}, bankKeys)) {
+                return true;
+            }
+            continue;
+        }
+
+        const oldStr = oldVal !== undefined && oldVal !== null ? String(oldVal).trim() : '';
+        const newStr = newVal !== undefined && newVal !== null ? String(newVal).trim() : '';
+
+        if (oldStr !== newStr) {
+            return true;
+        }
+    }
+    return false;
+};
+
+const mergePendingUpdates = (profileObj) => {
+    if (!profileObj) return profileObj;
+    const pending = profileObj.pendingUpdates;
+    if (!pending) return profileObj;
+
+    const merged = { ...profileObj };
+
+    // Helper to merge nested objects
+    const mergeObj = (target, src) => {
+        if (!src) return target;
+        if (!target) return src;
+        return { ...target, ...src };
+    };
+
+    if (pending.personal) merged.personal = mergeObj(merged.personal, pending.personal);
+    if (pending.identity) merged.identity = mergeObj(merged.identity, pending.identity);
+    if (pending.contact) merged.contact = mergeObj(merged.contact, pending.contact);
+    if (pending.family) merged.family = mergeObj(merged.family, pending.family);
+    if (pending.employment) merged.employment = mergeObj(merged.employment, pending.employment);
+    if (pending.compensation) {
+        merged.compensation = mergeObj(merged.compensation, pending.compensation);
+        if (pending.compensation.bankDetails) {
+            merged.compensation.bankDetails = mergeObj(
+                merged.compensation.bankDetails,
+                pending.compensation.bankDetails
+            );
+        }
+    }
+    if (pending.education) merged.education = pending.education;
+    if (pending.experience) merged.experience = pending.experience;
+    if (pending.skills) merged.skills = pending.skills;
+
+    return merged;
+};
+
 const archiveCurrentDocumentVersion = (doc, archiveReason) => {
     if (!doc) return;
 
@@ -308,6 +416,7 @@ const filterProfileFields = (profile, viewer, isSelf) => {
         delete profileObj.compensation;
         delete profileObj.identity;
         delete profileObj.family; delete profileObj.contact; delete profileObj.documents; delete profileObj.hris; delete profileObj.skills;
+        delete profileObj.pendingUpdates;
     }
 
     return profileObj;
@@ -342,8 +451,8 @@ exports.getDossier = async (req, res) => {
         // Permission Check: View Dossier
         // Users can always view their own. To view others, need 'dossier.view' or Admin.
         if (!isSelf) {
-            // const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view");
-            if (false && !canView) { // Strict check relaxed
+            const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view") || hasPermission(req.user, "dossier.view.sensitive");
+            if (!canView) {
                 return res.status(403).json({ message: 'Not authorized to view this dossier' });
             }
         }
@@ -471,7 +580,17 @@ exports.getDossier = async (req, res) => {
 
         // (Removed duplicate skills fix)
 
-        const filteredProfile = filterProfileFields(profile, req.user, isSelf);
+        let filteredProfile = filterProfileFields(profile, req.user, isSelf);
+
+        // Pass pendingUpdates as a separate, untouched key for Self/Admin/Approvers so
+        // the frontend can build an old-vs-new diff without merging into the live view.
+        // Live profile fields are NEVER modified here — they only change on approveHRIS.
+        if (isSelf || checkIsAdmin(req.user) || hasPermission(req.user, 'dossier.approve')) {
+            filteredProfile.pendingUpdates = profile.pendingUpdates || null;
+        } else {
+            delete filteredProfile.pendingUpdates;
+        }
+
         if (filteredProfile.documents !== undefined) {
             filteredProfile.documents = filteredProfile.documents.filter(isActiveDocument);
             filteredProfile.onboardingCustomFiles = await buildTransferredOnboardingCustomFiles(profile, userId, req.companyId);
@@ -509,39 +628,136 @@ exports.submitHRIS = async (req, res) => {
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
-        // Map updates to sections
-        if (updates.personal) profile.personal = { ...(profile.personal?.toObject?.() || {}), ...updates.personal };
-        if (updates.identity) profile.identity = { ...(profile.identity?.toObject?.() || {}), ...updates.identity };
-        if (updates.contact) profile.contact = { ...(profile.contact?.toObject?.() || {}), ...updates.contact };
-        if (updates.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...updates.family };
-        if (updates.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...updates.employment };
-        if (updates.compensation) {
-            const uan = updates.compensation.uanNumber;
-            if (uan && !/^\d{12}$/.test(uan)) {
-                return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+        // Validate contact details if provided
+        if (updates.contact) {
+            if (updates.contact.personalEmail && !isValidEmail(updates.contact.personalEmail)) {
+                return res.status(400).json({ message: 'Invalid personal email format' });
             }
-            profile.compensation = {
-                ...(profile.compensation?.toObject?.() || {}),
-                ...updates.compensation,
-                bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(updates.compensation?.bankDetails || {}) }
-            };
+            if (updates.contact.workEmail && !isValidEmail(updates.contact.workEmail)) {
+                return res.status(400).json({ message: 'Invalid work email format' });
+            }
+            if (updates.contact.mobileNumber && !isValidPhone(updates.contact.mobileNumber)) {
+                return res.status(400).json({ message: 'Mobile number must be a 10-digit number' });
+            }
+            if (updates.contact.alternateNumber && !isValidPhone(updates.contact.alternateNumber)) {
+                return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
+            }
+            if (updates.contact.emergencyContact && updates.contact.emergencyContact.phone && !isValidPhone(updates.contact.emergencyContact.phone)) {
+                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            }
         }
-        if (updates.education) profile.education = updates.education;
-        if (updates.experience) profile.experience = updates.experience;
-        if (updates.skills) profile.skills = updates.skills;
 
-        // HRIS Specific Status
-        if (updates.hris) {
-            profile.hris = {
-                ...profile.hris,
-                ...updates.hris,
-                lastUpdatedAt: new Date()
-            };
-            if (updates.hris.isDeclared) {
-                profile.hris.submittedAt = new Date();
-                profile.hris.declarationDate = new Date();
-                // Set status to Pending Approval when declared
-                profile.hris.status = 'Pending Approval';
+        // Validate identity details if provided
+        if (updates.identity) {
+            if (updates.identity.aadhaarNumber && !isValidAadhaar(updates.identity.aadhaarNumber)) {
+                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            }
+            if (updates.identity.panNumber && !isValidPAN(updates.identity.panNumber)) {
+                return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
+            }
+        }
+
+        // Sensitive sections modifications check
+        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive');
+        if (!canEditSensitive) {
+            const profileObj = profile.toObject();
+
+            const employmentKeys = ['designation', 'department', 'businessUnit', 'reportingManager', 'joiningDate', 'confirmationDate', 'status', 'noticePeriodDays', 'workLocation', 'branch', 'employmentType'];
+            if (updates.employment && hasModifiedSensitiveField(profileObj.employment || {}, updates.employment, employmentKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive employment details. Contact HR.' });
+            }
+
+            const identityKeys = ['aadhaarNumber', 'panNumber', 'passportNumber', 'passportExpiry', 'visaStatus', 'visaExpiryDate'];
+            if (updates.identity && hasModifiedSensitiveField(profileObj.identity || {}, updates.identity, identityKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive identity details. Contact HR.' });
+            }
+
+            const compensationKeys = ['ctc', 'salaryBreakup', 'bankDetails', 'pfAccountNumber', 'uanNumber'];
+            if (updates.compensation && hasModifiedSensitiveField(profileObj.compensation || {}, updates.compensation, compensationKeys)) {
+                return res.status(403).json({ message: 'You are not authorized to modify sensitive compensation details. Contact HR.' });
+            }
+        }
+
+        const shouldDirectWrite = isAdmin && !isSelf;
+
+        if (shouldDirectWrite) {
+            // Apply directly to active profile fields for Admins (when editing someone else)
+            if (updates.personal) profile.personal = { ...(profile.personal?.toObject?.() || {}), ...updates.personal };
+            if (updates.identity) profile.identity = { ...(profile.identity?.toObject?.() || {}), ...updates.identity };
+            if (updates.contact) profile.contact = { ...(profile.contact?.toObject?.() || {}), ...updates.contact };
+            if (updates.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...updates.family };
+            if (updates.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...updates.employment };
+            if (updates.compensation) {
+                const uan = updates.compensation.uanNumber;
+                if (uan && !/^\d{12}$/.test(uan)) {
+                    return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                }
+                profile.compensation = {
+                    ...(profile.compensation?.toObject?.() || {}),
+                    ...updates.compensation,
+                    bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(updates.compensation?.bankDetails || {}) }
+                };
+            }
+            if (updates.education) profile.education = updates.education;
+            if (updates.experience) profile.experience = updates.experience;
+            if (updates.skills) profile.skills = updates.skills;
+
+            profile.pendingUpdates = null; // Clear staging area for Admins
+
+            if (updates.hris) {
+                profile.hris = {
+                    ...profile.hris,
+                    ...updates.hris,
+                    lastUpdatedAt: new Date()
+                };
+                if (updates.hris.isDeclared) {
+                    profile.hris.submittedAt = new Date();
+                    profile.hris.declarationDate = new Date();
+                    profile.hris.status = 'Approved';
+                }
+            }
+        } else {
+            // Stage updates in pendingUpdates for employees
+            const pending = { ...(profile.pendingUpdates || {}) };
+
+            if (updates.personal) pending.personal = { ...(pending.personal || {}), ...updates.personal };
+            if (updates.identity) pending.identity = { ...(pending.identity || {}), ...updates.identity };
+            if (updates.contact) pending.contact = { ...(pending.contact || {}), ...updates.contact };
+            if (updates.family) pending.family = { ...(pending.family || {}), ...updates.family };
+            if (updates.employment) pending.employment = { ...(pending.employment || {}), ...updates.employment };
+            if (updates.compensation) {
+                const uan = updates.compensation.uanNumber;
+                if (uan && !/^\d{12}$/.test(uan)) {
+                    return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                }
+                pending.compensation = {
+                    ...(pending.compensation || {}),
+                    ...updates.compensation,
+                    bankDetails: { ...(pending.compensation?.bankDetails || {}), ...(updates.compensation?.bankDetails || {}) }
+                };
+            }
+            if (updates.education) pending.education = updates.education;
+            if (updates.experience) pending.experience = updates.experience;
+            if (updates.skills) pending.skills = updates.skills;
+
+            profile.pendingUpdates = pending;
+            profile.markModified('pendingUpdates');
+
+            // Set HRIS submission status
+            if (updates.hris) {
+                profile.hris = {
+                    ...profile.hris,
+                    ...updates.hris,
+                    lastUpdatedAt: new Date()
+                };
+                if (updates.hris.isDeclared) {
+                    profile.hris.submittedAt = new Date();
+                    profile.hris.declarationDate = new Date();
+                    profile.hris.status = 'Pending Approval';
+                } else {
+                    profile.hris.status = 'Draft';
+                    profile.hris.isDeclared = false;
+                }
             }
         }
 
@@ -555,7 +771,10 @@ exports.submitHRIS = async (req, res) => {
             ipAddress: req.ip
         });
 
-        res.status(200).json({ message: 'HRIS Form saved successfully', profile });
+        const mergedProfile = mergePendingUpdates(profile.toObject());
+        mergedProfile.pendingUpdates = profile.pendingUpdates;
+
+        res.status(200).json({ message: 'HRIS Form saved successfully', profile: mergedProfile });
 
     } catch (error) {
         console.error('Submit HRIS Error:', error);
@@ -594,6 +813,34 @@ exports.updateSection = async (req, res) => {
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +compensation.uanNumber');
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
+        // Validation Logic
+        if (section === 'contact') {
+            if (updates.personalEmail && !isValidEmail(updates.personalEmail)) {
+                return res.status(400).json({ message: 'Invalid personal email format' });
+            }
+            if (updates.workEmail && !isValidEmail(updates.workEmail)) {
+                return res.status(400).json({ message: 'Invalid work email format' });
+            }
+            if (updates.mobileNumber && !isValidPhone(updates.mobileNumber)) {
+                return res.status(400).json({ message: 'Mobile number must be a 10-digit number' });
+            }
+            if (updates.alternateNumber && !isValidPhone(updates.alternateNumber)) {
+                return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
+            }
+            if (updates.emergencyContact && updates.emergencyContact.phone && !isValidPhone(updates.emergencyContact.phone)) {
+                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            }
+        }
+
+        if (section === 'identity') {
+            if (updates.aadhaarNumber && !isValidAadhaar(updates.aadhaarNumber)) {
+                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            }
+            if (updates.panNumber && !isValidPAN(updates.panNumber)) {
+                return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
+            }
+        }
+
         // Update Logic
         if (section === 'compensation') {
             const uan = updates.uanNumber;
@@ -602,31 +849,55 @@ exports.updateSection = async (req, res) => {
             }
         }
 
-        if (['experience', 'education'].includes(section)) {
-            // These are arrays, replace entirely
-            profile[section] = Array.isArray(updates) ? updates : [];
-        } else {
-            if (!profile[section]) {
-                profile[section] = {};
+        const shouldDirectWrite = isAdmin && !isSelf;
+
+        if (shouldDirectWrite) {
+            if (['experience', 'education'].includes(section)) {
+                // These are arrays, replace entirely
+                profile[section] = Array.isArray(updates) ? updates : [];
+            } else {
+                if (!profile[section]) {
+                    profile[section] = {};
+                }
+
+                // Apply updates intelligently for object-based sections
+                Object.keys(updates).forEach(key => {
+                    let value = updates[key];
+                    // Handle empty strings for dates/numbers to avoid CastError
+                    if (value === "") {
+                        value = null;
+                    }
+
+                    // Nested object handling
+                    if (profile[section] && typeof profile[section] === 'object') {
+                        profile[section][key] = value;
+                    }
+                });
             }
-
-            // Apply updates intelligently for object-based sections
-            Object.keys(updates).forEach(key => {
-                let value = updates[key];
-                // Handle empty strings for dates/numbers to avoid CastError
-                if (value === "") {
-                    value = null;
+        } else {
+            // Stage updates in pendingUpdates for employees (or self-updates by Admins)
+            if (!profile.pendingUpdates) {
+                profile.pendingUpdates = {};
+            }
+            if (['experience', 'education'].includes(section)) {
+                profile.pendingUpdates[section] = Array.isArray(updates) ? updates : [];
+            } else {
+                if (!profile.pendingUpdates[section]) {
+                    profile.pendingUpdates[section] = {};
                 }
-
-                // Nested object handling
-                if (profile[section] && typeof profile[section] === 'object') {
-                    profile[section][key] = value;
-                }
-            });
+                Object.keys(updates).forEach(key => {
+                    let value = updates[key];
+                    if (value === "") {
+                        value = null;
+                    }
+                    profile.pendingUpdates[section][key] = value;
+                });
+            }
+            profile.markModified('pendingUpdates');
         }
 
-        // Reset HRIS declaration if user is not Admin
-        if (!isAdmin && profile.hris && (profile.hris.isDeclared || profile.hris.status !== 'Draft')) {
+        // Reset HRIS declaration if user is not doing direct live writes (i.e. self-updates)
+        if (!shouldDirectWrite && profile.hris && (profile.hris.isDeclared || profile.hris.status !== 'Draft')) {
             profile.hris.isDeclared = false;
             profile.hris.status = 'Draft';
         }
@@ -643,7 +914,8 @@ exports.updateSection = async (req, res) => {
             ipAddress: req.ip
         });
 
-        res.status(200).json({ message: 'Updated successfully', sectionData: profile[section] });
+        const mergedProfile = mergePendingUpdates(profile.toObject());
+        res.status(200).json({ message: 'Updated successfully', sectionData: mergedProfile[section] });
 
     } catch (error) {
         console.error('Update Dossier Error:', error);
@@ -1278,9 +1550,31 @@ exports.approveHRIS = async (req, res) => {
         }
 
         // Find profile 
-        const profile = await EmployeeProfile.findOne({ user: userId });
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId })
+            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +compensation.uanNumber');
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
+
+        if (profile.pendingUpdates) {
+            const pending = profile.pendingUpdates;
+            if (pending.personal) profile.personal = { ...(profile.personal?.toObject?.() || {}), ...pending.personal };
+            if (pending.identity) profile.identity = { ...(profile.identity?.toObject?.() || {}), ...pending.identity };
+            if (pending.contact) profile.contact = { ...(profile.contact?.toObject?.() || {}), ...pending.contact };
+            if (pending.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...pending.family };
+            if (pending.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...pending.employment };
+            if (pending.compensation) {
+                profile.compensation = {
+                    ...(profile.compensation?.toObject?.() || {}),
+                    ...pending.compensation,
+                    bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(pending.compensation?.bankDetails || {}) }
+                };
+            }
+            if (pending.education) profile.education = pending.education;
+            if (pending.experience) profile.experience = pending.experience;
+            if (pending.skills) profile.skills = pending.skills;
+
+            profile.pendingUpdates = null;
+        }
 
         profile.hris.status = 'Approved';
         profile.hris.approvedBy = req.user._id;
@@ -1316,7 +1610,7 @@ exports.rejectHRIS = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to reject HRIS requests. Missing permission.' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId });
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
@@ -1327,6 +1621,10 @@ exports.rejectHRIS = async (req, res) => {
         profile.hris.rejectionReason = reason;
         profile.hris.approvedBy = null;
         profile.hris.approvalDate = null;
+
+        // Clear staging area — live profile fields were never modified so the
+        // profile automatically reverts to its last approved state for all viewers.
+        profile.pendingUpdates = null;
 
         await profile.save();
 
@@ -1353,6 +1651,7 @@ exports.exportHRISExcel = async (req, res) => {
         const sheet = workbook.addWorksheet('HRIS Data');
 
         const query = {
+            companyId: req.companyId,
             'hris.status': { $in: ['Pending Approval', 'Approved'] } // Fetch only submitted or approved profiles
         };
 

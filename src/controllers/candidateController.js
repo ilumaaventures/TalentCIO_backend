@@ -3523,5 +3523,178 @@ exports.getDistinctCandidateSkills = async (req, res) => {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
+exports.getCandidateCardFilters = async (req, res) => {
+    try {
+        const { hiringRequestId } = req.params;
+        const {
+            dateField,
+            startDate,
+            endDate,
+            search = '',
+            filterPreference = 'All',
+            filterExperience = '',
+            filterRating = 'All',
+            filterPulledBy,
+            filterUploadedBy,
+            filterUploadType = 'All',
+            filterTransferred = 'All'
+        } = req.query;
 
+        if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
+        }
 
+        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId }).lean();
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
+
+        if (!hasHiringRequestAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
+        }
+
+        const candidateQuery = await buildAccessibleCandidateQuery(
+            req.companyId,
+            req.user,
+            { hiringRequestId },
+            { capability: TA_CAPABILITIES.VIEW }
+        );
+
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+        // Fetch only minimal fields for counts
+        const candidates = await Candidate.find(candidateQuery)
+            .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience preference isTransferred uploadedBy resumeUrl')
+            .populate('uploadedBy', 'firstName lastName')
+            .lean();
+
+        // Implement in-memory metrics calculation
+        const normalizedSearch = String(search || '').trim().toLowerCase();
+        const normalizedPulledBy = parseStringArrayQuery(filterPulledBy);
+        const normalizedUploadedBy = parseStringArrayQuery(filterUploadedBy);
+        const minExperience = filterExperience === '' ? null : Number(filterExperience);
+        const minRating = filterRating === 'All' ? null : Number(filterRating);
+
+        const getCandidateUploadedByName = (candidate) => (
+            `${candidate?.uploadedBy?.firstName || ''} ${candidate?.uploadedBy?.lastName || ''}`.trim()
+        );
+
+        const getCandidateUploadType = (candidate) => (
+            (typeof candidate?.resumeUrl === 'string' && /^https?:\/\//i.test(candidate.resumeUrl.trim())) ? 'CV' : 'Excel'
+        );
+
+        const isProfileSharedCandidate = (candidate) => (
+            candidate?.profileShared === true
+            || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+        );
+
+        const getLegacyRoundsForPhase = (candidate, phase = 1) => (
+            Array.isArray(candidate?.interviewRounds)
+                ? candidate.interviewRounds.filter((round) => Number(round?.phase || 1) === Number(phase))
+                : []
+        );
+
+        const getLegacyAverageRatingForPhase = (candidate, phase = 1) => {
+            const rounds = getLegacyRoundsForPhase(candidate, phase);
+            const ratedRounds = rounds.filter((round) => Number(round?.rating) > 0);
+            if (!ratedRounds.length) return null;
+            return ratedRounds.reduce((sum, round) => sum + Number(round.rating || 0), 0) / ratedRounds.length;
+        };
+
+        const hasLegacyPhase2InterviewActivity = (candidate) => {
+            const rounds = getLegacyRoundsForPhase(candidate, 2);
+            if (rounds.length > 0) return true;
+            const phase2InterviewStatus = String(candidate?.phase2InterviewStatus || '').trim();
+            const phase2Feedback = String(candidate?.phase2InterviewerFeedback || '').trim();
+            return Boolean(phase2InterviewStatus && phase2InterviewStatus !== 'None') || Boolean(phase2Feedback);
+        };
+
+        const matchesSearch = (candidate) => (
+            !normalizedSearch || String(candidate?.candidateName || '').toLowerCase().includes(normalizedSearch)
+        );
+
+        const matchesCommonStructuralFilters = (candidate) => {
+            const matchesPulledBy = !normalizedPulledBy.length || normalizedPulledBy.includes(String(candidate?.profilePulledBy || '').trim());
+            const matchesUploadedBy = !normalizedUploadedBy.length || normalizedUploadedBy.includes(getCandidateUploadedByName(candidate));
+            const matchesUploadType = filterUploadType === 'All' || getCandidateUploadType(candidate) === filterUploadType;
+            const matchesTransferred = filterTransferred === 'All'
+                ? true
+                : filterTransferred === 'Transferred'
+                    ? candidate?.isTransferred === true
+                    : candidate?.isTransferred !== true;
+
+            return matchesSearch(candidate) && matchesPulledBy && matchesUploadedBy && matchesUploadType && matchesTransferred;
+        };
+
+        const matchesBaseFiltersForPhase = (candidate, phase) => {
+            const matchesPreference = filterPreference === 'All' || candidate?.preference === filterPreference;
+            const matchesExperience = minExperience === null
+                || (candidate?.totalExperience !== undefined && candidate?.totalExperience !== null && Number(candidate.totalExperience) >= minExperience);
+
+            let matchesRating = true;
+            if (minRating !== null && Number.isFinite(minRating)) {
+                const averageRating = getLegacyAverageRatingForPhase(candidate, phase);
+                matchesRating = averageRating !== null && averageRating >= minRating;
+            }
+
+            return matchesPreference && matchesExperience && matchesRating;
+        };
+
+        const structuralPhase1Candidates = candidates.filter((candidate) => matchesCommonStructuralFilters(candidate));
+        const basePhase1Candidates = structuralPhase1Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 1));
+
+        const structuralPhase2Candidates = candidates.filter((candidate) => (
+            isProfileSharedCandidate(candidate) && matchesCommonStructuralFilters(candidate)
+        ));
+        const basePhase2Candidates = structuralPhase2Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 2));
+
+        const structuralPhase3Candidates = candidates.filter((candidate) => (
+            candidate?.phase2Decision === 'Selected' && matchesCommonStructuralFilters(candidate)
+        ));
+        const basePhase3Candidates = structuralPhase3Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 3));
+
+        const summary = {
+            phase1Metrics: {
+                total: structuralPhase1Candidates.length,
+                interested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Interested').length,
+                notPicking: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Picking').length,
+                notRelevant: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Relevant').length,
+                notInterested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Interested').length,
+                interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
+                shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
+                rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
+                didNotTurnUp: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Did Not Turn Up').length,
+                onHold: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'On Hold').length,
+                profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
+                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
+            },
+            phase2Metrics: {
+                totalShortlisted: structuralPhase2Candidates.length,
+                totalScreened: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected').length,
+                selected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Selected').length,
+                rejected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Rejected').length,
+                interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length
+            },
+            phase3Metrics: {
+                total: structuralPhase3Candidates.length,
+                offerSent: structuralPhase3Candidates.filter((candidate) => ['Offer Sent', 'Offer Accepted', 'Joined'].includes(candidate?.phase3Decision)).length,
+                offerAccepted: structuralPhase3Candidates.filter((candidate) => ['Offer Accepted', 'Joined'].includes(candidate?.phase3Decision)).length,
+                joined: structuralPhase3Candidates.filter((candidate) => candidate?.phase3Decision === 'Joined').length,
+                noShow: structuralPhase3Candidates.filter((candidate) => candidate?.phase3Decision === 'No Show' || candidate?.phase3Decision === 'Offer Declined').length
+            },
+            phaseBaseCounts: {
+                phase1: basePhase1Candidates.length,
+                phase2: basePhase2Candidates.length,
+                phase3: basePhase3Candidates.length
+            }
+        };
+
+        res.status(200).json({ summary });
+
+    } catch (error) {
+        console.error('Error fetching candidate card filters:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};

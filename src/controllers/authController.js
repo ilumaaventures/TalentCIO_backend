@@ -390,6 +390,36 @@ const verifyOtpAndResetPassword = async (req, res) => {
     }
 };
 
+// @desc    Verify OTP
+// @route   POST /api/auth/verify-otp
+// @access  Public
+const verifyOtp = async (req, res) => {
+    if (!req.companyId) {
+        req.companyId = req.headers['xtenent'] || req.headers['x-tenant'] || req.headers['x-tenant-id'] || req.body.companyId || req.body.tenant;
+    }
+
+    const { email, otp } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+
+    try {
+        const user = await User.findOne({
+            email: normalizedEmail,
+            companyId: req.companyId,
+            otp,
+            otpExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
+        }
+
+        res.json({ message: 'OTP verified successfully', success: true });
+    } catch (error) {
+        console.error('VERIFY OTP ERROR:', error);
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
 // @desc    Resend OTP
 // @route   POST /api/auth/resend-otp
 // @access  Public
@@ -506,13 +536,53 @@ const getBirthdayStatus = async (req, res) => {
     }
 };
 
+// @desc    Change Password (for logged-in user in profile)
+// @route   PUT /api/auth/change-password
+// @access  Private
+const changePassword = async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+
+    try {
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Check if current password is correct
+        const isMatch = await user.matchPassword(currentPassword);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Incorrect current password' });
+        }
+
+        // Validate new password strength
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])[A-Za-z\d!@#$%^&*(),.?":{}|<>]{8,}$/;
+        if (!passwordRegex.test(newPassword)) {
+            return res.status(400).json({ 
+                message: 'Password must be at least 8 characters long and contain at least one capital letter, one number, and one special character.' 
+            });
+        }
+
+        // Update password and save
+        user.password = newPassword;
+        await user.save();
+
+        res.json({ message: 'Password updated successfully', success: true });
+    } catch (error) {
+        console.error('CHANGE PASSWORD ERROR:', error);
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
 module.exports = {
     register,
     loginUser,
     logoutUser,
     uploadProfilePicture,
     verifyOtpAndResetPassword,
+    verifyOtp,
     resendOtp,
-    getBirthdayStatus
+    getBirthdayStatus,
+    changePassword
 };
 

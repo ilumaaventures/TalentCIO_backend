@@ -416,6 +416,21 @@ module.exports = [
         description: "Create, publish, edit, and delete internal announcements"
     },
     {
+        key: "announcement.react",
+        module: "ANNOUNCEMENT",
+        description: "React to announcements (Like, Celebrate, Support)"
+    },
+    {
+        key: "announcement.comment",
+        module: "ANNOUNCEMENT",
+        description: "Comment on announcements"
+    },
+    {
+        key: "announcement.reactions.view",
+        module: "ANNOUNCEMENT",
+        description: "View announcement reaction history and who reacted"
+    },
+    {
         key: "announcement.community.birthdays.view",
         module: "ANNOUNCEMENT",
         description: "View the Today's Birthdays section in announcements"
@@ -518,5 +533,12 @@ module.exports = [
         key: "hr_email.send",
         module: "HR",
         description: "Send HR emails to active employees and save attachments to dossiers"
+    },
+
+    // LEAVE
+    {
+        key: "leave.config.manage",
+        module: "LEAVE",
+        description: "Create, update, and delete leave policies (leave types, accrual rules, carry-forward settings)"
     }
 ];

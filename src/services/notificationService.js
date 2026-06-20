@@ -24,37 +24,42 @@ const resolveRelativeAppLink = (link = '', origin = '', subdomain = '') => {
         return normalizedLink;
     }
 
+    // Resolve base URL dynamically using request origin, fallback to local development port
+    const rawBaseUrl = origin ? String(origin).trim().replace(/\/+$/, '') : 'http://localhost:5173';
     let appBaseUrl = '';
-    if (origin) {
-        appBaseUrl = String(origin).trim().replace(/\/+$/, '');
-    } else {
-        const rawBaseUrl = String(process.env.FRONTEND_URL || 'http://localhost:5174').replace(/\/+$/, '');
-        if (subdomain) {
-            try {
-                const parsed = new URL(rawBaseUrl);
-                if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+
+    if (subdomain) {
+        try {
+            const parsed = new URL(rawBaseUrl);
+            const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+
+            if (isLocalhost) {
+                if (!parsed.hostname.startsWith(`${subdomain}.`)) {
                     parsed.hostname = `${subdomain}.localhost`;
-                } else {
-                    const hostParts = parsed.hostname.split('.');
-                    if (hostParts.length > 2) {
-                        hostParts[0] = subdomain;
-                        parsed.hostname = hostParts.join('.');
-                    } else {
-                        parsed.hostname = `${subdomain}.${parsed.hostname}`;
-                    }
                 }
-                appBaseUrl = parsed.origin;
-            } catch {
-                appBaseUrl = rawBaseUrl;
+            } else {
+                const hostnameParts = parsed.hostname.split('.');
+                if (hostnameParts.length > 2) {
+                    if (hostnameParts[0] !== subdomain) {
+                        hostnameParts[0] = subdomain;
+                        parsed.hostname = hostnameParts.join('.');
+                    }
+                } else {
+                    parsed.hostname = `${subdomain}.${parsed.hostname}`;
+                }
             }
-        } else {
+            appBaseUrl = parsed.origin;
+        } catch {
             appBaseUrl = rawBaseUrl;
         }
+    } else {
+        appBaseUrl = rawBaseUrl;
     }
 
     const path = normalizedLink.startsWith('/') ? normalizedLink : `/${normalizedLink}`;
     return `${appBaseUrl}${path}`;
 };
+
 
 const escapeHtml = (value = '') => String(value || '')
     .replace(/&/g, '&amp;')

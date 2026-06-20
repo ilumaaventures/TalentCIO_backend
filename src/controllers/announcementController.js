@@ -171,6 +171,30 @@ const canManageAnnouncements = (user = {}) => {
     );
 };
 
+const canReactToAnnouncement = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.react')
+    );
+};
+
+const canCommentOnAnnouncement = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.comment')
+    );
+};
+
+const canViewAnnouncementReactions = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.reactions.view')
+    );
+};
+
 const hasAnnouncementCommunityPermission = (user = {}, permissionKey = '') => {
     if (!permissionKey) return false;
 
@@ -264,11 +288,11 @@ const buildVisibilityMatch = (user = {}) => {
 
 const buildVisibleAnnouncementQuery = ({ companyId, user }) => {
     const now = new Date();
+    const isManager = canManageAnnouncements(user);
 
-    return {
+    const query = {
         companyId,
         status: 'published',
-        ...buildVisibilityMatch(user),
         $and: [
             {
                 $or: [
@@ -278,6 +302,12 @@ const buildVisibleAnnouncementQuery = ({ companyId, user }) => {
             }
         ]
     };
+
+    if (!isManager) {
+        Object.assign(query, buildVisibilityMatch(user));
+    }
+
+    return query;
 };
 
 const isAnnouncementExpired = (announcement = {}) => (
@@ -417,8 +447,12 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
             && !isExpired
         );
     const viewerId = String(viewer?._id || '');
+    const canReact = canReactToAnnouncement(viewer);
+    const canComment = canCommentOnAnnouncement(viewer);
+    const canViewReactions = canViewAnnouncementReactions(viewer);
+
     const reactionSummary = getReactionBreakdown(announcement.reactions || [], viewerId);
-    const comments = Array.isArray(announcement.comments)
+    const comments = (canComment || canViewReactions) && Array.isArray(announcement.comments)
         ? announcement.comments
             .slice()
             .sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0))
@@ -483,13 +517,20 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
         } : null,
         comments,
         commentCount: comments.length,
-        reactionCounts: reactionSummary.counts,
-        totalReactions: reactionSummary.total,
-        viewerReaction: reactionSummary.viewerReaction,
-        reactionPreviewUsers: buildReactionPreviewUsers(announcement.reactions || []),
+        reactionCounts: canViewReactions ? reactionSummary.counts : {},
+        totalReactions: canViewReactions ? reactionSummary.total : 0,
+        viewerReaction: canReact ? reactionSummary.viewerReaction : null,
+        reactionPreviewUsers: canViewReactions ? buildReactionPreviewUsers(announcement.reactions || []) : [],
         canManage: manageAccess || canManageAnnouncements(viewer),
+        canReact,
+        canComment,
+        canViewReactions,
         isExpired,
-        isVisibleToViewer
+        isVisibleToViewer,
+        acknowledgedCount: Array.isArray(announcement.acknowledgements) ? announcement.acknowledgements.length : 0,
+        viewerAcknowledged: Array.isArray(announcement.acknowledgements)
+            ? announcement.acknowledgements.some((ack) => String(ack.userId?._id || ack.userId) === viewerId)
+            : false
     };
 };
 
@@ -1094,6 +1135,10 @@ exports.updateAnnouncement = async (req, res) => {
 
 exports.toggleAnnouncementReaction = async (req, res) => {
     try {
+        if (!canReactToAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to react to announcements.' });
+        }
+
         const type = normalizeString(req.body?.type).toLowerCase();
         if (!REACTION_TYPES.includes(type)) {
             return res.status(400).json({ message: 'Choose a valid reaction.' });
@@ -1141,6 +1186,10 @@ exports.toggleAnnouncementReaction = async (req, res) => {
 
 exports.addAnnouncementComment = async (req, res) => {
     try {
+        if (!canCommentOnAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to comment on announcements.' });
+        }
+
         const text = normalizeString(req.body?.text);
         if (!text) {
             return res.status(400).json({ message: 'Comment text is required.' });
@@ -1183,6 +1232,10 @@ exports.addAnnouncementComment = async (req, res) => {
 
 exports.deleteAnnouncementComment = async (req, res) => {
     try {
+        if (!canCommentOnAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to delete comments.' });
+        }
+
         const announcement = await Announcement.findOne({
             _id: req.params.id,
             companyId: req.companyId
@@ -1236,5 +1289,129 @@ exports.deleteAnnouncement = async (req, res) => {
     } catch (error) {
         console.error('deleteAnnouncement error:', error);
         return res.status(500).json({ message: 'Failed to delete announcement.' });
+    }
+};
+
+exports.acknowledgeAnnouncement = async (req, res) => {
+    try {
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!announcement) {
+            return res.status(404).json({ message: 'Announcement not found.' });
+        }
+
+        const access = await ensureAnnouncementFeedAccess(req, announcement, { interactiveOnly: true });
+        if (access.error) {
+            return res.status(access.status).json({ message: access.error });
+        }
+
+        const viewerId = String(req.user._id);
+        const alreadyAcked = (announcement.acknowledgements || []).some(
+            (ack) => String(ack.userId) === viewerId
+        );
+
+        if (!alreadyAcked) {
+            announcement.acknowledgements.push({
+                userId: req.user._id,
+                acknowledgedAt: new Date()
+            });
+            await announcement.save();
+        }
+
+        return res.json({
+            message: 'Announcement acknowledged successfully.'
+        });
+    } catch (error) {
+        console.error('acknowledgeAnnouncement error:', error);
+        return res.status(500).json({ message: error?.message || 'Failed to acknowledge announcement.' });
+    }
+};
+
+exports.getAnnouncementAcknowledgements = async (req, res) => {
+    try {
+        const manageAccess = canManageAnnouncements(req.user);
+        if (!manageAccess) {
+            return res.status(403).json({ message: 'Only managers can view the read status report.' });
+        }
+
+        const announcement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        });
+
+        if (!announcement) {
+            return res.status(404).json({ message: 'Announcement not found.' });
+        }
+
+        const populatedAnnouncement = await Announcement.findOne({
+            _id: req.params.id,
+            companyId: req.companyId
+        }).populate('acknowledgements.userId', 'firstName lastName email department employmentType profilePicture');
+
+        const read = [];
+        const readUserIds = new Set();
+
+        (populatedAnnouncement.acknowledgements || []).forEach((ack) => {
+            if (ack.userId) {
+                read.push({
+                    user: {
+                        _id: ack.userId._id,
+                        firstName: ack.userId.firstName || '',
+                        lastName: ack.userId.lastName || '',
+                        email: ack.userId.email || '',
+                        department: ack.userId.department || '',
+                        employmentType: ack.userId.employmentType || '',
+                        profilePicture: ack.userId.profilePicture || '',
+                        name: [ack.userId.firstName, ack.userId.lastName].filter(Boolean).join(' ').trim() || ack.userId.email
+                    },
+                    acknowledgedAt: ack.acknowledgedAt
+                });
+                readUserIds.add(String(ack.userId._id));
+            }
+        });
+
+        const targetQuery = {
+            companyId: req.companyId,
+            isActive: true
+        };
+
+        if (announcement.audienceType === 'departments') {
+            targetQuery.department = { $in: announcement.audienceDepartments || [] };
+        } else if (announcement.audienceType === 'employmentTypes') {
+            targetQuery.employmentType = { $in: announcement.audienceEmploymentTypes || [] };
+        } else if (announcement.audienceType === 'specificUsers') {
+            targetQuery._id = { $in: announcement.audienceUserIds || [] };
+        }
+
+        const targetUsers = await User.find(targetQuery)
+            .select('firstName lastName email department employmentType profilePicture')
+            .sort({ firstName: 1, lastName: 1 })
+            .lean();
+
+        const unread = targetUsers
+            .filter((user) => !readUserIds.has(String(user._id)))
+            .map((user) => ({
+                user: {
+                    _id: user._id,
+                    firstName: user.firstName || '',
+                    lastName: user.lastName || '',
+                    email: user.email || '',
+                    department: user.department || '',
+                    employmentType: user.employmentType || '',
+                    profilePicture: user.profilePicture || '',
+                    name: [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || user.email
+                }
+            }));
+
+        return res.json({
+            read,
+            unread
+        });
+    } catch (error) {
+        console.error('getAnnouncementAcknowledgements error:', error);
+        return res.status(500).json({ message: 'Failed to retrieve acknowledgement stats.' });
     }
 };

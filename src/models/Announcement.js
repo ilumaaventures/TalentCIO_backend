@@ -32,6 +32,18 @@ const announcementCommentSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+const announcementAcknowledgementSchema = new mongoose.Schema({
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    acknowledgedAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { _id: false });
+
 const announcementAttachmentSchema = new mongoose.Schema({
     url: {
         type: String,
@@ -153,6 +165,10 @@ const announcementSchema = new mongoose.Schema({
     comments: {
         type: [announcementCommentSchema],
         default: []
+    },
+    acknowledgements: {
+        type: [announcementAcknowledgementSchema],
+        default: []
     }
 }, { timestamps: true });
 
@@ -160,6 +176,7 @@ announcementSchema.index({ companyId: 1, status: 1, pinned: -1, publishedAt: -1,
 announcementSchema.index({ companyId: 1, audienceType: 1, expiresAt: 1, isDeleted: 1 });
 announcementSchema.index({ 'comments.userId': 1 });
 announcementSchema.index({ 'reactions.userId': 1 });
+announcementSchema.index({ 'acknowledgements.userId': 1 });
 
 announcementSchema.plugin(softDeletePlugin);
 

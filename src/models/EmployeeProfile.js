@@ -226,6 +226,9 @@ const employeeProfileSchema = new mongoose.Schema({
         approvalDate: Date
     },
 
+    // --- Staging Area for Pending Updates ---
+    pendingUpdates: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // --- Metadata ---
     tags: [String],
     isConfidential: { type: Boolean, default: false } // VIP profile
