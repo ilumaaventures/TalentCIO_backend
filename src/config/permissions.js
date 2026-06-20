@@ -416,6 +416,21 @@ module.exports = [
         description: "Create, publish, edit, and delete internal announcements"
     },
     {
+        key: "announcement.react",
+        module: "ANNOUNCEMENT",
+        description: "React to announcements (Like, Celebrate, Support)"
+    },
+    {
+        key: "announcement.comment",
+        module: "ANNOUNCEMENT",
+        description: "Comment on announcements"
+    },
+    {
+        key: "announcement.reactions.view",
+        module: "ANNOUNCEMENT",
+        description: "View announcement reaction history and who reacted"
+    },
+    {
         key: "announcement.community.birthdays.view",
         module: "ANNOUNCEMENT",
         description: "View the Today's Birthdays section in announcements"

@@ -159,18 +159,25 @@ const syncPermissions = async () => {
             }
         }
 
-        const announcementManagePermission = await Permission.findOne({
-            key: 'announcement.manage'
+        const announcementPermissions = await Permission.find({
+            key: {
+                $in: [
+                    'announcement.manage',
+                    'announcement.react',
+                    'announcement.comment',
+                    'announcement.reactions.view'
+                ]
+            }
         }).select('_id');
 
-        if (announcementManagePermission) {
+        if (announcementPermissions.length > 0) {
             const announcementRoleAssignment = await Role.updateMany(
                 { name: { $in: ANNOUNCEMENT_MANAGER_ROLE_NAMES } },
-                { $addToSet: { permissions: announcementManagePermission._id } }
+                { $addToSet: { permissions: { $each: announcementPermissions.map((permission) => permission._id) } } }
             );
 
             if (announcementRoleAssignment.matchedCount > 0) {
-                console.log('Updated announcement manager roles with announcement.manage permission.');
+                console.log('Updated announcement manager roles with announcement permissions.');
             }
         }
 

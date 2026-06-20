@@ -171,6 +171,30 @@ const canManageAnnouncements = (user = {}) => {
     );
 };
 
+const canReactToAnnouncement = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.react')
+    );
+};
+
+const canCommentOnAnnouncement = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.comment')
+    );
+};
+
+const canViewAnnouncementReactions = (user = {}) => {
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    return (
+        canManageAnnouncements(user)
+        || permissions.includes('announcement.reactions.view')
+    );
+};
+
 const hasAnnouncementCommunityPermission = (user = {}, permissionKey = '') => {
     if (!permissionKey) return false;
 
@@ -423,8 +447,12 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
             && !isExpired
         );
     const viewerId = String(viewer?._id || '');
+    const canReact = canReactToAnnouncement(viewer);
+    const canComment = canCommentOnAnnouncement(viewer);
+    const canViewReactions = canViewAnnouncementReactions(viewer);
+
     const reactionSummary = getReactionBreakdown(announcement.reactions || [], viewerId);
-    const comments = Array.isArray(announcement.comments)
+    const comments = (canComment || canViewReactions) && Array.isArray(announcement.comments)
         ? announcement.comments
             .slice()
             .sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0))
@@ -489,11 +517,14 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
         } : null,
         comments,
         commentCount: comments.length,
-        reactionCounts: reactionSummary.counts,
-        totalReactions: reactionSummary.total,
-        viewerReaction: reactionSummary.viewerReaction,
-        reactionPreviewUsers: buildReactionPreviewUsers(announcement.reactions || []),
+        reactionCounts: canViewReactions ? reactionSummary.counts : {},
+        totalReactions: canViewReactions ? reactionSummary.total : 0,
+        viewerReaction: canReact ? reactionSummary.viewerReaction : null,
+        reactionPreviewUsers: canViewReactions ? buildReactionPreviewUsers(announcement.reactions || []) : [],
         canManage: manageAccess || canManageAnnouncements(viewer),
+        canReact,
+        canComment,
+        canViewReactions,
         isExpired,
         isVisibleToViewer,
         acknowledgedCount: Array.isArray(announcement.acknowledgements) ? announcement.acknowledgements.length : 0,
@@ -1104,6 +1135,10 @@ exports.updateAnnouncement = async (req, res) => {
 
 exports.toggleAnnouncementReaction = async (req, res) => {
     try {
+        if (!canReactToAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to react to announcements.' });
+        }
+
         const type = normalizeString(req.body?.type).toLowerCase();
         if (!REACTION_TYPES.includes(type)) {
             return res.status(400).json({ message: 'Choose a valid reaction.' });
@@ -1151,6 +1186,10 @@ exports.toggleAnnouncementReaction = async (req, res) => {
 
 exports.addAnnouncementComment = async (req, res) => {
     try {
+        if (!canCommentOnAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to comment on announcements.' });
+        }
+
         const text = normalizeString(req.body?.text);
         if (!text) {
             return res.status(400).json({ message: 'Comment text is required.' });
@@ -1193,6 +1232,10 @@ exports.addAnnouncementComment = async (req, res) => {
 
 exports.deleteAnnouncementComment = async (req, res) => {
     try {
+        if (!canCommentOnAnnouncement(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to delete comments.' });
+        }
+
         const announcement = await Announcement.findOne({
             _id: req.params.id,
             companyId: req.companyId
