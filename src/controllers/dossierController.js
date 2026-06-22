@@ -634,6 +634,13 @@ exports.submitHRIS = async (req, res) => {
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
+        // Validate spouse name if marital status is Married
+        const currentMaritalStatus = updates.personal?.maritalStatus || profile.personal?.maritalStatus;
+        const spouseName = updates.family?.spouseName || profile.family?.spouseName;
+        if (currentMaritalStatus === 'Married' && (!spouseName || !spouseName.trim())) {
+            return res.status(400).json({ message: 'Spouse Name is required when marital status is Married' });
+        }
+
         // Validate contact details if provided
         if (updates.contact) {
             if (updates.contact.personalEmail && !isValidEmail(updates.contact.personalEmail)) {
@@ -648,8 +655,50 @@ exports.submitHRIS = async (req, res) => {
             if (updates.contact.alternateNumber && !isValidPhone(updates.contact.alternateNumber)) {
                 return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
             }
-            if (updates.contact.emergencyContact && updates.contact.emergencyContact.phone && !isValidPhone(updates.contact.emergencyContact.phone)) {
-                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            if (updates.contact.emergencyContact) {
+                const ec = updates.contact.emergencyContact;
+                if (!ec.phone || !ec.phone.trim()) {
+                    return res.status(400).json({ message: 'Emergency contact phone number is required' });
+                }
+                if (!isValidPhone(ec.phone)) {
+                    return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+                }
+                if (!ec.alternatePhone || !ec.alternatePhone.trim()) {
+                    return res.status(400).json({ message: 'Emergency contact alternate phone number is required' });
+                }
+                if (!isValidPhone(ec.alternatePhone)) {
+                    return res.status(400).json({ message: 'Emergency contact alternate phone number must be a 10-digit number' });
+                }
+            }
+            if (updates.contact.addresses && Array.isArray(updates.contact.addresses)) {
+                const currentAddr = updates.contact.addresses.find(a => a.type === 'Current');
+                const permanentAddr = updates.contact.addresses.find(a => a.type === 'Permanent');
+
+                if (!currentAddr) {
+                    return res.status(400).json({ message: 'Current address is required' });
+                }
+                if (!permanentAddr) {
+                    return res.status(400).json({ message: 'Permanent address is required' });
+                }
+
+                const requiredCurrentFields = ['line1', 'addressLine2', 'city', 'state', 'zipCode', 'country', 'phone'];
+                for (const f of requiredCurrentFields) {
+                    if (!currentAddr[f] || !currentAddr[f].toString().trim()) {
+                        const fieldNameLabel = f === 'line1' ? 'Line 1' : f === 'addressLine2' ? 'Line 2' : f === 'zipCode' ? 'Pincode' : f;
+                        return res.status(400).json({ message: `Current Address ${fieldNameLabel} is required` });
+                    }
+                }
+                if (!isValidPhone(currentAddr.phone)) {
+                    return res.status(400).json({ message: 'Current Address Phone must be a valid 10-digit number' });
+                }
+
+                const requiredPermFields = ['line1', 'addressLine2', 'city', 'state', 'zipCode', 'country'];
+                for (const f of requiredPermFields) {
+                    if (!permanentAddr[f] || !permanentAddr[f].toString().trim()) {
+                        const fieldNameLabel = f === 'line1' ? 'Line 1' : f === 'addressLine2' ? 'Line 2' : f === 'zipCode' ? 'Pincode' : f;
+                        return res.status(400).json({ message: `Permanent Address ${fieldNameLabel} is required` });
+                    }
+                }
             }
         }
 
@@ -833,8 +882,50 @@ exports.updateSection = async (req, res) => {
             if (updates.alternateNumber && !isValidPhone(updates.alternateNumber)) {
                 return res.status(400).json({ message: 'Alternate mobile number must be a 10-digit number' });
             }
-            if (updates.emergencyContact && updates.emergencyContact.phone && !isValidPhone(updates.emergencyContact.phone)) {
-                return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+            if (updates.emergencyContact) {
+                const ec = updates.emergencyContact;
+                if (!ec.phone || !ec.phone.trim()) {
+                    return res.status(400).json({ message: 'Emergency contact phone number is required' });
+                }
+                if (!isValidPhone(ec.phone)) {
+                    return res.status(400).json({ message: 'Emergency contact phone number must be a 10-digit number' });
+                }
+                if (!ec.alternatePhone || !ec.alternatePhone.trim()) {
+                    return res.status(400).json({ message: 'Emergency contact alternate phone number is required' });
+                }
+                if (!isValidPhone(ec.alternatePhone)) {
+                    return res.status(400).json({ message: 'Emergency contact alternate phone number must be a 10-digit number' });
+                }
+            }
+            if (updates.addresses && Array.isArray(updates.addresses)) {
+                const currentAddr = updates.addresses.find(a => a.type === 'Current');
+                const permanentAddr = updates.addresses.find(a => a.type === 'Permanent');
+
+                if (!currentAddr) {
+                    return res.status(400).json({ message: 'Current address is required' });
+                }
+                if (!permanentAddr) {
+                    return res.status(400).json({ message: 'Permanent address is required' });
+                }
+
+                const requiredCurrentFields = ['line1', 'addressLine2', 'city', 'state', 'zipCode', 'country', 'phone'];
+                for (const f of requiredCurrentFields) {
+                    if (!currentAddr[f] || !currentAddr[f].toString().trim()) {
+                        const fieldNameLabel = f === 'line1' ? 'Line 1' : f === 'addressLine2' ? 'Line 2' : f === 'zipCode' ? 'Pincode' : f;
+                        return res.status(400).json({ message: `Current Address ${fieldNameLabel} is required` });
+                    }
+                }
+                if (!isValidPhone(currentAddr.phone)) {
+                    return res.status(400).json({ message: 'Current Address Phone must be a valid 10-digit number' });
+                }
+
+                const requiredPermFields = ['line1', 'addressLine2', 'city', 'state', 'zipCode', 'country'];
+                for (const f of requiredPermFields) {
+                    if (!permanentAddr[f] || !permanentAddr[f].toString().trim()) {
+                        const fieldNameLabel = f === 'line1' ? 'Line 1' : f === 'addressLine2' ? 'Line 2' : f === 'zipCode' ? 'Pincode' : f;
+                        return res.status(400).json({ message: `Permanent Address ${fieldNameLabel} is required` });
+                    }
+                }
             }
         }
 
@@ -847,7 +938,12 @@ exports.updateSection = async (req, res) => {
             }
         }
 
-        // Update Logic
+        if (section === 'family') {
+            const currentMaritalStatus = profile.personal?.maritalStatus;
+            if (currentMaritalStatus === 'Married' && (!updates.spouseName || !updates.spouseName.trim())) {
+                return res.status(400).json({ message: 'Spouse Name is required when marital status is Married' });
+            }
+        }
         if (section === 'compensation') {
             const uan = updates.uanNumber;
             if (uan && !/^\d{12}$/.test(uan)) {
@@ -1863,13 +1959,16 @@ exports.exportHRISExcel = async (req, res) => {
 
                 // Helper to formatting address (only need to calculate once really, but simple enough)
                 const formatFullAddr = (addr) => {
-                    if (!addr || !addr.street) return '';
+                    const l1 = addr?.line1 || addr?.street;
+                    if (!addr || !l1) return '';
                     const parts = [
-                        addr.street,
+                        l1,
+                        addr.addressLine2,
                         addr.city,
                         addr.state,
                         addr.country,
-                        addr.zipCode
+                        addr.zipCode,
+                        addr.phone ? `Phone: ${addr.phone}` : ''
                     ];
                     return parts.filter(Boolean).join(', ');
                 };

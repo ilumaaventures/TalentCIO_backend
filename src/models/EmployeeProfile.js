@@ -2,12 +2,13 @@ const mongoose = require('mongoose');
 
 const AddressSchema = new mongoose.Schema({
     type: { type: String, enum: ['Current', 'Permanent', 'Mailing'] },
-    street: String,
+    line1: String,
     addressLine2: String,
     city: String,
     state: String,
     zipCode: String,
     country: String,
+    phone: String,
     isSameAsCurrent: { type: Boolean, default: false }
 });
 
@@ -115,6 +116,7 @@ const employeeProfileSchema = new mongoose.Schema({
             name: String,
             relation: String,
             phone: String,
+            alternatePhone: String,
             email: String
         }
     },

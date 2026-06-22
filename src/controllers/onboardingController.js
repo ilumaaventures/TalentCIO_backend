@@ -2694,7 +2694,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 },
                 addresses: personalDetails.currentAddress?.line1 ? [{
                     type: 'Current',
-                    street: personalDetails.currentAddress.line1,
+                    line1: personalDetails.currentAddress.line1,
                     addressLine2: personalDetails.currentAddress.line2 || '',
                     city: personalDetails.currentAddress.city || '',
                     state: personalDetails.currentAddress.state || '',
@@ -2736,7 +2736,7 @@ exports.transferToActiveEmployee = async (req, res) => {
         employee.status = 'Reviewed';
         employee.auditLog.push({
             action: 'TRANSFERRED_TO_ACTIVE',
-            details: `Transferred to active employee (User: ${newUser._id}) by ${req.user.firstName || 'Admin'}`
+            details: `Transferred to active employee (User: ${newUser._id}) by ${req.user.firstName || 'Admin'}. Temporary Credentials - Email: ${newUser.email}, Password: ${userPassword}`
         });
         await employee.save();
 
