@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const EmployeeProfile = require('../models/EmployeeProfile');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
@@ -96,6 +97,53 @@ const hasModifiedSensitiveField = (oldData, newData, keys) => {
         }
     }
     return false;
+};
+
+const getDossierDiff = (oldObj, newObj, prefix = '') => {
+    const diff = { oldValues: {}, newValues: {} };
+    if (!newObj) return diff;
+
+    const isDateVal = (val) => {
+        if (val instanceof Date) return true;
+        if (typeof val === 'string' && val.length >= 10 && !isNaN(Date.parse(val)) && isNaN(Number(val))) {
+            return val.includes('-') || val.includes('/');
+        }
+        return false;
+    };
+
+    const areEqual = (v1, v2) => {
+        if (isDateVal(v1) && isDateVal(v2)) {
+            return new Date(v1).getTime() === new Date(v2).getTime();
+        }
+        const s1 = v1 !== undefined && v1 !== null ? String(v1).trim() : '';
+        const s2 = v2 !== undefined && v2 !== null ? String(v2).trim() : '';
+        return s1 === s2;
+    };
+
+    const compare = (oldVal, newVal, path) => {
+        if (newVal === undefined) return;
+
+        if (Array.isArray(newVal)) {
+            const oldArr = Array.isArray(oldVal) ? oldVal : [];
+            if (JSON.stringify(oldArr) !== JSON.stringify(newVal)) {
+                diff.oldValues[path] = oldArr;
+                diff.newValues[path] = newVal;
+            }
+        } else if (newVal && typeof newVal === 'object' && !(newVal instanceof Date)) {
+            const oldSub = oldVal && typeof oldVal === 'object' ? oldVal : {};
+            Object.keys(newVal).forEach(key => {
+                compare(oldSub[key], newVal[key], path ? `${path}.${key}` : key);
+            });
+        } else {
+            if (!areEqual(oldVal, newVal)) {
+                diff.oldValues[path] = oldVal !== undefined && oldVal !== null ? oldVal : null;
+                diff.newValues[path] = newVal !== undefined && newVal !== null ? newVal : null;
+            }
+        }
+    };
+
+    compare(oldObj, newObj, prefix);
+    return diff;
 };
 
 const mergePendingUpdates = (profileObj) => {
@@ -457,8 +505,10 @@ exports.getDossier = async (req, res) => {
             }
         }
 
-        let profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId })
+        let profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        })
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +personal.medicalConditions')
             .populate({
                 path: 'user',
@@ -628,8 +678,10 @@ exports.submitHRIS = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to submit HRIS for this user' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId })
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        })
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber');
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
@@ -640,6 +692,36 @@ exports.submitHRIS = async (req, res) => {
         if (currentMaritalStatus === 'Married' && (!spouseName || !spouseName.trim())) {
             return res.status(400).json({ message: 'Spouse Name is required when marital status is Married' });
         }
+
+        // Validate new fields if provided
+        if (updates.personal) {
+            if (updates.personal.nationality !== undefined && (!updates.personal.nationality || !updates.personal.nationality.trim())) {
+                return res.status(400).json({ message: 'Nationality is required' });
+            }
+            if (updates.personal.bloodGroup !== undefined && (!updates.personal.bloodGroup || !updates.personal.bloodGroup.trim())) {
+                return res.status(400).json({ message: 'Blood Group is required' });
+            }
+            if (updates.personal.disabilityStatus !== undefined && (updates.personal.disabilityStatus === null || updates.personal.disabilityStatus === undefined)) {
+                return res.status(400).json({ message: 'Disability Status is required' });
+            }
+            if (updates.personal.disabilityStatus === true && (!updates.personal.disabilityDetails || !updates.personal.disabilityDetails.trim())) {
+                return res.status(400).json({ message: 'Nature of disability is required if Disability Status is Yes' });
+            }
+        }
+        if (updates.contact?.emergencyContact) {
+            const ec = updates.contact.emergencyContact;
+            if (ec.name !== undefined && (!ec.name || !ec.name.trim())) {
+                return res.status(400).json({ message: 'Emergency contact name is required' });
+            }
+            if (ec.relation !== undefined && (!ec.relation || !ec.relation.trim())) {
+                return res.status(400).json({ message: 'Emergency contact relation is required' });
+            }
+            if (ec.email && !isValidEmail(ec.email)) {
+                return res.status(400).json({ message: 'Invalid emergency contact email format' });
+            }
+        }
+
+        const originalProfile = profile.toObject();
 
         // Validate contact details if provided
         if (updates.contact) {
@@ -722,13 +804,11 @@ exports.submitHRIS = async (req, res) => {
                 return res.status(403).json({ message: 'You are not authorized to modify sensitive employment details. Contact HR.' });
             }
 
-            const identityKeys = ['aadhaarNumber', 'panNumber', 'passportNumber', 'passportExpiry', 'visaStatus', 'visaExpiryDate'];
-            if (updates.identity && hasModifiedSensitiveField(profileObj.identity || {}, updates.identity, identityKeys)) {
-                return res.status(403).json({ message: 'You are not authorized to modify sensitive identity details. Contact HR.' });
-            }
+            // Identity changes are allowed for staging via HRIS submission.
 
-            const compensationKeys = ['ctc', 'salaryBreakup', 'bankDetails', 'pfAccountNumber', 'uanNumber'];
-            if (updates.compensation && hasModifiedSensitiveField(profileObj.compensation || {}, updates.compensation, compensationKeys)) {
+            // Only block compensation updates if truly sensitive fields (ctc, salaryBreakup, pfAccountNumber) are modified.
+            const sensitiveCompKeys = ['ctc', 'salaryBreakup', 'pfAccountNumber'];
+            if (updates.compensation && hasModifiedSensitiveField(profileObj.compensation || {}, updates.compensation, sensitiveCompKeys)) {
                 return res.status(403).json({ message: 'You are not authorized to modify sensitive compensation details. Contact HR.' });
             }
         }
@@ -743,9 +823,17 @@ exports.submitHRIS = async (req, res) => {
             if (updates.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...updates.family };
             if (updates.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...updates.employment };
             if (updates.compensation) {
+                const isUanApplicable = updates.compensation.isUanApplicable;
                 const uan = updates.compensation.uanNumber;
-                if (uan && !/^\d{12}$/.test(uan)) {
-                    return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                if (isUanApplicable === true) {
+                    if (!uan || !uan.trim()) {
+                        return res.status(400).json({ message: 'UAN Number is required when UAN is applicable' });
+                    }
+                    if (!/^\d{12}$/.test(uan)) {
+                        return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                    }
+                } else if (isUanApplicable === false) {
+                    updates.compensation.uanNumber = '';
                 }
                 profile.compensation = {
                     ...(profile.compensation?.toObject?.() || {}),
@@ -781,9 +869,17 @@ exports.submitHRIS = async (req, res) => {
             if (updates.family) pending.family = { ...(pending.family || {}), ...updates.family };
             if (updates.employment) pending.employment = { ...(pending.employment || {}), ...updates.employment };
             if (updates.compensation) {
+                const isUanApplicable = updates.compensation.isUanApplicable;
                 const uan = updates.compensation.uanNumber;
-                if (uan && !/^\d{12}$/.test(uan)) {
-                    return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                if (isUanApplicable === true) {
+                    if (!uan || !uan.trim()) {
+                        return res.status(400).json({ message: 'UAN Number is required when UAN is applicable' });
+                    }
+                    if (!/^\d{12}$/.test(uan)) {
+                        return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                    }
+                } else if (isUanApplicable === false) {
+                    updates.compensation.uanNumber = '';
                 }
                 pending.compensation = {
                     ...(pending.compensation || {}),
@@ -816,13 +912,29 @@ exports.submitHRIS = async (req, res) => {
             }
         }
 
+        const diff = { oldValues: {}, newValues: {} };
+        ['personal', 'identity', 'contact', 'family', 'employment', 'compensation', 'education', 'experience', 'skills'].forEach(section => {
+            if (updates[section]) {
+                const sectionDiff = getDossierDiff(originalProfile[section], updates[section], section);
+                Object.assign(diff.oldValues, sectionDiff.oldValues);
+                Object.assign(diff.newValues, sectionDiff.newValues);
+            }
+        });
+
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'SUBMIT_HRIS',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetUser: userId },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                oldValues: diff.oldValues,
+                newValues: diff.newValues,
+                originModule: 'HRIS'
+            },
             ipAddress: req.ip
         });
 
@@ -854,19 +966,32 @@ exports.updateSection = async (req, res) => {
         // Check for specific permission to edit sensitive sections
         const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive');
 
-        if (!isAdmin && !canEditSensitive && ['employment', 'compensation', 'identity'].includes(section)) {
-            // If they are self or just have basic edit, they can't edit sensitive
-            // UNLESS they are self? 
-            // Usually self cannot edit employment/compensation.
-            // Self can edit identity? Maybe not.
-            // Let's stick to strict:
-            return res.status(403).json({ message: 'You cannot edit this section. Contact HR.' });
+        if (!isAdmin && !canEditSensitive) {
+            if (section === 'employment') {
+                return res.status(403).json({ message: 'You cannot edit this section. Contact HR.' });
+            }
+            if (section === 'compensation') {
+                // Employees/managers are only allowed to modify bankDetails and uanNumber!
+                if (updates && typeof updates === 'object') {
+                    const compKeys = Object.keys(updates);
+                    const allowedKeys = ['bankDetails', 'uanNumber'];
+                    const hasDisallowed = compKeys.some(k => !allowedKeys.includes(k));
+                    if (hasDisallowed) {
+                        return res.status(403).json({ message: 'You are not authorized to modify sensitive salary/compensation details. Contact HR.' });
+                    }
+                }
+            }
+            // 'identity' section is fully allowed to be updated/staged since it requires approval
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId })
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        })
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +compensation.uanNumber');
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
+
+        const originalProfile = profile.toObject();
 
         // Validation Logic
         if (section === 'contact') {
@@ -938,6 +1063,12 @@ exports.updateSection = async (req, res) => {
             }
         }
 
+        if (section === 'personal') {
+            if (updates.disabilityStatus === true && (!updates.disabilityDetails || !updates.disabilityDetails.trim())) {
+                return res.status(400).json({ message: 'Nature of disability is required if Disability Status is Yes' });
+            }
+        }
+
         if (section === 'family') {
             const currentMaritalStatus = profile.personal?.maritalStatus;
             if (currentMaritalStatus === 'Married' && (!updates.spouseName || !updates.spouseName.trim())) {
@@ -945,9 +1076,17 @@ exports.updateSection = async (req, res) => {
             }
         }
         if (section === 'compensation') {
+            const isUanApplicable = updates.isUanApplicable;
             const uan = updates.uanNumber;
-            if (uan && !/^\d{12}$/.test(uan)) {
-                return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+            if (isUanApplicable === true) {
+                if (!uan || !uan.trim()) {
+                    return res.status(400).json({ message: 'UAN Number is required when UAN is applicable' });
+                }
+                if (!/^\d{12}$/.test(uan)) {
+                    return res.status(400).json({ message: 'UAN must be a 12-digit number' });
+                }
+            } else if (isUanApplicable === false) {
+                updates.uanNumber = '';
             }
         }
 
@@ -1004,15 +1143,26 @@ exports.updateSection = async (req, res) => {
             profile.hris.status = 'Draft';
         }
 
+        const diff = getDossierDiff(originalProfile[section], updates, section);
+        const originModule = req.body.originModule || req.headers['x-origin-module'] || (section === 'experience' ? 'Employment History' : 'Personal Information');
+
         await profile.save();
 
         // Audit Log
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'UPDATE_DOSSIER',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetuser: userId,
-                companyId: req.companyId, section, updates: updates },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                section,
+                updates: updates,
+                oldValues: diff.oldValues,
+                newValues: diff.newValues,
+                originModule
+            },
             ipAddress: req.ip
         });
 
@@ -1047,8 +1197,10 @@ exports.addDocument = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to upload documents for this user' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId });
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        });
         if (!profile) {
             console.error('Profile not found for user:', userId);
             return res.status(404).json({ message: 'Profile not found' });
@@ -1058,6 +1210,7 @@ exports.addDocument = async (req, res) => {
         const nextFileName = req.file ? req.file.originalname : (fileUrl.split('/').pop() || 'document');
         let auditAction = 'UPLOAD_DOCUMENT';
         let auditDetails = {
+            targetUser: userId,
             targetuser: userId,
             companyId: req.companyId,
             docTitle: title
@@ -1127,10 +1280,10 @@ exports.addDocument = async (req, res) => {
         }
 
         await profile.save();
-        await AuditLog.create({
+        await logDossierActivity({
             action: auditAction,
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
+            companyId: req.companyId,
             details: auditDetails,
             ipAddress: req.ip
         });
@@ -1158,8 +1311,10 @@ exports.deleteDocument = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to delete documents for this user' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId });
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        });
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
@@ -1191,12 +1346,17 @@ exports.deleteDocument = async (req, res) => {
         }
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'DELETE_DOCUMENT',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetuser: userId,
-                companyId: req.companyId, docTitle: docTitle, versionNumber: doc.versionNumber },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                docTitle: docTitle,
+                versionNumber: doc.versionNumber
+            },
             ipAddress: req.ip
         });
 
@@ -1227,8 +1387,10 @@ exports.verifyDocument = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to verify documents' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId });
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        });
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
         const doc = profile.documents.id(docId);
@@ -1261,12 +1423,20 @@ exports.verifyDocument = async (req, res) => {
 
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: status === 'Verified' ? 'VERIFY_DOCUMENT' : 'REJECT_DOCUMENT',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetuser: userId,
-                companyId: req.companyId, docTitle: doc.title, status, reason: status === 'Rejected' ? String(reason || '').trim() : undefined, versionNumber: doc.versionNumber, newSubmissionStatus: profile.documentSubmissionStatus },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                docTitle: doc.title,
+                status,
+                reason: status === 'Rejected' ? String(reason || '').trim() : undefined,
+                versionNumber: doc.versionNumber,
+                newSubmissionStatus: profile.documentSubmissionStatus
+            },
             ipAddress: req.ip
         });
 
@@ -1317,11 +1487,12 @@ exports.revokeDocumentVerification = async (req, res) => {
 
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'REVOKE_DOCUMENT_VERIFICATION',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
+            companyId: req.companyId,
             details: {
+                targetUser: userId,
                 targetuser: userId,
                 companyId: req.companyId,
                 docTitle: doc.title,
@@ -1358,8 +1529,10 @@ exports.verifyAllDocuments = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to verify documents' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId });
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        });
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
         let updatedCount = 0;
@@ -1381,12 +1554,18 @@ exports.verifyAllDocuments = async (req, res) => {
 
             await profile.save();
 
-            await AuditLog.create({
+            await logDossierActivity({
                 action: 'VERIFY_ALL_DOCUMENTS',
-                module: 'EmployeeDossier',
                 performedBy: req.user._id,
-                details: { targetuser: userId,
-                companyId: req.companyId, status, count: updatedCount, newSubmissionStatus: profile.documentSubmissionStatus },
+                companyId: req.companyId,
+                details: {
+                    targetUser: userId,
+                    targetuser: userId,
+                    companyId: req.companyId,
+                    status,
+                    count: updatedCount,
+                    newSubmissionStatus: profile.documentSubmissionStatus
+                },
                 ipAddress: req.ip
             });
         }
@@ -1413,8 +1592,10 @@ exports.submitDocuments = async (req, res) => {
             return res.status(403).json({ message: 'Can only submit your own documents.' });
         }
 
-        const profile = await EmployeeProfile.findOne({ user: userId,
-                companyId: req.companyId });
+        const profile = await EmployeeProfile.findOne({
+            user: userId,
+            companyId: req.companyId
+        });
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
         const activeDocuments = getActiveDocuments(profile);
@@ -1429,11 +1610,15 @@ exports.submitDocuments = async (req, res) => {
 
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'SUBMIT_DOCUMENTS',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetUser: userId },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId
+            },
             ipAddress: req.ip
         });
 
@@ -1576,16 +1761,125 @@ exports.proxyPdf = async (req, res) => {
     }
 };
 
+const trimDossierHistory = async (userId, companyId) => {
+    try {
+        const userIds = [userId];
+        const companyIds = [companyId];
+        try {
+            userIds.push(new mongoose.Types.ObjectId(userId));
+        } catch (e) {}
+        try {
+            companyIds.push(new mongoose.Types.ObjectId(companyId));
+        } catch (e) {}
+
+        const query = {
+            module: 'EmployeeDossier',
+            $and: [
+                {
+                    $or: [
+                        { companyId: { $in: companyIds } },
+                        { company: { $in: companyIds } },
+                        { 'details.companyId': { $in: companyIds } },
+                        { 'details.company': { $in: companyIds } },
+                        {
+                            $and: [
+                                { companyId: { $exists: false } },
+                                { company: { $exists: false } },
+                                { 'details.companyId': { $exists: false } },
+                                { 'details.company': { $exists: false } }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    $or: [
+                        { 'details.targetUser': { $in: userIds } },
+                        { 'details.targetuser': { $in: userIds } }
+                    ]
+                }
+            ]
+        };
+
+        const logs = await AuditLog.find(query)
+            .select('_id')
+            .sort({ createdAt: -1 });
+
+        if (logs.length > 30) {
+            const idsToDelete = logs.slice(30).map(log => log._id);
+            await AuditLog.deleteMany({ _id: { $in: idsToDelete } });
+            console.log(`[DossierHistory] Trimmed ${idsToDelete.length} logs for user ${userId}`);
+        }
+    } catch (err) {
+        console.error('[DossierHistory] Trim error:', err);
+    }
+};
+
+const logDossierActivity = async ({ action, performedBy, companyId, details, ipAddress }) => {
+    try {
+        const newLog = await AuditLog.create({
+            action,
+            module: 'EmployeeDossier',
+            performedBy,
+            companyId,
+            details,
+            ipAddress
+        });
+
+        const targetUserId = details?.targetUser || details?.targetuser;
+        if (targetUserId && companyId) {
+            trimDossierHistory(targetUserId, companyId).catch(err =>
+                console.error('[DossierHistory] Background trim error:', err)
+            );
+        }
+        return newLog;
+    } catch (err) {
+        console.error('[DossierHistory] Failed to log activity:', err);
+    }
+};
+
 exports.getDossierHistory = async (req, res) => {
     try {
         const { userId } = req.params;
+
+        const userIds = [userId];
+        const companyIds = [req.companyId];
+        try {
+            userIds.push(new mongoose.Types.ObjectId(userId));
+        } catch (e) {}
+        try {
+            companyIds.push(new mongoose.Types.ObjectId(req.companyId));
+        } catch (e) {}
+
         const logs = await AuditLog.find({
-            companyId: req.companyId,
-            'details.targetUser': userId,
-            module: 'EmployeeDossier'
+            module: 'EmployeeDossier',
+            $and: [
+                {
+                    $or: [
+                        { companyId: { $in: companyIds } },
+                        { company: { $in: companyIds } },
+                        { 'details.companyId': { $in: companyIds } },
+                        { 'details.company': { $in: companyIds } },
+                        {
+                            $and: [
+                                { companyId: { $exists: false } },
+                                { company: { $exists: false } },
+                                { 'details.companyId': { $exists: false } },
+                                { 'details.company': { $exists: false } }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    $or: [
+                        { 'details.targetUser': { $in: userIds } },
+                        { 'details.targetuser': { $in: userIds } }
+                    ]
+                }
+            ]
         })
             .populate('performedBy', 'firstName lastName')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .limit(30);
 
         res.status(200).json(logs);
     } catch (error) {
@@ -1657,8 +1951,20 @@ exports.approveHRIS = async (req, res) => {
 
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
+        const originalProfile = profile.toObject();
+        const diff = { oldValues: {}, newValues: {} };
+
         if (profile.pendingUpdates) {
             const pending = profile.pendingUpdates;
+
+            ['personal', 'identity', 'contact', 'family', 'employment', 'compensation', 'education', 'experience', 'skills'].forEach(section => {
+                if (pending[section]) {
+                    const sectionDiff = getDossierDiff(originalProfile[section], pending[section], section);
+                    Object.assign(diff.oldValues, sectionDiff.oldValues);
+                    Object.assign(diff.newValues, sectionDiff.newValues);
+                }
+            });
+
             if (pending.personal) profile.personal = { ...(profile.personal?.toObject?.() || {}), ...pending.personal };
             if (pending.identity) profile.identity = { ...(profile.identity?.toObject?.() || {}), ...pending.identity };
             if (pending.contact) profile.contact = { ...(profile.contact?.toObject?.() || {}), ...pending.contact };
@@ -1685,11 +1991,18 @@ exports.approveHRIS = async (req, res) => {
 
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'APPROVE_HRIS',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetUser: userId },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                oldValues: diff.oldValues,
+                newValues: diff.newValues,
+                originModule: 'HRIS'
+            },
             ipAddress: req.ip
         });
 
@@ -1730,12 +2043,16 @@ exports.rejectHRIS = async (req, res) => {
 
         await profile.save();
 
-        await AuditLog.create({
+        await logDossierActivity({
             action: 'REJECT_HRIS',
-            module: 'EmployeeDossier',
             performedBy: req.user._id,
-            details: { targetuser: userId,
-                companyId: req.companyId, reason },
+            companyId: req.companyId,
+            details: {
+                targetUser: userId,
+                targetuser: userId,
+                companyId: req.companyId,
+                reason
+            },
             ipAddress: req.ip
         });
 
@@ -1782,8 +2099,11 @@ exports.exportHRISExcel = async (req, res) => {
                     { header: 'Gender', key: 'gender', width: 10 },
                     { header: 'Date of Birth', key: 'dob', width: 12 },
                     { header: 'Marital Status', key: 'maritalStatus', width: 15 },
+                    { header: 'Date of Marriage', key: 'dateOfMarriage', width: 15 },
                     { header: 'Nationality', key: 'nationality', width: 15 },
                     { header: 'Blood Group', key: 'bloodGroup', width: 10 },
+                    { header: 'Disability Status', key: 'disabilityStatus', width: 15 },
+                    { header: 'Nature of Disability', key: 'disabilityDetails', width: 25 },
                     { header: 'Date of Joining', key: 'joiningDate', width: 12 },
                 ]
             },
@@ -1796,6 +2116,7 @@ exports.exportHRISExcel = async (req, res) => {
                     { header: 'Emergency Contact Name', key: 'emergencyName', width: 20 },
                     { header: 'Emergency Contact Relationship', key: 'emergencyRelation', width: 15 },
                     { header: 'Emergency Contact Number', key: 'emergencyPhone', width: 15 },
+                    { header: 'Emergency Contact Email', key: 'emergencyEmail', width: 25 },
                 ]
             },
             {
@@ -1858,6 +2179,7 @@ exports.exportHRISExcel = async (req, res) => {
                     { header: 'Previous Company Name', key: 'prevComp', width: 20 },
                     { header: 'Start Date', key: 'expStart', width: 12 },
                     { header: 'End Date', key: 'expEnd', width: 12 },
+                    { header: 'Reason for Leaving', key: 'reasonForLeaving', width: 25 },
                 ]
             },
             {
@@ -1923,17 +2245,54 @@ exports.exportHRISExcel = async (req, res) => {
 
         // --- Populate Data ---
         profiles.forEach(p => {
-            const getAddr = (type) => p.contact?.addresses?.find(a => a.type === type) || {};
+            const merged = p.toObject();
+            if (merged.pendingUpdates && p.hris?.status === 'Approved') {
+                const pending = merged.pendingUpdates;
+                if (pending.personal) merged.personal = { ...(merged.personal || {}), ...pending.personal };
+                if (pending.identity) merged.identity = { ...(merged.identity || {}), ...pending.identity };
+                if (pending.contact) {
+                    const mergedAddresses = [...(merged.contact?.addresses || [])];
+                    if (pending.contact.addresses && Array.isArray(pending.contact.addresses)) {
+                        pending.contact.addresses.forEach(addr => {
+                            const idx = mergedAddresses.findIndex(a => a.type === addr.type);
+                            if (idx !== -1) {
+                                mergedAddresses[idx] = { ...mergedAddresses[idx], ...addr };
+                            } else {
+                                mergedAddresses.push(addr);
+                            }
+                        });
+                    }
+                    merged.contact = {
+                        ...(merged.contact || {}),
+                        ...pending.contact,
+                        addresses: mergedAddresses
+                    };
+                }
+                if (pending.family) merged.family = { ...(merged.family || {}), ...pending.family };
+                if (pending.employment) merged.employment = { ...(merged.employment || {}), ...pending.employment };
+                if (pending.compensation) {
+                    merged.compensation = {
+                        ...(merged.compensation || {}),
+                        ...pending.compensation,
+                        bankDetails: { ...(merged.compensation?.bankDetails || {}), ...(pending.compensation?.bankDetails || {}) }
+                    };
+                }
+                if (pending.education) merged.education = pending.education;
+                if (pending.experience) merged.experience = pending.experience;
+                if (pending.skills) merged.skills = pending.skills;
+            }
+
+            const getAddr = (type) => merged.contact?.addresses?.find(a => a.type === type) || {};
             const curr = getAddr('Current');
             const perm = getAddr('Permanent');
             // Assuming 'Mailing' schema, fallback to empty
-            const mail = p.contact?.addresses?.find(a => a.type === 'Mailing') || {};
+            const mail = merged.contact?.addresses?.find(a => a.type === 'Mailing') || {};
 
             // Calculate total experience
             let totalExpYears = 0;
-            if (p.experience && p.experience.length > 0) {
+            if (merged.experience && merged.experience.length > 0) {
                 const msInYear = 1000 * 60 * 60 * 24 * 365.25;
-                totalExpYears = p.experience.reduce((acc, exp) => {
+                totalExpYears = merged.experience.reduce((acc, exp) => {
                     const start = exp.startDate ? new Date(exp.startDate) : new Date();
                     const end = exp.endDate ? new Date(exp.endDate) : new Date();
                     return acc + (end - start);
@@ -1941,18 +2300,18 @@ exports.exportHRISExcel = async (req, res) => {
             }
 
             // Determine max rows needed for this profile (based on array lengths)
-            const eduCount = p.education?.length || 0;
-            const expCount = p.experience?.length || 0;
-            const childCount = p.family?.children?.length || 0;
+            const eduCount = merged.education?.length || 0;
+            const expCount = merged.experience?.length || 0;
+            const childCount = merged.family?.children?.length || 0;
             const maxRows = Math.max(1, eduCount, expCount, childCount);
 
             for (let i = 0; i < maxRows; i++) {
                 const isFirst = i === 0;
 
                 // Get array items for current row index
-                const edu = p.education?.[i] || {};
-                const exp = p.experience?.[i] || {};
-                const child = p.family?.children?.[i] || {};
+                const edu = merged.education?.[i] || {};
+                const exp = merged.experience?.[i] || {};
+                const child = merged.family?.children?.[i] || {};
 
                 // Helper to safely get date or empty
                 const getDate = (d) => d ? formatDate(d) : '';
@@ -1975,25 +2334,29 @@ exports.exportHRISExcel = async (req, res) => {
 
                 const rowData = {
                     // --- STATIC FIELDS (Show only on first row) ---
-                    empCode: isFirst ? p.user?.employeeCode : '',
-                    fullName: isFirst ? (p.personal?.fullName || `${p.user?.firstName} ${p.user?.lastName}`.trim()) : '',
-                    firstName: isFirst ? p.user?.firstName : '',
-                    middleName: isFirst ? p.personal?.middleName : '',
-                    lastName: isFirst ? p.user?.lastName : '',
-                    gender: isFirst ? p.personal?.gender : '',
-                    dob: isFirst ? formatDate(p.personal?.dob) : '',
-                    maritalStatus: isFirst ? p.personal?.maritalStatus : '',
-                    nationality: isFirst ? p.personal?.nationality : '',
-                    bloodGroup: isFirst ? p.personal?.bloodGroup : '',
-                    joiningDate: isFirst ? formatDate(p.employment?.joiningDate) : '',
+                    empCode: isFirst ? merged.user?.employeeCode : '',
+                    fullName: isFirst ? (merged.personal?.fullName || `${merged.user?.firstName} ${merged.user?.lastName}`.trim()) : '',
+                    firstName: isFirst ? merged.user?.firstName : '',
+                    middleName: isFirst ? merged.personal?.middleName : '',
+                    lastName: isFirst ? merged.user?.lastName : '',
+                    gender: isFirst ? merged.personal?.gender : '',
+                    dob: isFirst ? formatDate(merged.personal?.dob) : '',
+                    maritalStatus: isFirst ? merged.personal?.maritalStatus : '',
+                    dateOfMarriage: isFirst ? (merged.personal?.dateOfMarriage ? formatDate(merged.personal?.dateOfMarriage) : '') : '',
+                    nationality: isFirst ? merged.personal?.nationality : '',
+                    bloodGroup: isFirst ? merged.personal?.bloodGroup : '',
+                    disabilityStatus: isFirst ? (merged.personal?.disabilityStatus ? 'Yes' : 'No') : '',
+                    disabilityDetails: isFirst ? (merged.personal?.disabilityStatus ? merged.personal?.disabilityDetails : '') : '',
+                    joiningDate: isFirst ? formatDate(merged.employment?.joiningDate) : '',
 
                     // Contact
-                    personalEmail: isFirst ? p.contact?.personalEmail : '',
-                    mobile: isFirst ? p.contact?.mobileNumber : '',
-                    altMobile: isFirst ? p.contact?.alternateNumber : '',
-                    emergencyName: isFirst ? p.contact?.emergencyContact?.name : '',
-                    emergencyRelation: isFirst ? (p.contact?.emergencyContact?.relation || '') : '',
-                    emergencyPhone: isFirst ? p.contact?.emergencyContact?.phone : '',
+                    personalEmail: isFirst ? merged.contact?.personalEmail : '',
+                    mobile: isFirst ? merged.contact?.mobileNumber : '',
+                    altMobile: isFirst ? merged.contact?.alternateNumber : '',
+                    emergencyName: isFirst ? merged.contact?.emergencyContact?.name : '',
+                    emergencyRelation: isFirst ? (merged.contact?.emergencyContact?.relation || '') : '',
+                    emergencyPhone: isFirst ? merged.contact?.emergencyContact?.phone : '',
+                    emergencyEmail: isFirst ? merged.contact?.emergencyContact?.email : '',
 
                     // Addresses (Consolidated)
                     currAddrFull: isFirst ? formatFullAddr(curr) : '',
@@ -2001,27 +2364,27 @@ exports.exportHRISExcel = async (req, res) => {
                     mailAddrFull: isFirst ? formatFullAddr(mail) : '',
 
                     // Bank
-                    accHolder: isFirst ? (p.compensation?.bankDetails?.accountHolderName || p.personal?.fullName || `${p.user?.firstName} ${p.user?.lastName}`) : '',
-                    bankName: isFirst ? p.compensation?.bankDetails?.bankName : '',
-                    branchAddress: isFirst ? p.compensation?.bankDetails?.branchAddress : '',
-                    accNum: isFirst ? p.compensation?.bankDetails?.accountNumber : '',
-                    ifsc: isFirst ? p.compensation?.bankDetails?.ifscCode : '',
-                    uan: isFirst ? p.compensation?.uanNumber : '',
+                    accHolder: isFirst ? (merged.compensation?.bankDetails?.accountHolderName || merged.personal?.fullName || `${merged.user?.firstName} ${merged.user?.lastName}`) : '',
+                    bankName: isFirst ? merged.compensation?.bankDetails?.bankName : '',
+                    branchAddress: isFirst ? merged.compensation?.bankDetails?.branchAddress : '',
+                    accNum: isFirst ? merged.compensation?.bankDetails?.accountNumber : '',
+                    ifsc: isFirst ? merged.compensation?.bankDetails?.ifscCode : '',
+                    uan: isFirst ? (merged.compensation?.isUanApplicable === true ? (merged.compensation?.uanNumber || '') : 'Not Applicable') : '',
 
                     // Identity
-                    pan: isFirst ? p.identity?.panNumber : '',
-                    aadhaar: isFirst ? p.identity?.aadhaarNumber : '',
-                    passport: isFirst ? p.identity?.passportNumber : '',
+                    pan: isFirst ? merged.identity?.panNumber : '',
+                    aadhaar: isFirst ? merged.identity?.aadhaarNumber : '',
+                    passport: isFirst ? merged.identity?.passportNumber : '',
 
                     // Family (Static Parents/Spouse)
-                    fatherName: isFirst ? p.family?.fatherName : '',
-                    fatherOcc: isFirst ? p.family?.fatherOccupation : '',
-                    motherName: isFirst ? p.family?.motherName : '',
-                    motherOcc: isFirst ? p.family?.motherOccupation : '',
-                    famMarital: isFirst ? p.family?.parentsMaritalStatus : '',
-                    totalSiblings: isFirst ? p.family?.totalSiblings : '',
-                    spouseName: isFirst ? p.family?.spouseName : '',
-                    spouseDob: isFirst ? formatDate(p.family?.spouseDob) : '',
+                    fatherName: isFirst ? merged.family?.fatherName : '',
+                    fatherOcc: isFirst ? merged.family?.fatherOccupation : '',
+                    motherName: isFirst ? merged.family?.motherName : '',
+                    motherOcc: isFirst ? merged.family?.motherOccupation : '',
+                    famMarital: isFirst ? merged.family?.parentsMaritalStatus : '',
+                    totalSiblings: isFirst ? merged.family?.totalSiblings : '',
+                    spouseName: isFirst ? merged.family?.spouseName : '',
+                    spouseDob: isFirst ? formatDate(merged.family?.spouseDob) : '',
 
                     // --- ARRAY FIELDS (Spread across rows) ---
 
@@ -2042,11 +2405,12 @@ exports.exportHRISExcel = async (req, res) => {
                     prevComp: exp.companyName || '',
                     expStart: getDate(exp.startDate),
                     expEnd: getDate(exp.endDate),
+                    reasonForLeaving: exp.reasonForLeaving || '',
 
                     // Skills (Are arrays but usually comma separated list is better than rows for skills, keeping as comma separated on first row)
-                    techSkills: isFirst ? (p.skills?.technical?.join(', ') || '') : '',
-                    behavSkills: isFirst ? (p.skills?.behavioral?.join(', ') || '') : '',
-                    learnSkills: isFirst ? (p.skills?.learningInterests?.join(', ') || '') : ''
+                    techSkills: isFirst ? (merged.skills?.technical?.join(', ') || '') : '',
+                    behavSkills: isFirst ? (merged.skills?.behavioral?.join(', ') || '') : '',
+                    learnSkills: isFirst ? (merged.skills?.learningInterests?.join(', ') || '') : ''
                 };
 
                 sheet.addRow(rowData);

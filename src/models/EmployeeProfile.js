@@ -167,6 +167,7 @@ const employeeProfileSchema = new mongoose.Schema({
             branchAddress: String
         },
         pfAccountNumber: String,
+        isUanApplicable: { type: Boolean, default: false },
         uanNumber: String
     },
 
