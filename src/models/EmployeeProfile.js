@@ -82,6 +82,7 @@ const employeeProfileSchema = new mongoose.Schema({
         nationality: String,
         shirtSize: String, // For swag
         photo: String, // URL
+        joiningDate: Date,
 
         // Extended Attributes
         disabilityStatus: { type: Boolean, default: false },
@@ -234,5 +235,28 @@ const employeeProfileSchema = new mongoose.Schema({
     isConfidential: { type: Boolean, default: false } // VIP profile
 
 }, { timestamps: true });
+
+employeeProfileSchema.pre('save', async function () {
+    let joiningDate = null;
+    
+    if (this.isModified('personal.joiningDate')) {
+        joiningDate = this.personal.joiningDate;
+    } else if (this.isModified('employment.joiningDate')) {
+        joiningDate = this.employment.joiningDate;
+    }
+    
+    if (joiningDate) {
+        this.personal.joiningDate = joiningDate;
+        this.employment.joiningDate = joiningDate;
+        
+        // Sync to User model
+        try {
+            const User = mongoose.model('User');
+            await User.updateOne({ _id: this.user }, { $set: { joiningDate } });
+        } catch (err) {
+            console.error('Error syncing joiningDate to User model:', err);
+        }
+    }
+});
 
 module.exports = mongoose.model('EmployeeProfile', employeeProfileSchema);

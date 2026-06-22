@@ -2678,7 +2678,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                 dob: personalDetails.dateOfBirth || null,
                 gender: personalDetails.gender || null,
                 bloodGroup: personalDetails.bloodGroup || '',
-                nationality: 'Indian'
+                nationality: 'Indian',
+                joiningDate: employee.joiningDate || new Date()
             },
             identity: {},
             contact: {
