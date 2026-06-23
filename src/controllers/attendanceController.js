@@ -9,7 +9,7 @@ const { startOfDay, endOfDay, format, differenceInCalendarDays, subDays, startOf
 const LeaveRequest = require('../models/LeaveRequest');
 const LeaveConfig = require('../models/LeaveConfig');
 const NotificationService = require('../services/notificationService');
-const { getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
+const { getTimesheetPeriodIdForDate, buildTimesheetPeriodRange, toLocalTimezoneRep } = require('../utils/timesheetPeriod');
 const {
     getISTTime,
     getStartOfDayIST,
@@ -736,9 +736,12 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
         const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation').lean();
         const userIds = teamMembers.map(m => m._id);
 
-        const startDate = parseDateAsIST(`${year}-${String(month).padStart(2, '0')}-01`);
-        const endDate = endOfMonth(startDate);
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
+        const { start: startDate, end: endDate } = buildTimesheetPeriodRange(`${year}-${String(month).padStart(2, '0')}`, 'Monthly');
+        const daysInMonth = getDaysInMonth(toLocalTimezoneRep(startDate));
+        const days = [];
+        for (let d = 1; d <= daysInMonth; d++) {
+            days.push(new Date(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}T00:00:00.000+05:30`));
+        }
 
         // Fetch Data
         const attendanceRecords = await Attendance.find({ 
@@ -771,7 +774,7 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
 
         // Headers
         const headers = ['Employee Code', 'Employee Name'];
-        days.forEach(day => headers.push(format(day, 'dd-EEE')));
+        days.forEach(day => headers.push(format(toLocalTimezoneRep(day), 'dd-EEE')));
         headers.push('Present', 'Holiday', 'Weekoff', 'Leave', 'Absent');
         sheet.addRow(headers);
         sheet.getRow(1).eachCell(cell => Object.assign(cell, headerStyle));
@@ -786,18 +789,19 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
             let absentCount = 0;
 
             days.forEach(day => {
-                const dayStr = format(day, 'yyyy-MM-dd');
-                const dayName = format(day, 'EEEE');
+                const localDay = toLocalTimezoneRep(day);
+                const dayStr = format(localDay, 'yyyy-MM-dd');
+                const dayName = format(localDay, 'EEEE');
                 
                 // 1. Identification
-                const holiday = holidays.find(h => format(new Date(h.date), 'yyyy-MM-dd') === dayStr);
+                const holiday = holidays.find(h => format(toLocalTimezoneRep(h.date), 'yyyy-MM-dd') === dayStr);
                 const isWeeklyOff = weeklyOffs.some(woff => woff.trim().toLowerCase() === dayName.toLowerCase());
                 
                 const onLeave = leaves.find(l => {
                     if (l.user.toString() !== member._id.toString()) return false;
-                    const lStart = startOfDay(new Date(l.startDate));
-                    const lEnd = startOfDay(new Date(l.endDate));
-                    const current = startOfDay(day);
+                    const lStart = startOfDay(toLocalTimezoneRep(l.startDate));
+                    const lEnd = startOfDay(toLocalTimezoneRep(l.endDate));
+                    const current = startOfDay(localDay);
                     return current >= lStart && current <= lEnd;
                 });
 
@@ -832,7 +836,7 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
                 // 4. Check Attendance (Priority 4 - Working Days)
                 const hasAtt = attendanceRecords.find(a => 
                     a.user.toString() === member._id.toString() && 
-                    format(new Date(a.date), 'yyyy-MM-dd') === dayStr
+                    format(toLocalTimezoneRep(a.date), 'yyyy-MM-dd') === dayStr
                 );
 
                 if (hasAtt) {

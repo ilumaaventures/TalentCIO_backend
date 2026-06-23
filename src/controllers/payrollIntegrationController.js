@@ -9,6 +9,7 @@ const {
 } = require('../services/payrollIntegrationService');
 const { encryptPayload } = require('../utils/payrollCrypto');
 const { parseDateAsIST } = require('../utils/attendancePolicy');
+const { toLocalTimezoneRep } = require('../utils/timesheetPeriod');
 
 const buildEncryptedResponseIfNeeded = (payload, payrollIntegration) => {
     if (!payrollIntegration?.encryptPayloads) {
@@ -34,13 +35,16 @@ const countLeaveDaysInRange = ({
         return 0;
     }
 
+    const localStart = toLocalTimezoneRep(startDate);
+    const localEnd = toLocalTimezoneRep(endDate);
+
     if (isHalfDay) {
-        const dayName = format(startDate, 'EEEE');
-        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(startDate.toDateString());
+        const dayName = format(localStart, 'EEEE');
+        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(localStart.toDateString());
         return isOffDay && !sandwichRule ? 0 : 0.5;
     }
 
-    return eachDayOfInterval({ start: startDate, end: endDate }).reduce((total, currentDate) => {
+    return eachDayOfInterval({ start: localStart, end: localEnd }).reduce((total, currentDate) => {
         const dayName = format(currentDate, 'EEEE');
         const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(currentDate.toDateString());
         if (isOffDay && !sandwichRule) {
@@ -142,7 +146,7 @@ const getAttendanceSummary = async (req, res) => {
         ]);
 
         const holidayDateSet = new Set(
-            holidays.map((holiday) => new Date(holiday.date).toDateString())
+            holidays.map((holiday) => toLocalTimezoneRep(holiday.date).toDateString())
         );
         const leaveConfigMap = new Map(
             leaveConfigs.map((config) => [config.leaveType, config])
