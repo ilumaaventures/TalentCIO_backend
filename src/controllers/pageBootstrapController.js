@@ -284,7 +284,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
 
 exports.getAttendanceBootstrap = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        res.set('Cache-Control', 'no-store');
         const targetUserId = req.query.userId || req.user._id;
         const year = parseInt(req.query.year, 10) || new Date().getFullYear();
         const month = parseInt(req.query.month, 10) || (new Date().getMonth() + 1);
@@ -476,7 +476,7 @@ exports.getLeavesBootstrap = async (req, res) => {
 
 exports.getTimesheetBootstrap = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        res.set('Cache-Control', 'no-store');
         const targetUserId = req.query.userId || req.user._id;
         const year = parseInt(req.query.year, 10) || new Date().getFullYear();
         const month = parseInt(req.query.monthNumber, 10) || (new Date().getMonth() + 1);
