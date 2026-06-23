@@ -499,7 +499,10 @@ exports.getDossier = async (req, res) => {
         // Permission Check: View Dossier
         // Users can always view their own. To view others, need 'dossier.view' or Admin.
         if (!isSelf) {
-            const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view") || hasPermission(req.user, "dossier.view.sensitive");
+            const canView = checkIsAdmin(req.user) 
+                || hasPermission(req.user, "dossier.view") 
+                || hasPermission(req.user, "dossier.view.sensitive")
+                || hasPermission(req.user, "dossier.export");
             if (!canView) {
                 return res.status(403).json({ message: 'Not authorized to view this dossier' });
             }
@@ -509,7 +512,7 @@ exports.getDossier = async (req, res) => {
             user: userId,
             companyId: req.companyId
         })
-            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber +personal.medicalConditions')
+            .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber')
             .populate({
                 path: 'user',
                 select: 'firstName lastName email employeeCode roles department joiningDate employmentType workLocation',
@@ -799,15 +802,15 @@ exports.submitHRIS = async (req, res) => {
         if (!canEditSensitive) {
             const profileObj = profile.toObject();
 
-            const employmentKeys = ['designation', 'department', 'businessUnit', 'reportingManager', 'joiningDate', 'confirmationDate', 'status', 'noticePeriodDays', 'workLocation', 'branch', 'employmentType'];
+            const employmentKeys = ['designation', 'department', 'businessUnit', 'reportingManager', 'joiningDate', 'confirmationDate', 'status', 'workLocation', 'branch', 'employmentType'];
             if (updates.employment && hasModifiedSensitiveField(profileObj.employment || {}, updates.employment, employmentKeys)) {
                 return res.status(403).json({ message: 'You are not authorized to modify sensitive employment details. Contact HR.' });
             }
 
             // Identity changes are allowed for staging via HRIS submission.
 
-            // Only block compensation updates if truly sensitive fields (ctc, salaryBreakup, pfAccountNumber) are modified.
-            const sensitiveCompKeys = ['ctc', 'salaryBreakup', 'pfAccountNumber'];
+            // Only block compensation updates if truly sensitive fields (ctc, salaryBreakup) are modified.
+            const sensitiveCompKeys = ['ctc', 'salaryBreakup'];
             if (updates.compensation && hasModifiedSensitiveField(profileObj.compensation || {}, updates.compensation, sensitiveCompKeys)) {
                 return res.status(403).json({ message: 'You are not authorized to modify sensitive compensation details. Contact HR.' });
             }
@@ -1767,10 +1770,10 @@ const trimDossierHistory = async (userId, companyId) => {
         const companyIds = [companyId];
         try {
             userIds.push(new mongoose.Types.ObjectId(userId));
-        } catch (e) {}
+        } catch (e) { }
         try {
             companyIds.push(new mongoose.Types.ObjectId(companyId));
-        } catch (e) {}
+        } catch (e) { }
 
         const query = {
             module: 'EmployeeDossier',
@@ -1845,10 +1848,10 @@ exports.getDossierHistory = async (req, res) => {
         const companyIds = [req.companyId];
         try {
             userIds.push(new mongoose.Types.ObjectId(userId));
-        } catch (e) {}
+        } catch (e) { }
         try {
             companyIds.push(new mongoose.Types.ObjectId(req.companyId));
-        } catch (e) {}
+        } catch (e) { }
 
         const logs = await AuditLog.find({
             module: 'EmployeeDossier',

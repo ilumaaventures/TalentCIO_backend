@@ -44,7 +44,6 @@ const PAYROLL_PROFILE_SELECT = [
     'compensation.bankDetails.bankName',
     'compensation.bankDetails.accountHolderName',
     'compensation.bankDetails.branchAddress',
-    'compensation.pfAccountNumber',
     'compensation.uanNumber'
 ].join(' ');
 const PAYROLL_PROFILE_HIDDEN_SELECT = '+identity.aadhaarNumber +identity.panNumber +compensation.ctc +compensation.bankDetails.accountNumber';
@@ -145,7 +144,6 @@ const buildEmployeePayload = (user, profile = null) => {
             bankName: bankDetails.bankName || '',
             accountHolderName: bankDetails.accountHolderName || fullName,
             branchAddress: bankDetails.branchAddress || '',
-            pfAccountNumber: compensation.pfAccountNumber || '',
             uanNumber: compensation.uanNumber || ''
         }
     };

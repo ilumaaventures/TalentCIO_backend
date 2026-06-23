@@ -81,16 +81,13 @@ const employeeProfileSchema = new mongoose.Schema({
         dateOfMarriage: Date,
         bloodGroup: String,
         nationality: String,
-        shirtSize: String, // For swag
         photo: String, // URL
         joiningDate: Date,
 
         // Extended Attributes
         disabilityStatus: { type: Boolean, default: false },
         disabilityDetails: String,
-        medicalConditions: { type: String, select: false }, // Confidential
 
-        hobbies: [String]
     },
 
     // --- Identity & Confidential ---
@@ -98,9 +95,6 @@ const employeeProfileSchema = new mongoose.Schema({
         aadhaarNumber: { type: String, select: false }, // Private by default
         panNumber: { type: String, select: false },
         passportNumber: { type: String, select: false },
-        passportExpiry: Date,
-        visaStatus: String,
-        visaExpiryDate: Date
     },
 
     // --- Contact Details ---
@@ -145,8 +139,7 @@ const employeeProfileSchema = new mongoose.Schema({
         joiningDate: Date,
         confirmationDate: Date,
         status: { type: String, enum: ['Active', 'On Notice', 'Terminated', 'Resigned', 'Retired'] },
-        noticePeriodDays: Number,
-        workLocation: { type: String, enum: ['Office', 'Remote', 'Hybrid'] },
+        workLocation: { type: String },
         branch: String,
         employmentType: {
             type: String,
@@ -166,7 +159,6 @@ const employeeProfileSchema = new mongoose.Schema({
             accountHolderName: String,
             branchAddress: String
         },
-        pfAccountNumber: String,
         isUanApplicable: { type: Boolean, default: false },
         uanNumber: String
     },
@@ -241,17 +233,17 @@ const employeeProfileSchema = new mongoose.Schema({
 
 employeeProfileSchema.pre('save', async function () {
     let joiningDate = null;
-    
+
     if (this.isModified('personal.joiningDate')) {
         joiningDate = this.personal.joiningDate;
     } else if (this.isModified('employment.joiningDate')) {
         joiningDate = this.employment.joiningDate;
     }
-    
+
     if (joiningDate) {
         this.personal.joiningDate = joiningDate;
         this.employment.joiningDate = joiningDate;
-        
+
         // Sync to User model
         try {
             const User = mongoose.model('User');
