@@ -122,6 +122,25 @@ userSchema.pre('save', async function () {
     }
 });
 
+userSchema.pre('save', async function () {
+    if (this.isModified('joiningDate') && this.joiningDate) {
+        try {
+            const EmployeeProfile = mongoose.model('EmployeeProfile');
+            await EmployeeProfile.updateOne(
+                { user: this._id },
+                { 
+                    $set: { 
+                        'employment.joiningDate': this.joiningDate,
+                        'personal.joiningDate': this.joiningDate
+                    } 
+                }
+            );
+        } catch (err) {
+            console.error('Error syncing joiningDate to EmployeeProfile:', err);
+        }
+    }
+});
+
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
 };

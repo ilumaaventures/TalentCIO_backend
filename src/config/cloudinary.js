@@ -152,11 +152,34 @@ const uploadProfilePicture = multer({
     }
 });
 
+const ATTENDANCE_DOCUMENT_MIME_TYPES = new Set([
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]);
+
+const uploadAttendanceDocuments = multer({
+    storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+        const fileExtension = file.originalname.split('.').pop().toLowerCase();
+        const isAllowed = ATTENDANCE_DOCUMENT_MIME_TYPES.has(file.mimetype) || fileExtension === 'doc' || fileExtension === 'docx';
+
+        if (!isAllowed) {
+            return cb(new Error('Only Word files (.doc, .docx) are allowed.'));
+        }
+
+        cb(null, true);
+    }
+});
+
 module.exports = {
     upload,
     uploadDossierDocuments,
     uploadProfilePicture,
     uploadOnboardingCustomFiles,
     uploadAnnouncementAttachment,
+    uploadAttendanceDocuments,
     cloudinary
 };
