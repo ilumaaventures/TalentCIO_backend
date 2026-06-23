@@ -153,6 +153,8 @@ const loginUser = async (req, res) => {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
+        const company = req.company || await Company.findById(req.companyId).lean();
+
         const user = await User.findOne({ email: normalizedEmail, companyId: req.companyId }).populate({
             path: 'roles',
             populate: {
@@ -297,7 +299,6 @@ const loginUser = async (req, res) => {
             isInterviewer = interviewCount > 0;
         }
 
-        const company = req.company || await Company.findById(user.companyId).lean();
         const normalizedCompany = company
             ? { ...company, enabledModules: normalizeEnabledModules(company.enabledModules || []) }
             : null;
