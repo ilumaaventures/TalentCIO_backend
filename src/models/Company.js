@@ -200,6 +200,7 @@ const companySchema = new mongoose.Schema({
             halfDayAllowed: { type: Boolean, default: true },
             requireLocationCheckIn: { type: Boolean, default: false },
             requireLocationCheckOut: { type: Boolean, default: false },
+            requireLocationTimesheet: { type: Boolean, default: false },
             locationCheck: { type: Boolean, default: false }, // Geo-fencing
             ipCheck: { type: Boolean, default: false },
             allowedRadius: { type: Number, default: 200 }, // in meters
