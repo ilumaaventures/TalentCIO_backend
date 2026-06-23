@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
+const { requireModule } = require('../middlewares/moduleGuard');
 const {
     getEmployees,
     getTemplates,
@@ -36,6 +37,7 @@ const uploadAttachments = (req, res, next) => {
 };
 
 router.use(protect);
+router.use(requireModule('hrEmail'));
 
 router.get('/employees', authorize('hr_email.send'), getEmployees);
 router.get('/templates', authorize('hr_email.send'), getTemplates);

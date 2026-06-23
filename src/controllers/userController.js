@@ -414,7 +414,10 @@ const getMyself = async (req, res) => {
 
         if (hasAllPermissions) {
             const allPermissions = await Permission.find({}).select('key').lean();
-            permissions = [...new Set([...permissions, ...allPermissions.map(p => p.key)])];
+            const enabledModules = company?.enabledModules || [];
+            const { filterPermissionsByEnabledModules } = require('../utils/enabledModules');
+            const filteredAll = filterPermissionsByEnabledModules(allPermissions, enabledModules);
+            permissions = [...new Set([...permissions, ...filteredAll.map(p => p.key)])];
         } else if (totalPerms > 0 && permissions.length >= totalPerms) {
             hasAllPermissions = true;
         }

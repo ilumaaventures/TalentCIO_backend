@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
+const { requireModule } = require('../middlewares/moduleGuard');
 const {
     initiateOffboarding,
     getOffboardingList,
@@ -20,6 +21,7 @@ const upload = multer({
 });
 
 router.use(protect);
+router.use(requireModule('offboarding'));
 
 router.get('/stats', authorize('offboarding.read'), getOffboardingStats);
 router.get('/', authorize('offboarding.read'), getOffboardingList);

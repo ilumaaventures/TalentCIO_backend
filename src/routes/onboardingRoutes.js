@@ -3,12 +3,17 @@ const router = express.Router();
 const { protect, admin } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/authorize');
 const { upload, uploadOnboardingCustomFiles } = require('../config/cloudinary');
+const { requireModule } = require('../middlewares/moduleGuard');
+
+// Apply module checks to HR Admin / Settings routes
+router.use('/employees', requireModule('onboarding'));
+router.use('/bootstrap', requireModule('onboarding'));
+router.use('/settings', requireModule('onboarding'));
+
 const onboardingController = require('../controllers/onboardingController');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const jwt = require('jsonwebtoken');
 const { getOnboardingBootstrap } = require('../controllers/pageBootstrapController');
-
-// ==========================================
 // Onboarding Token Auth Middleware
 // ==========================================
 const protectOnboarding = async (req, res, next) => {

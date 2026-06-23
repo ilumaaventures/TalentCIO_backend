@@ -11,18 +11,34 @@ const {
 } = require('../services/companyEmailService');
 const { clearCompanyNotificationSettingsCache } = require('../services/notificationService');
 
+const { normalizeEnabledModules } = require('../utils/enabledModules');
+
 const buildNotificationSettingsResponse = async (companyId) => {
     const company = await Company.findById(companyId)
-        .select('settings.notifications')
+        .select('settings.notifications enabledModules')
         .lean();
 
     if (!company) {
         return null;
     }
 
+    const enabled = new Set(normalizeEnabledModules(company.enabledModules || []));
+    const filteredDefinitions = NOTIFICATION_EVENT_DEFINITIONS.filter(def => {
+        const mod = def.module;
+        if (mod === 'Leaves') return enabled.has('leaves');
+        if (mod === 'Timesheet') return enabled.has('timesheet');
+        if (mod === 'Attendance') return enabled.has('attendance');
+        if (mod === 'Helpdesk') return enabled.has('helpdesk');
+        if (mod === 'Discussions') return enabled.has('meetingsOfMinutes');
+        if (mod === 'Announcements') return enabled.has('announcements');
+        if (mod === 'Talent Acquisition') return enabled.has('talentAcquisition');
+        if (mod === 'Onboarding') return enabled.has('onboarding');
+        return true; // e.g. Authentication
+    });
+
     return {
         settings: normalizeNotificationSettings(company?.settings?.notifications || {}),
-        definitions: NOTIFICATION_EVENT_DEFINITIONS,
+        definitions: filteredDefinitions,
         channels: NOTIFICATION_CHANNELS
     };
 };

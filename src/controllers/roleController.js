@@ -1,7 +1,9 @@
 const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 const User = require('../models/User');
+const Company = require('../models/Company');
 const { validateRoleInheritanceGraph } = require('../utils/permissionResolver');
+const { filterPermissionsByEnabledModules } = require('../utils/enabledModules');
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
     'ta.analytics.requisition',
@@ -24,13 +26,20 @@ const isVisiblePermission = (permission) =>
 const getRoles = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
-        const roles = await Role.find({ companyId: req.companyId })
-            .populate('permissions')
-            .populate('inheritsFrom', 'name isSystem');
-        const sanitizedRoles = roles.map(role => ({
-            ...role.toObject(),
-            permissions: (role.permissions || []).filter(isVisiblePermission)
-        }));
+        const [roles, company] = await Promise.all([
+            Role.find({ companyId: req.companyId })
+                .populate('permissions')
+                .populate('inheritsFrom', 'name isSystem'),
+            Company.findById(req.companyId).select('enabledModules').lean()
+        ]);
+        const enabledModules = company?.enabledModules || [];
+        const sanitizedRoles = roles.map(role => {
+            const rawPermissions = (role.permissions || []).filter(isVisiblePermission);
+            return {
+                ...role.toObject(),
+                permissions: filterPermissionsByEnabledModules(rawPermissions, enabledModules)
+            };
+        });
         res.json(sanitizedRoles);
     } catch (error) {
         console.error(error);
@@ -115,8 +124,11 @@ const updateRole = async (req, res) => {
 const getPermissions = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
+        const company = await Company.findById(req.companyId).select('enabledModules').lean();
+        const enabledModules = company?.enabledModules || [];
         let permissions = await Permission.find({});
         permissions = permissions.filter(isVisiblePermission);
+        permissions = filterPermissionsByEnabledModules(permissions, enabledModules);
         console.log(`Fetching permissions for UI. Count after filter: ${permissions.length}`);
         // Group permissions by module for easier frontend display
         const grouped = permissions.reduce((acc, curr) => {

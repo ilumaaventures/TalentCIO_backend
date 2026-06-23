@@ -1,7 +1,7 @@
 const Role = require('../models/Role');
 const Permission = require('../models/Permission');
 
-const ANNOUNCEMENT_MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin']);
+const ANNOUNCEMENT_MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin', 'Super Admin']);
 
 const normalizeId = (value) => String(value?._id || value || '');
 
