@@ -540,5 +540,11 @@ module.exports = [
         key: "leave.config.manage",
         module: "LEAVE",
         description: "Create, update, and delete leave policies (leave types, accrual rules, carry-forward settings)"
+    },
+    {
+        key: "dashboard.view",
+        module: "SYSTEM",
+        description: "View main dashboard"
     }
 ];
+
