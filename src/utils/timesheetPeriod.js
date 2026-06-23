@@ -25,8 +25,28 @@ const getWeekStartFromYearAndNumber = (year, weekNumber) => {
     return addWeeks(isoWeekYearStart, weekNumber - 1);
 };
 
+const toLocalTimezoneRep = (dateInput, timeZone = 'Asia/Kolkata') => {
+    if (!dateInput) return dateInput;
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return date;
+    const tzString = date.toLocaleString('en-US', { timeZone });
+    return new Date(tzString);
+};
+
+const fromLocalTimezoneRep = (localRepDate, timeZoneOffset = '+05:30') => {
+    if (!localRepDate || isNaN(localRepDate.getTime())) return localRepDate;
+    const year = localRepDate.getFullYear();
+    const month = String(localRepDate.getMonth() + 1).padStart(2, '0');
+    const day = String(localRepDate.getDate()).padStart(2, '0');
+    const hours = String(localRepDate.getHours()).padStart(2, '0');
+    const minutes = String(localRepDate.getMinutes()).padStart(2, '0');
+    const seconds = String(localRepDate.getSeconds()).padStart(2, '0');
+    const ms = String(localRepDate.getMilliseconds()).padStart(3, '0');
+    return new Date(`${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${timeZoneOffset}`);
+};
+
 const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
-    const date = new Date(dateValue);
+    const date = toLocalTimezoneRep(dateValue);
     const normalizedCycle = normalizeApprovalCycle(cycle);
 
     if (normalizedCycle === 'Weekly') {
@@ -49,20 +69,19 @@ const getTimesheetPeriodIdForDate = (dateValue, cycle = 'Monthly') => {
 const buildTimesheetPeriodRange = (periodId, cycle = 'Monthly') => {
     const normalizedCycle = normalizeApprovalCycle(cycle);
 
+    let range;
     if (normalizedCycle === 'Weekly') {
         const weeklyMatch = String(periodId || '').match(WEEKLY_PERIOD_RE);
         if (weeklyMatch) {
             const year = parseInt(weeklyMatch[1], 10);
             const weekNumber = parseInt(weeklyMatch[2], 10);
             const start = getWeekStartFromYearAndNumber(year, weekNumber);
-            return { start, end: endOfISOWeek(start) };
+            range = { start, end: endOfISOWeek(start) };
+        } else {
+            const date = toLocalTimezoneRep(periodId);
+            range = { start: startOfISOWeek(date), end: endOfISOWeek(date) };
         }
-
-        const date = new Date(periodId);
-        return { start: startOfISOWeek(date), end: endOfISOWeek(date) };
-    }
-
-    if (normalizedCycle === 'Bi-Weekly') {
+    } else if (normalizedCycle === 'Bi-Weekly') {
         const biWeeklyMatch = String(periodId || '').match(BI_WEEKLY_PERIOD_RE);
         if (biWeeklyMatch) {
             const year = parseInt(biWeeklyMatch[1], 10);
@@ -70,25 +89,39 @@ const buildTimesheetPeriodRange = (periodId, cycle = 'Monthly') => {
             const firstWeekNumber = ((biWeeklyNumber - 1) * 2) + 1;
             const start = getWeekStartFromYearAndNumber(year, firstWeekNumber);
             const secondWeekStart = addWeeks(start, 1);
-            return { start, end: endOfISOWeek(secondWeekStart) };
+            range = { start, end: endOfISOWeek(secondWeekStart) };
+        } else {
+            const derivedPeriodId = getTimesheetPeriodIdForDate(new Date(periodId), 'Bi-Weekly');
+            return buildTimesheetPeriodRange(derivedPeriodId, 'Bi-Weekly');
         }
-
-        const derivedPeriodId = getTimesheetPeriodIdForDate(new Date(periodId), 'Bi-Weekly');
-        return buildTimesheetPeriodRange(derivedPeriodId, 'Bi-Weekly');
+    } else if (normalizedCycle === 'Daily') {
+        const date = toLocalTimezoneRep(periodId);
+        const start = startOfDay(date);
+        range = { start, end: endOfDay(start) };
+    } else {
+        // Monthly
+        const monthlyMatch = String(periodId || '').match(/^(\d{4})-(\d{2})$/);
+        let date;
+        if (monthlyMatch) {
+            const year = parseInt(monthlyMatch[1], 10);
+            const month = parseInt(monthlyMatch[2], 10);
+            date = new Date(year, month - 1, 1);
+        } else {
+            date = toLocalTimezoneRep(periodId);
+        }
+        range = { start: startOfMonth(date), end: endOfMonth(date) };
     }
 
-    if (normalizedCycle === 'Daily') {
-        const start = startOfDay(new Date(periodId));
-        return { start, end: endOfDay(start) };
-    }
-
-    const [year, month] = String(periodId).split('-');
-    const date = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1);
-    return { start: startOfMonth(date), end: endOfMonth(date) };
+    return {
+        start: fromLocalTimezoneRep(range.start),
+        end: fromLocalTimezoneRep(range.end)
+    };
 };
 
 module.exports = {
     buildTimesheetPeriodRange,
     getTimesheetPeriodIdForDate,
-    normalizeApprovalCycle
+    normalizeApprovalCycle,
+    toLocalTimezoneRep,
+    fromLocalTimezoneRep
 };

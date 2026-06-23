@@ -36,8 +36,7 @@ const getISTDateParts = (dateInput = new Date()) => {
 };
 
 const getStartOfDayIST = (dateInput = new Date()) => {
-    const { year, month, day } = getISTDateParts(dateInput);
-    return new Date(year, month - 1, day);
+    return buildISTDateTime(dateInput, '00:00', 0);
 };
 
 const parseDateAsIST = (dateInput) => {
@@ -47,8 +46,7 @@ const parseDateAsIST = (dateInput) => {
         return getStartOfDayIST();
     }
 
-    const { year, month, day } = getISTDateParts(date);
-    return new Date(year, month - 1, day);
+    return buildISTDateTime(date, '00:00', 0);
 };
 
 const parseTimeToMinutes = (timeValue = '00:00') => {

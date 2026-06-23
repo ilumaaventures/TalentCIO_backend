@@ -1,5 +1,6 @@
 const Holiday = require('../models/Holiday');
 const { eachDayOfInterval, format, isSameDay } = require('date-fns');
+const { toLocalTimezoneRep } = require('./timesheetPeriod');
 
 /**
  * Calculate the number of leave days based on range and policy rules.
@@ -20,8 +21,11 @@ const { eachDayOfInterval, format, isSameDay } = require('date-fns');
 const calculateLeaveDays = async (startDate, endDate, leavePolicy, weeklyOffs = ['Saturday', 'Sunday']) => {
     if (!startDate || !endDate || !leavePolicy) return 0;
 
+    const localStart = toLocalTimezoneRep(startDate);
+    const localEnd = toLocalTimezoneRep(endDate);
+
     // 1. Get all days in range
-    const days = eachDayOfInterval({ start: startDate, end: endDate });
+    const days = eachDayOfInterval({ start: localStart, end: localEnd });
     let count = 0;
 
     // 2. Fetch Holidays within the date range for the SPECIFIC company
@@ -29,7 +33,7 @@ const calculateLeaveDays = async (startDate, endDate, leavePolicy, weeklyOffs = 
         companyId: leavePolicy.companyId,
         date: { $gte: startDate, $lte: endDate }
     });
-    const holidayDates = holidayDocs.map(h => new Date(h.date).toDateString());
+    const holidayDates = holidayDocs.map(h => toLocalTimezoneRep(h.date).toDateString());
 
     // 3. Iterate
     for (const day of days) {

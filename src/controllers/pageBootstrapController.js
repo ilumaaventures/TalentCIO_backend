@@ -169,8 +169,14 @@ const getInitialAccruedBalance = (policy) => {
 const getMonthRange = (year, month) => {
     const monthValue = parseInt(month, 10);
     const yearValue = parseInt(year, 10);
-    const start = new Date(yearValue, monthValue - 1, 1);
-    const end = new Date(yearValue, monthValue, 1);
+    const start = new Date(`${yearValue}-${String(monthValue).padStart(2, '0')}-01T00:00:00.000+05:30`);
+    let nextMonth = monthValue + 1;
+    let nextYear = yearValue;
+    if (nextMonth > 12) {
+        nextMonth = 1;
+        nextYear += 1;
+    }
+    const end = new Date(`${nextYear}-${String(nextMonth).padStart(2, '0')}-01T00:00:00.000+05:30`);
     return { start, end };
 };
 
