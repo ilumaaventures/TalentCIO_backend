@@ -33,6 +33,7 @@ const buildNotificationSettingsResponse = async (companyId) => {
         if (mod === 'Announcements') return enabled.has('announcements');
         if (mod === 'Talent Acquisition') return enabled.has('talentAcquisition');
         if (mod === 'Onboarding') return enabled.has('onboarding');
+        if (mod === 'Employee Dossier') return enabled.has('employeeDossier');
         return true; // e.g. Authentication
     });
 

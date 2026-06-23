@@ -182,6 +182,13 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         module: 'Talent Acquisition',
         defaultChannel: 'email',
         supportedChannels: ['email']
+    },
+    {
+        key: 'hris_submission_received',
+        label: 'HRIS submission received',
+        description: 'Notify authorized users when an employee submits their HRIS details for approval.',
+        module: 'Employee Dossier',
+        defaultChannel: 'both'
     }
 ];
 

@@ -33,7 +33,7 @@ router.post('/clock-out', authorize('attendance.clock_in'), clockOut);
 router.get('/me', getMyAttendance);
 router.get('/history', getAttendanceByMonth);
 router.get('/team-report', getTeamAttendanceReport);
-router.get('/export-excel', authorize('attendance.export|attendance.view_others'), exportTeamAttendanceExcel);
+router.get('/export-excel', authorize('attendance.export|attendance.view_others|user.read'), exportTeamAttendanceExcel);
 router.get('/approvals', getPendingRequests);
 
 // Regularization
