@@ -318,6 +318,7 @@ const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
         halfDayAllowed: toBoolean(base.halfDayAllowed, current?.halfDayAllowed ?? true),
         requireLocationCheckIn: toBoolean(base.requireLocationCheckIn, current?.requireLocationCheckIn ?? false),
         requireLocationCheckOut: toBoolean(base.requireLocationCheckOut, current?.requireLocationCheckOut ?? false),
+        requireLocationTimesheet: toBoolean(base.requireLocationTimesheet, current?.requireLocationTimesheet ?? false),
         locationCheck: toBoolean(base.locationCheck, current?.locationCheck ?? false),
         ipCheck: toBoolean(base.ipCheck, current?.ipCheck ?? false),
         allowedRadius: Math.max(Number(base.allowedRadius) || Number(current?.allowedRadius) || 200, 1),
@@ -360,7 +361,7 @@ const buildCompanyEditableAttendanceInput = (incoming = {}, current = {}) => {
         editable.exportFormat = incoming.exportFormat;
     }
     if (controls.locationRules) {
-        ['requireLocationCheckIn', 'requireLocationCheckOut', 'locationCheck', 'allowedRadius', 'coordinates']
+        ['requireLocationCheckIn', 'requireLocationCheckOut', 'requireLocationTimesheet', 'locationCheck', 'allowedRadius', 'coordinates']
             .forEach((key) => {
                 if (incoming[key] !== undefined) {
                     editable[key] = incoming[key];

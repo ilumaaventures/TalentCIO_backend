@@ -362,7 +362,7 @@ exports.getAttendanceByMonth = async (req, res) => {
 };
 
 exports.updateAttendance = async (req, res) => {
-    const { clockIn, clockOut } = req.body;
+    const { clockIn, clockOut, location, source } = req.body;
     try {
         const attendance = await Attendance.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
         if (!attendance) return res.status(404).json({ message: 'Attendance record not found' });
@@ -395,6 +395,14 @@ exports.updateAttendance = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to update attendance for future dates' });
         }
 
+        // Enforce requireLocationTimesheet for timesheet-sourced updates
+        const attSettingsUpdate = company?.settings?.attendance || {};
+        if (source === 'timesheet' && attSettingsUpdate.requireLocationTimesheet && !isAdmin) {
+            if (!location || typeof location.lat !== 'number') {
+                return res.status(400).json({ message: 'Location is required when submitting attendance from the timesheet.' });
+            }
+        }
+
         if (clockIn) {
             attendance.clockIn = new Date(clockIn);
             attendance.clockInIST = new Date(clockIn).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -402,6 +410,10 @@ exports.updateAttendance = async (req, res) => {
         if (clockOut) {
             attendance.clockOut = new Date(clockOut);
             attendance.clockOutIST = new Date(clockOut).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        }
+        // Update location if provided (e.g. marked via timesheet UI)
+        if (location && typeof location.lat === 'number') {
+            attendance.location = { lat: location.lat, lng: location.lng, accuracy: location.accuracy };
         }
 
         const policy = buildAttendancePolicy({
@@ -466,7 +478,7 @@ exports.deleteAttendance = async (req, res) => {
 
 exports.createAttendance = async (req, res) => {
     try {
-        const { date, clockIn, clockOut, userId } = req.body;
+        const { date, clockIn, clockOut, userId, location, source } = req.body;
         const targetUserId = userId || req.user._id;
 
         // Authorization Check
@@ -497,6 +509,14 @@ exports.createAttendance = async (req, res) => {
 
         if (!targetUser) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Enforce requireLocationTimesheet: if enabled and request came from timesheet UI, location is mandatory
+        const attSettings = company?.settings?.attendance || {};
+        if (source === 'timesheet' && attSettings.requireLocationTimesheet && !isAdmin) {
+            if (!location || typeof location.lat !== 'number') {
+                return res.status(400).json({ message: 'Location is required when submitting attendance from the timesheet.' });
+            }
         }
 
         const editability = await ensureTimesheetPeriodEditable({
@@ -536,6 +556,7 @@ exports.createAttendance = async (req, res) => {
             clockOut: clockOut ? new Date(clockOut) : null,
             clockInIST: clockIn ? new Date(clockIn).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : null,
             clockOutIST: clockOut ? new Date(clockOut).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : null,
+            ...(location && typeof location.lat === 'number' ? { location: { lat: location.lat, lng: location.lng, accuracy: location.accuracy } } : {})
         });
 
         const policy = buildAttendancePolicy({
