@@ -63,6 +63,21 @@ const protect = async (req, res, next) => {
                 req.user.roles = resolvedRoleContext.roles;
                 req.user.permissions = resolvedRoleContext.permissionKeys;
 
+                // Filter permissions based on enabled modules of the current company
+                let companyModules = [];
+                if (req.company) {
+                    companyModules = req.company.enabledModules || [];
+                } else {
+                    const effectiveCompanyId = req.companyId || req.user.companyId;
+                    if (effectiveCompanyId) {
+                        const Company = require('../models/Company');
+                        const comp = await Company.findById(effectiveCompanyId).select('enabledModules').lean();
+                        companyModules = comp?.enabledModules || [];
+                    }
+                }
+                const { filterPermissionsByEnabledModules } = require('../utils/enabledModules');
+                req.user.permissions = filterPermissionsByEnabledModules(req.user.permissions.map(p => typeof p === 'string' ? { key: p } : p), companyModules).map(p => p.key);
+
                 // Ensure roles is always an array
                 if (req.user && !req.user.roles) {
                     req.user.roles = [];
@@ -117,9 +132,10 @@ const protect = async (req, res, next) => {
 };
 
 const admin = (req, res, next) => {
-    const isAdminRole = req.user && req.user.roles && req.user.roles.some(role => 
-        role.name === 'Admin' || role === 'Admin' || (typeof role === 'object' && role.name === 'Admin')
-    );
+    const isAdminRole = req.user && req.user.roles && req.user.roles.some(role => {
+        const roleName = typeof role === 'string' ? role : role?.name;
+        return ['Admin', 'Super Admin', 'System Admin'].includes(roleName);
+    });
     
     const hasAdminPermission = req.user && req.user.permissions && (
         req.user.permissions.includes('*') || 

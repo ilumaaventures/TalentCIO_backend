@@ -224,12 +224,16 @@ const loginUser = async (req, res) => {
         const Permission = require('../models/Permission');
         let totalPerms = 0, directReportsCount = 0, taCount = 0, analyticsViewerCount = 0;
 
+        const enabledModules = company?.enabledModules || [];
+        const { filterPermissionsByEnabledModules } = require('../utils/enabledModules');
+
         if (permissions.includes('*')) {
             hasAllPermissions = true;
             const allPermissions = await Permission.find({});
+            const filteredAll = filterPermissionsByEnabledModules(allPermissions, enabledModules);
 
             // Add all permission keys
-            const allKeys = allPermissions.map(p => p.key);
+            const allKeys = filteredAll.map(p => p.key);
             permissions = [...new Set([...permissions, ...allKeys])];
 
             // Run auth queries in parallel
@@ -277,6 +281,9 @@ const loginUser = async (req, res) => {
                 hasAllPermissions = true;
             }
         }
+
+        // Filter permissions based on enabled modules
+        permissions = filterPermissionsByEnabledModules(permissions.map(p => ({ key: p })), enabledModules).map(p => p.key);
 
         // Check if they are an interviewer via per-candidate round assignment (precise check)
         let isInterviewer = false;

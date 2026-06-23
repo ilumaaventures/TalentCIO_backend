@@ -18,6 +18,7 @@ const Permission = require('../models/Permission');
 const Project = require('../models/Project');
 const Role = require('../models/Role');
 const Task = require('../models/Task');
+const { filterPermissionsByEnabledModules } = require('../utils/enabledModules');
 const Timesheet = require('../models/Timesheet');
 const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
@@ -809,18 +810,21 @@ exports.getRoleBootstrap = async (req, res) => {
     try {
         // Role data must always be fresh — never serve from HTTP cache
         res.set('Cache-Control', 'no-cache');
-        const [rawRoles, permissions] = await Promise.all([
+        const [rawRoles, permissions, company] = await Promise.all([
             Role.find({ companyId: req.companyId }).populate('permissions').lean(),
-            Permission.find({}).lean()
+            Permission.find({}).lean(),
+            Company.findById(req.companyId).select('enabledModules').lean()
         ]);
+        const enabledModules = company?.enabledModules || [];
 
         const roles = rawRoles.map(role => ({
             ...role,
-            permissions: (role.permissions || []).filter(isVisiblePermission)
+            permissions: filterPermissionsByEnabledModules((role.permissions || []).filter(isVisiblePermission), enabledModules)
         }));
 
-        const groupedPermissions = permissions
-            .filter(isVisiblePermission)
+        const filteredPermissions = filterPermissionsByEnabledModules(permissions.filter(isVisiblePermission), enabledModules);
+
+        const groupedPermissions = filteredPermissions
             .reduce((acc, curr) => {
                 let groupName = curr.module || 'OTHER';
 

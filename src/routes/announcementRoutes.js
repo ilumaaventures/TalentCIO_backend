@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorizeRoleOrPermission } = require('../middlewares/authorize');
+const { requireModule } = require('../middlewares/moduleGuard');
 const { uploadAnnouncementAttachment } = require('../config/cloudinary');
 const {
     addAnnouncementComment,
@@ -38,6 +39,7 @@ const handleAnnouncementAttachmentUpload = (req, res, next) => {
 };
 
 router.use(protect);
+router.use(requireModule('announcements'));
 
 router.get('/composer-setup', getAnnouncementComposerSetup);
 router.get('/community', getAnnouncementCommunity);

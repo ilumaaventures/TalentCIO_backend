@@ -4,6 +4,7 @@ const ADMIN_ROLE_FILTER = {
     $or: [
         { name: 'Admin' },
         { name: 'System Admin' },
+        { name: 'Super Admin' },
         { isSystem: true }
     ]
 };

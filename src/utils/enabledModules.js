@@ -15,7 +15,11 @@ const ALL_COMPANY_MODULES = [
     { id: CLIENTS_MODULE_ID, label: 'Clients', icon: 'Building2' },
     { id: PROJECTS_MODULE_ID, label: 'Projects', icon: 'Briefcase' },
     { id: 'employeeDossier', label: 'Employee Dossier', icon: 'Folder' },
-    { id: 'userManagement', label: 'User Management', icon: 'UserCog' }
+    { id: 'userManagement', label: 'User Management', icon: 'UserCog' },
+    { id: 'onboarding', label: 'Onboarding', icon: 'UserPlus' },
+    { id: 'offboarding', label: 'Offboarding', icon: 'LogOut' },
+    { id: 'hrEmail', label: 'Send HR Email', icon: 'Mail' },
+    { id: 'announcements', label: 'Announcements', icon: 'Megaphone' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -50,6 +54,33 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
     return normalizedIds.includes(targetModuleId);
 };
 
+const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []) => {
+    const enabled = new Set(normalizeEnabledModules(enabledModules));
+
+    return permissions.filter((perm) => {
+        const key = String(perm?.key || '');
+
+        if (key.startsWith('attendance.')) return enabled.has('attendance');
+        if (key.startsWith('leave.')) return enabled.has('leaves');
+        if (key.startsWith('holiday.')) return enabled.has('holidays');
+        if (key.startsWith('timesheet.')) return enabled.has('timesheet');
+        if (key.startsWith('ta.')) return enabled.has('talentAcquisition');
+        if (key.startsWith('helpdesk.')) return enabled.has('helpdesk');
+        if (key.startsWith('discussion.')) return enabled.has('meetingsOfMinutes');
+        if (key.startsWith('business_unit.')) return enabled.has('businessUnits');
+        if (key.startsWith('client.')) return enabled.has('clients');
+        if (key.startsWith('project.') || key.startsWith('module.') || key.startsWith('task.')) return enabled.has('projects');
+        if (key.startsWith('dossier.')) return enabled.has('employeeDossier');
+        if (key.startsWith('user.') || key.startsWith('role.')) return enabled.has('userManagement');
+        if (key.startsWith('onboarding.')) return enabled.has('onboarding');
+        if (key.startsWith('offboarding.')) return enabled.has('offboarding');
+        if (key.startsWith('hr_email.')) return enabled.has('hrEmail');
+        if (key.startsWith('announcement.')) return enabled.has('announcements');
+
+        return true;
+    });
+};
+
 module.exports = {
     ALL_COMPANY_MODULES,
     BUSINESS_UNITS_MODULE_ID,
@@ -57,5 +88,6 @@ module.exports = {
     LEGACY_PROJECT_MODULE_ID,
     PROJECTS_MODULE_ID,
     hasEnabledModule,
-    normalizeEnabledModules
+    normalizeEnabledModules,
+    filterPermissionsByEnabledModules
 };

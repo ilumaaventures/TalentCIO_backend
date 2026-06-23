@@ -11,6 +11,7 @@ const isSuperAdmin = (user) => (
     (user?.roles || []).some((role) =>
         role?.isSystem ||
         role?.name === 'System Admin' ||
+        role?.name === 'Super Admin' ||
         (role?.permissions || []).some((permission) => permission && permission.key === '*')
     ) || (user?.permissions || []).includes('*')
 );
