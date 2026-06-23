@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const EmployeeProfile = require('../models/EmployeeProfile');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
+const NotificationService = require('../services/notificationService');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const { cloudinary } = require('../config/cloudinary');
@@ -486,6 +487,74 @@ const hasPermission = (user, permissionKey) => {
     );
 };
 
+const getHRISApprovers = async (companyId, excludeUserId) => {
+    try {
+        const Role = mongoose.model('Role');
+        const Permission = mongoose.model('Permission');
+        const User = mongoose.model('User');
+
+        const permission = await Permission.findOne({ key: 'dossier.approve' }).lean();
+        const permissionIdStr = permission ? permission._id.toString() : null;
+
+        const roles = await Role.find({
+            $or: [
+                { companyId },
+                { companyId: null }
+            ],
+            isActive: true
+        }).populate('permissions').lean();
+
+        const authorizedRoleIds = new Set();
+        const adminRoleNames = ['Admin', 'Super Admin', 'System Admin'];
+        const roleMap = new Map(roles.map(r => [r._id.toString(), r]));
+
+        const checkRoleAuthorized = (role, visited = new Set()) => {
+            const roleIdStr = role._id.toString();
+            if (visited.has(roleIdStr)) return false;
+            visited.add(roleIdStr);
+
+            if (adminRoleNames.includes(role.name)) {
+                return true;
+            }
+
+            if (permissionIdStr && role.permissions && role.permissions.some(p => p._id.toString() === permissionIdStr || p.key === 'dossier.approve')) {
+                return true;
+            }
+
+            if (role.inheritsFrom && role.inheritsFrom.length > 0) {
+                for (const parentId of role.inheritsFrom) {
+                    const parentRole = roleMap.get(parentId.toString());
+                    if (parentRole && checkRoleAuthorized(parentRole, visited)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        };
+
+        for (const role of roles) {
+            if (checkRoleAuthorized(role)) {
+                authorizedRoleIds.add(role._id.toString());
+            }
+        }
+
+        const query = {
+            companyId,
+            isActive: true,
+            roles: { $in: Array.from(authorizedRoleIds) }
+        };
+        if (excludeUserId) {
+            query._id = { $ne: excludeUserId };
+        }
+
+        return await User.find(query).select('_id email firstName lastName').lean();
+    } catch (err) {
+        console.error('[dossierController] getHRISApprovers error:', err);
+        return [];
+    }
+};
+
 exports.getDossier = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -925,6 +994,31 @@ exports.submitHRIS = async (req, res) => {
         });
 
         await profile.save();
+
+        // Send notification to authorized users who can approve HRIS
+        if (!shouldDirectWrite && updates.hris && updates.hris.isDeclared) {
+            try {
+                const io = req.app.get('io');
+                const submittingUser = await User.findById(userId).select('firstName lastName').lean();
+                const employeeName = submittingUser ? `${submittingUser.firstName} ${submittingUser.lastName}`.trim() : 'An employee';
+                const approvers = await getHRISApprovers(req.companyId, userId);
+
+                if (approvers.length > 0) {
+                    const notifications = approvers.map(approver => ({
+                        user: approver._id,
+                        companyId: req.companyId,
+                        preferenceKey: 'hris_submission_received',
+                        title: 'HRIS Approval Needed',
+                        message: `${employeeName} has submitted their HRIS details for approval.`,
+                        type: 'Approval',
+                        link: `/dossier/${userId}?tab=hris`
+                    }));
+                    await NotificationService.createManyNotifications(io, notifications);
+                }
+            } catch (notifErr) {
+                console.error('[dossierController] Failed to send HRIS submission notification:', notifErr);
+            }
+        }
 
         await logDossierActivity({
             action: 'SUBMIT_HRIS',

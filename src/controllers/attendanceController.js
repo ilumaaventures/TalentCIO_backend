@@ -628,15 +628,13 @@ exports.getTeamAttendanceReport = async (req, res) => {
     try {
         const { year, month, date } = req.query;
         
-        // Determine user filter (Admin vs Manager)
-        // Check roles - assuming roles might be objects or IDs
-        const isAdmin = req.user.roles?.some(r => 
+        const canViewAll = req.user.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*');
+        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('user.read') || req.user.permissions?.includes('attendance.view_all') || req.user.permissions?.includes('attendance.view_others');
 
         let userFilter = { companyId: req.companyId, isActive: true };
-        if (!isAdmin) {
+        if (!canViewAll) {
             userFilter.reportingManagers = req.user._id;
         }
 
@@ -722,14 +720,13 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Team Attendance');
 
-        // Reuse Admin/Manager logic
-        const isAdmin = req.user.roles?.some(r => 
+        const canViewAll = req.user.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*');
+        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('user.read') || req.user.permissions?.includes('attendance.view_all') || req.user.permissions?.includes('attendance.view_others');
 
         let userFilter = { companyId: req.companyId, isActive: true };
-        if (!isAdmin) {
+        if (!canViewAll) {
             userFilter.reportingManagers = req.user._id;
         }
 
