@@ -834,7 +834,9 @@ exports.getRoleBootstrap = async (req, res) => {
             .reduce((acc, curr) => {
                 let groupName = curr.module || 'OTHER';
 
-                if (curr.key.startsWith('business_unit.')) groupName = 'BUSINESS UNITS';
+                if (!curr.key) {
+                    groupName = 'OTHER';
+                } else if (curr.key.startsWith('business_unit.')) groupName = 'BUSINESS UNITS';
                 else if (curr.key.startsWith('client.')) groupName = 'CLIENTS';
                 else if (curr.key.startsWith('task.')) groupName = 'TASKS';
                 else if (curr.key.startsWith('project.') || curr.key.startsWith('module.') || groupName === 'PROJECT') groupName = 'PROJECTS';

@@ -499,7 +499,10 @@ exports.getDossier = async (req, res) => {
         // Permission Check: View Dossier
         // Users can always view their own. To view others, need 'dossier.view' or Admin.
         if (!isSelf) {
-            const canView = checkIsAdmin(req.user) || hasPermission(req.user, "dossier.view") || hasPermission(req.user, "dossier.view.sensitive");
+            const canView = checkIsAdmin(req.user) 
+                || hasPermission(req.user, "dossier.view") 
+                || hasPermission(req.user, "dossier.view.sensitive")
+                || hasPermission(req.user, "dossier.export");
             if (!canView) {
                 return res.status(403).json({ message: 'Not authorized to view this dossier' });
             }

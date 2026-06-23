@@ -237,6 +237,11 @@ module.exports = [
         module: "DOSSIER",
         description: "View other employees' dossiers"
     },
+    {
+        key: "dossier.export",
+        module: "DOSSIER",
+        description: "Export employee dossier details"
+    },
 
     // TALENT ACQUISITION (TA)
     {

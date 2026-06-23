@@ -34,6 +34,9 @@ const ANNOUNCEMENT_MANAGER_ROLE_NAMES = ['Admin', 'Manager', 'HR Admin', 'System
 const syncPermissions = async () => {
     try {
         console.log('Syncing permissions...');
+        
+        // Clean up any corrupted permissions with null or empty key
+        await Permission.deleteMany({ $or: [{ key: null }, { key: '' }, { key: { $exists: false } }] });
 
         // 1. Get all config permissions keys
         const configKeys = permissionConfig.map(p => p.key);
