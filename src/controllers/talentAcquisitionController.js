@@ -272,7 +272,8 @@ const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {
         currentStatus: candidate.status || '',
         interviewDate: extras.interviewDate || '',
         interviewLink: extras.interviewLink || '',
-        customNote: extras.customNote || ''
+        customNote: extras.customNote || '',
+        JD: hiringRequest?.jobDescription || ''
     };
 };
 

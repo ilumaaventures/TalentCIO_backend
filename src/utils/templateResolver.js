@@ -46,7 +46,8 @@ const TEMPLATE_PLACEHOLDERS = [
     'sharedFilesBlock',
     'deadlineBlock',
     'portalButton',
-    'currentYear'
+    'currentYear',
+    'JD'
 ];
 
 const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
