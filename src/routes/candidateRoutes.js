@@ -9,6 +9,7 @@ const { upload } = require('../config/cloudinary');
 const multer = require('multer');
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 const analyticsCandidatePermissions = ['ta.analytics.assigned', 'ta.analytics.global'];
+const candidateViewPermissions = ['ta.candidate.view', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.view', 'ta.manage', ...analyticsCandidatePermissions];
 const candidateCreatePermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create', 'ta.interview.evaluate', ...analyticsCandidatePermissions];
 const candidateEditPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit', ...analyticsCandidatePermissions];
 const candidateDecisionPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision'];
@@ -35,7 +36,7 @@ router.post('/sources', protect, authorizeAny(candidateCreatePermissions), candi
 router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.delete', 'ta.candidate.edit']), candidateController.deleteCandidateSource);
 
 // CRUD operations
-router.get('/global/search', protect, candidateController.globalSearchCandidates);
+router.get('/global/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchCandidates);
 router.post('/', protect, candidateController.createCandidate);
 router.get('/:hiringRequestId/card-filters', protect, candidateController.getCandidateCardFilters);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
