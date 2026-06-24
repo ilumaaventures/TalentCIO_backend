@@ -450,9 +450,9 @@ const filterProfileFields = (profile, viewer, isSelf) => {
     const roles = (viewer && Array.isArray(viewer.roles)) ? viewer.roles : [];
     const isAdmin = roles.some(r => r && (r.name === 'Admin' || r.name === 'Super Admin'));
 
-    // Check permissions from roles (same approach as hasPermission helper below)
     const viewerHasPermission = (key) => {
         if (isAdmin) return true;
+        if (viewer && Array.isArray(viewer.permissions) && viewer.permissions.includes(key)) return true;
         return roles.some(role =>
             role.permissions && role.permissions.some(p => p.key === key)
         );
@@ -481,6 +481,7 @@ const checkIsAdmin = (user) => {
 
 const hasPermission = (user, permissionKey) => {
     if (checkIsAdmin(user)) return true;
+    if (user && Array.isArray(user.permissions) && user.permissions.includes(permissionKey)) return true;
     if (!user || !user.roles) return false;
     return user.roles.some(role =>
         role.permissions && role.permissions.some(p => p.key === permissionKey)
