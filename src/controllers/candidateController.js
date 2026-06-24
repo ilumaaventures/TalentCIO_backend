@@ -2236,6 +2236,7 @@ exports.addInterviewRound = async (req, res) => {
                 message: `You have been assigned to evaluate ${candidate.candidateName} for the ${levelName} round.`,
                 type: 'Interview',
                 link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view?phase=${roundPhase}`,
+                origin: req.headers.origin,
                 metadata: {
                     candidateId: candidate._id,
                     roundId: savedRound?._id,
@@ -2965,7 +2966,8 @@ exports.bulkScheduleInterview = async (req, res) => {
                     ? `You have been assigned to evaluate ${scheduledCandidateNames[0]} for the ${levelName} round.`
                     : `You have been assigned to evaluate ${scheduled} candidates for the ${levelName} round.`,
                 type: 'Interview',
-                link: '/ta'
+                link: '/ta',
+                origin: req.headers.origin
             }));
 
             await NotificationService.createManyNotifications(io, notifications);

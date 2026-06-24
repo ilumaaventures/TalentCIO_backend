@@ -715,7 +715,8 @@ exports.createHiringRequest = async (req, res) => {
                         title: 'New Hiring Request Approval',
                         message: `Hiring Request ${requestId} for ${roleDetails.title} has been submitted and requires your approval.`,
                         type: 'Approval',
-                        link: `/ta/view/${newRequest._id}`
+                        link: `/ta/view/${newRequest._id}`,
+                        origin: req.headers.origin
                     }));
                     await NotificationService.createManyNotifications(io, notifications);
                 }
@@ -1133,7 +1134,8 @@ exports.approveHiringRequest = async (req, res) => {
                         title: 'Hiring Request Approval Pending',
                         message: `Hiring Request ${request.requestId} for ${request.roleDetails.title} has reached your approval level.`,
                         type: 'Approval',
-                        link: `/ta/view/${request._id}`
+                        link: `/ta/view/${request._id}`,
+                        origin: req.headers.origin
                     }));
                     await NotificationService.createManyNotifications(io, notifications);
                 }
@@ -1151,7 +1153,8 @@ exports.approveHiringRequest = async (req, res) => {
                         title: 'Hiring Request Approved',
                         message: `Your Hiring Request ${request.requestId} for ${request.roleDetails.title} has been fully approved.`,
                         type: 'Info',
-                        link: `/ta/view/${request._id}`
+                        link: `/ta/view/${request._id}`,
+                        origin: req.headers.origin
                     });
                 }
             }
@@ -1181,7 +1184,8 @@ exports.approveHiringRequest = async (req, res) => {
                         title: 'Hiring Request Approved',
                         message: `Your Hiring Request ${request.requestId} has been fully approved.`,
                         type: 'Info',
-                        link: `/ta/view/${request._id}`
+                        link: `/ta/view/${request._id}`,
+                        origin: req.headers.origin
                     });
                 }
             } else {

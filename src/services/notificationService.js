@@ -24,8 +24,8 @@ const resolveRelativeAppLink = (link = '', origin = '', subdomain = '') => {
         return normalizedLink;
     }
 
-    // Resolve base URL dynamically using request origin, fallback to local development port
-    const rawBaseUrl = origin ? String(origin).trim().replace(/\/+$/, '') : 'http://localhost:5173';
+    // Resolve base URL dynamically using request origin, fallback to configured frontend URL or local development port
+    const rawBaseUrl = origin ? String(origin).trim().replace(/\/+$/, '') : (process.env.FRONTEND_URL || 'http://localhost:5173');
     let appBaseUrl = '';
 
     if (subdomain) {
