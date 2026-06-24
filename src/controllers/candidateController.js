@@ -3260,11 +3260,11 @@ const calculateCandidateMatchScore = (candidate, query) => {
 
 exports.globalSearchCandidates = async (req, res) => {
     try {
-        const query = { companyId: req.companyId, isDeleted: { $ne: true } };
+        const filterQuery = { isDeleted: { $ne: true } };
 
         if (req.query.search) {
             const searchRegex = new RegExp(req.query.search.trim(), 'i');
-            query.$or = [
+            filterQuery.$or = [
                 { candidateName: searchRegex },
                 { email: searchRegex },
                 { mobile: searchRegex },
@@ -3276,26 +3276,26 @@ exports.globalSearchCandidates = async (req, res) => {
         if (req.query.source) {
             const sources = parseStringArrayQuery(req.query.source);
             if (sources.length > 0) {
-                query.source = { $in: sources.map(s => new RegExp(`^${s.trim()}$`, 'i')) };
+                filterQuery.source = { $in: sources.map(s => new RegExp(`^${s.trim()}$`, 'i')) };
             }
         }
 
         if (req.query.minExperience !== undefined || req.query.maxExperience !== undefined) {
-            query.totalExperience = {};
+            filterQuery.totalExperience = {};
             if (req.query.minExperience !== undefined && req.query.minExperience !== '') {
                 const minExp = Number(req.query.minExperience);
                 if (Number.isFinite(minExp)) {
-                    query.totalExperience.$gte = minExp;
+                    filterQuery.totalExperience.$gte = minExp;
                 }
             }
             if (req.query.maxExperience !== undefined && req.query.maxExperience !== '') {
                 const maxExp = Number(req.query.maxExperience);
                 if (Number.isFinite(maxExp)) {
-                    query.totalExperience.$lte = maxExp;
+                    filterQuery.totalExperience.$lte = maxExp;
                 }
             }
-            if (Object.keys(query.totalExperience).length === 0) {
-                delete query.totalExperience;
+            if (Object.keys(filterQuery.totalExperience).length === 0) {
+                delete filterQuery.totalExperience;
             }
         }
 
@@ -3303,8 +3303,8 @@ exports.globalSearchCandidates = async (req, res) => {
             const skillsList = parseStringArrayQuery(req.query.skills);
             if (skillsList.length > 0) {
                 const skillsRegexList = skillsList.map(s => new RegExp(s.trim(), 'i'));
-                query.$and = query.$and || [];
-                query.$and.push({
+                filterQuery.$and = filterQuery.$and || [];
+                filterQuery.$and.push({
                     $or: [
                         { 'mustHaveSkills.skill': { $in: skillsRegexList } },
                         { 'niceToHaveSkills.skill': { $in: skillsRegexList } },
@@ -3321,13 +3321,13 @@ exports.globalSearchCandidates = async (req, res) => {
             }).select('_id').lean();
             
             const hiringRequestIds = clientHiringRequests.map(hr => hr._id);
-            query.hiringRequestId = { $in: hiringRequestIds };
+            filterQuery.hiringRequestId = { $in: hiringRequestIds };
         }
 
         if (req.query.location) {
             const locRegex = new RegExp(req.query.location.trim(), 'i');
-            query.$and = query.$and || [];
-            query.$and.push({
+            filterQuery.$and = filterQuery.$and || [];
+            filterQuery.$and.push({
                 $or: [
                     { currentLocation: locRegex },
                     { preferredLocation: locRegex }
@@ -3338,56 +3338,56 @@ exports.globalSearchCandidates = async (req, res) => {
         if (req.query.maxNoticePeriod !== undefined && req.query.maxNoticePeriod !== '') {
             const noticeVal = Number(req.query.maxNoticePeriod);
             if (Number.isFinite(noticeVal)) {
-                query.noticePeriod = { $lte: noticeVal };
+                filterQuery.noticePeriod = { $lte: noticeVal };
             }
         }
 
         if (req.query.minCurrentCTC !== undefined || req.query.maxCurrentCTC !== undefined) {
-            query.currentCTC = {};
+            filterQuery.currentCTC = {};
             if (req.query.minCurrentCTC !== undefined && req.query.minCurrentCTC !== '') {
                 const minCTC = Number(req.query.minCurrentCTC);
                 if (Number.isFinite(minCTC)) {
-                    query.currentCTC.$gte = minCTC;
+                    filterQuery.currentCTC.$gte = minCTC;
                 }
             }
             if (req.query.maxCurrentCTC !== undefined && req.query.maxCurrentCTC !== '') {
                 const maxCTC = Number(req.query.maxCurrentCTC);
                 if (Number.isFinite(maxCTC)) {
-                    query.currentCTC.$lte = maxCTC;
+                    filterQuery.currentCTC.$lte = maxCTC;
                 }
             }
-            if (Object.keys(query.currentCTC).length === 0) {
-                delete query.currentCTC;
+            if (Object.keys(filterQuery.currentCTC).length === 0) {
+                delete filterQuery.currentCTC;
             }
         }
 
         if (req.query.minExpectedCTC !== undefined || req.query.maxExpectedCTC !== undefined) {
-            query.expectedCTC = {};
+            filterQuery.expectedCTC = {};
             if (req.query.minExpectedCTC !== undefined && req.query.minExpectedCTC !== '') {
                 const minCTC = Number(req.query.minExpectedCTC);
                 if (Number.isFinite(minCTC)) {
-                    query.expectedCTC.$gte = minCTC;
+                    filterQuery.expectedCTC.$gte = minCTC;
                 }
             }
             if (req.query.maxExpectedCTC !== undefined && req.query.maxExpectedCTC !== '') {
                 const maxCTC = Number(req.query.maxExpectedCTC);
                 if (Number.isFinite(maxCTC)) {
-                    query.expectedCTC.$lte = maxCTC;
+                    filterQuery.expectedCTC.$lte = maxCTC;
                 }
             }
-            if (Object.keys(query.expectedCTC).length === 0) {
-                delete query.expectedCTC;
+            if (Object.keys(filterQuery.expectedCTC).length === 0) {
+                delete filterQuery.expectedCTC;
             }
         }
 
         if (req.query.inHandOffer !== undefined && req.query.inHandOffer !== '') {
-            query.inHandOffer = req.query.inHandOffer === 'true';
+            filterQuery.inHandOffer = req.query.inHandOffer === 'true';
         }
 
         if (req.query.decision) {
             const decVal = req.query.decision.trim();
-            query.$and = query.$and || [];
-            query.$and.push({
+            filterQuery.$and = filterQuery.$and || [];
+            filterQuery.$and.push({
                 $or: [
                     { decision: decVal },
                     { phase2Decision: decVal },
@@ -3395,6 +3395,13 @@ exports.globalSearchCandidates = async (req, res) => {
                 ]
             });
         }
+
+        const query = await buildAccessibleCandidateQuery(
+            req.companyId,
+            req.user,
+            filterQuery,
+            { capability: TA_CAPABILITIES.VIEW }
+        );
 
         const page = Math.max(Number(req.query.page) || 1, 1);
         const limit = Math.max(Number(req.query.limit) || 15, 1);

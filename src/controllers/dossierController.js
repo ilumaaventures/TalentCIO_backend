@@ -569,8 +569,8 @@ exports.getDossier = async (req, res) => {
         // Permission Check: View Dossier
         // Users can always view their own. To view others, need 'dossier.view' or Admin.
         if (!isSelf) {
-            const canView = checkIsAdmin(req.user) 
-                || hasPermission(req.user, "dossier.view") 
+            const canView = checkIsAdmin(req.user)
+                || hasPermission(req.user, "dossier.view")
                 || hasPermission(req.user, "dossier.view.sensitive")
                 || hasPermission(req.user, "dossier.export");
             if (!canView) {
@@ -1999,17 +1999,20 @@ exports.getHRISRequests = async (req, res) => {
             return res.status(403).json({ message: 'Access denied. Missing dossier.approve permission.' });
         }
 
+        console.log('[getHRISRequests] User:', req.user?.email, 'companyId:', req.companyId, 'permissions:', req.user?.permissions);
         let query = { 'hris.status': { $in: ['Pending Approval', 'Approved', 'Rejected'] } };
 
-        // If user is Admin or has global approve permission, they see all.
-        // If we strictly wanted to limit Managers to their reports, we'd need a separate check.
-        // But "dossier.approve" sounds like an HR capability.
-
+        console.log('[getHRISRequests] Query:', { ...query, companyId: req.companyId });
         const requests = await EmployeeProfile.find({ ...query, companyId: req.companyId })
             .populate('user', 'firstName lastName employeeCode department');
 
+        console.log('[getHRISRequests] Raw profiles found:', requests.length);
+
         const formattedRequests = requests.map(reqProfile => {
-            if (!reqProfile.user) return null;
+            if (!reqProfile.user) {
+                console.log('[getHRISRequests] Profile has no user populated:', reqProfile._id);
+                return null;
+            }
             return {
                 _id: reqProfile.user._id,
                 firstName: reqProfile.user.firstName,
@@ -2025,6 +2028,7 @@ exports.getHRISRequests = async (req, res) => {
             };
         }).filter(r => r !== null);
 
+        console.log('[getHRISRequests] Formatted requests returned:', formattedRequests.length);
         res.status(200).json(formattedRequests);
     } catch (error) {
         console.error('Get HRIS Requests Error:', error);
