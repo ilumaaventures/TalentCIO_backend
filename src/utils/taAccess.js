@@ -28,7 +28,7 @@ const ASSIGNED_CAPABILITY_PERMISSION_MAP = {
     [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
     [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
     [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.assigned', 'ta.interview.evaluate', 'ta.candidate.edit'],
-    [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.assigned', 'ta.candidate.make_decision', 'ta.candidate.edit'],
+    [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.assigned', 'ta.candidate.make_decision', 'ta.candidate.edit', 'ta.interview.evaluate'],
     [TA_CAPABILITIES.TRANSFER]: ['ta.candidate.manage.assigned', 'ta.candidate.transfer']
 };
 
@@ -189,7 +189,9 @@ const isCandidateRoundAssignee = (candidate, user, roundId = null) => {
             return false;
         }
 
-        return Array.isArray(round?.assignedTo) && round.assignedTo.map(normalizeId).includes(userId);
+        const isAssigned = Array.isArray(round?.assignedTo) && round.assignedTo.map(normalizeId).includes(userId);
+        const isEvaluator = normalizeId(round?.evaluatedBy) === userId;
+        return isAssigned || isEvaluator;
     });
 };
 
@@ -313,6 +315,22 @@ const canAccessCandidateThroughHiringRequest = async ({
     return canAccessHiringRequestForCapability(resolvedHiringRequest, user, capability, companyId);
 };
 
+const isInterviewerOnlyUser = (user) => {
+    const permissions = getUserPermissionKeys(user);
+    const roles = Array.isArray(user?.roles)
+        ? user.roles.map(r => (typeof r === 'string' ? r : r.name || '')).filter(Boolean)
+        : [];
+    
+    return permissions.includes('ta.interview.evaluate') &&
+        !roles.some(role => ['Admin', 'Super Admin', 'System Admin', 'HR'].includes(role)) &&
+        !permissions.includes('ta.candidate.manage.assigned') &&
+        !permissions.includes('ta.candidate.manage.all') &&
+        !permissions.includes('ta.view') &&
+        !permissions.includes('ta.manage') &&
+        !permissions.includes('ta.edit') &&
+        !permissions.includes('*');
+};
+
 const buildAccessibleCandidateQueryForCapability = async (
     companyId,
     user,
@@ -324,11 +342,30 @@ const buildAccessibleCandidateQueryForCapability = async (
         ...extraQuery
     };
 
+    if (capability === TA_CAPABILITIES.VIEW && isInterviewerOnlyUser(user)) {
+        return {
+            $and: [
+                baseQuery,
+                {
+                    $or: [
+                        { 'interviewRounds.assignedTo': user._id },
+                        { 'interviewRounds.evaluatedBy': user._id }
+                    ]
+                }
+            ]
+        };
+    }
+
     if (capability === TA_CAPABILITIES.EVALUATE_ROUND) {
         return {
             $and: [
                 baseQuery,
-                { 'interviewRounds.assignedTo': user._id }
+                {
+                    $or: [
+                        { 'interviewRounds.assignedTo': user._id },
+                        { 'interviewRounds.evaluatedBy': user._id }
+                    ]
+                }
             ]
         };
     }
@@ -354,7 +391,10 @@ const buildAccessibleCandidateQueryForCapability = async (
         ];
 
         if (capability === TA_CAPABILITIES.VIEW) {
-            globalAccessOr.push({ 'interviewRounds.assignedTo': user._id });
+            globalAccessOr.push(
+                { 'interviewRounds.assignedTo': user._id },
+                { 'interviewRounds.evaluatedBy': user._id }
+            );
         }
 
         return {
@@ -450,7 +490,10 @@ const buildAccessibleCandidateQueryForCapability = async (
     }
 
     if (capability === TA_CAPABILITIES.VIEW) {
-        accessOr.push({ 'interviewRounds.assignedTo': user._id });
+        accessOr.push(
+            { 'interviewRounds.assignedTo': user._id },
+            { 'interviewRounds.evaluatedBy': user._id }
+        );
     }
 
     if (!accessOr.length) {

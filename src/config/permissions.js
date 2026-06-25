@@ -322,7 +322,7 @@ module.exports = [
     {
         key: "ta.interview.evaluate",
         module: "TA",
-        description: "Evaluate assigned interview rounds without full candidate edit access"
+        description: "Evaluate assigned interview rounds, update candidate decisions, and view feedback for candidates assigned to them"
     },
     {
         key: "ta.candidate.make_decision",

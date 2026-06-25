@@ -1149,20 +1149,39 @@ exports.createCandidate = async (req, res) => {
                 }
                 if (interviewRounds && Array.isArray(interviewRounds)) {
                     const existingRounds = candidate.interviewRounds || [];
-                    const roundsChanged = existingRounds.length !== interviewRounds.length ||
-                        interviewRounds.some((r, idx) => {
+                    const mergedRounds = interviewRounds.map((incomingRound, idx) => {
+                        const existingRound = existingRounds.find(er => 
+                            String(er.levelName).trim().toLowerCase() === String(incomingRound.levelName).trim().toLowerCase()
+                        ) || existingRounds[idx];
+
+                        if (existingRound) {
+                            return {
+                                ...incomingRound,
+                                assignedTo: (incomingRound.assignedTo && incomingRound.assignedTo.length > 0)
+                                    ? incomingRound.assignedTo
+                                    : existingRound.assignedTo,
+                                evaluatedBy: incomingRound.evaluatedBy || existingRound.evaluatedBy,
+                                evaluatedAt: incomingRound.evaluatedAt || existingRound.evaluatedAt,
+                                _id: existingRound._id
+                            };
+                        }
+                        return incomingRound;
+                    });
+
+                    const roundsChanged = existingRounds.length !== mergedRounds.length ||
+                        mergedRounds.some((r, idx) => {
                             const er = existingRounds[idx];
                             if (!er) return true;
                             return er.levelName !== r.levelName ||
                                 er.status !== r.status ||
-                                er.remarks !== r.remarks ||
                                 er.feedback !== r.feedback ||
                                 er.rating !== r.rating ||
-                                er.evaluatedBy?.toString() !== r.evaluatedBy?.toString();
+                                er.evaluatedBy?.toString() !== r.evaluatedBy?.toString() ||
+                                JSON.stringify(er.assignedTo?.map(id => id.toString())) !== JSON.stringify(r.assignedTo?.map(id => id.toString()));
                         });
 
                     if (roundsChanged) {
-                        candidate.interviewRounds = interviewRounds;
+                        candidate.interviewRounds = mergedRounds;
                         updatedFields.push('Interview History');
                     }
                 }
@@ -2365,8 +2384,11 @@ exports.getMyScheduledInterviews = async (req, res) => {
         const candidates = await Candidate.find(await buildAccessibleCandidateQuery(req.companyId, req.user, {
             'interviewRounds': {
                 $elemMatch: {
-                    assignedTo: userId,
-                    status: { $in: ['Pending', 'Scheduled'] },
+                    $or: [
+                        { assignedTo: userId },
+                        { evaluatedBy: userId }
+                    ],
+                    status: { $in: ['Pending', 'Scheduled', 'Passed', 'Failed'] },
                     scheduledDate: { $type: 'date' }
                 }
             }
@@ -2381,7 +2403,8 @@ exports.getMyScheduledInterviews = async (req, res) => {
             candidate.interviewRounds.forEach(round => {
                 const hasScheduledDate = Boolean(round.scheduledDate);
                 const isAssigned = round.assignedTo.some(id => id.toString() === userId.toString());
-                if (isAssigned && hasScheduledDate && ['Pending', 'Scheduled'].includes(round.status)) {
+                const isEvaluatedByMe = round.evaluatedBy && round.evaluatedBy.toString() === userId.toString();
+                if ((isAssigned || isEvaluatedByMe) && hasScheduledDate && ['Pending', 'Scheduled', 'Passed', 'Failed'].includes(round.status)) {
                     scheduledInterviews.push({
                         candidateId: candidate._id,
                         candidateName: candidate.candidateName,
@@ -2393,7 +2416,7 @@ exports.getMyScheduledInterviews = async (req, res) => {
                         phase: round.phase || 1,
                         levelName: round.levelName,
                         scheduledDate: round.scheduledDate,
-                        status: 'Scheduled',
+                        status: ['Passed', 'Failed'].includes(round.status) ? round.status : 'Scheduled',
                         rawStatus: round.status
                     });
                 }
@@ -2544,7 +2567,7 @@ exports.evaluateInterviewRound = async (req, res) => {
             return res.status(400).json({ message: 'Feedback is required for evaluation' });
         }
 
-        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId }).populate('interviewRounds.assignedTo');
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
             return res.status(404).json({ message: 'Candidate not found' });
         }
@@ -2570,7 +2593,7 @@ exports.evaluateInterviewRound = async (req, res) => {
             ? req.user.permissions
             : (req.user?.roles || []).flatMap((role) => (role.permissions || []).map((permission) => permission.key));
         const hasSuperApprove = userPermissions.includes('ta.super_approve') || userPermissions.includes('*');
-        const isAssigned = round.assignedTo.some(user => user._id.toString() === req.user._id.toString());
+        const isAssigned = round.assignedTo.some(id => (id._id || id).toString() === req.user._id.toString());
 
         if (!isAssigned && !hasSuperApprove) {
             return res.status(403).json({ message: 'Forbidden: You are not authorized to evaluate this round' });
@@ -3575,7 +3598,7 @@ exports.getCandidateCardFilters = async (req, res) => {
 
         // Fetch only minimal fields for counts
         const candidates = await Candidate.find(candidateQuery)
-            .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience preference isTransferred uploadedBy resumeUrl')
+            .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience preference isTransferred uploadedBy resumeUrl phase2Decision phase2InterviewStatus phase2InterviewerFeedback phase3Decision')
             .populate('uploadedBy', 'firstName lastName')
             .lean();
 

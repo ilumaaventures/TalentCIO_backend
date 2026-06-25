@@ -110,7 +110,10 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
             const Candidate = mongoose.model('Candidate');
             const interviewerRequestIds = await Candidate.find({
                 companyId,
-                'interviewRounds.assignedTo': user._id,
+                $or: [
+                    { 'interviewRounds.assignedTo': user._id },
+                    { 'interviewRounds.evaluatedBy': user._id }
+                ],
                 isDeleted: { $ne: true }
             }).distinct('hiringRequestId');
 
@@ -137,7 +140,10 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
         const Candidate = mongoose.model('Candidate');
         const interviewerRequestIds = await Candidate.find({
             companyId,
-            'interviewRounds.assignedTo': user._id,
+            $or: [
+                { 'interviewRounds.assignedTo': user._id },
+                { 'interviewRounds.evaluatedBy': user._id }
+            ],
             isDeleted: { $ne: true }
         }).distinct('hiringRequestId');
 
@@ -202,7 +208,10 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user, options = 
         const count = await Candidate.countDocuments({
             companyId,
             hiringRequestId: hiringRequest._id,
-            'interviewRounds.assignedTo': user._id,
+            $or: [
+                { 'interviewRounds.assignedTo': user._id },
+                { 'interviewRounds.evaluatedBy': user._id }
+            ],
             isDeleted: { $ne: true }
         });
         if (count > 0) {
