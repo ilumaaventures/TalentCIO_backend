@@ -79,14 +79,28 @@ const canViewAllInterviewFeedback = (user) => {
 
 const normalizeId = (value) => String(value?._id || value || '');
 
-const canViewRoundFeedback = (round, user) => {
+const canViewRoundFeedback = (round, user, candidate = null) => {
     const userId = normalizeId(user?._id);
     if (!userId || !round) {
         return false;
     }
 
     const assignedToIds = Array.isArray(round.assignedTo) ? round.assignedTo.map(normalizeId) : [];
-    return assignedToIds.includes(userId) || normalizeId(round.evaluatedBy) === userId;
+    if (assignedToIds.includes(userId) || normalizeId(round.evaluatedBy) === userId) {
+        return true;
+    }
+
+    if (candidate && Array.isArray(candidate.interviewRounds)) {
+        const isUserAssignedToAnyRound = candidate.interviewRounds.some(r => {
+            const rAssigned = Array.isArray(r.assignedTo) ? r.assignedTo.map(normalizeId) : [];
+            return rAssigned.includes(userId) || normalizeId(r.evaluatedBy) === userId;
+        });
+        if (isUserAssignedToAnyRound) {
+            return true;
+        }
+    }
+
+    return false;
 };
 
 const serializeHiringRequestForViewer = (request, user) => {
@@ -160,9 +174,16 @@ const serializeCandidateForViewer = ({
     }
 
     if (!canViewAllInterviewFeedback(user)) {
+        const userId = normalizeId(user?._id);
+        const isUserAssignedToAnyRound = Array.isArray(serialized.interviewRounds) &&
+            serialized.interviewRounds.some(r => {
+                const rAssigned = Array.isArray(r.assignedTo) ? r.assignedTo.map(normalizeId) : [];
+                return rAssigned.includes(userId) || normalizeId(r.evaluatedBy) === userId;
+            });
+
         if (Array.isArray(serialized.interviewRounds)) {
             serialized.interviewRounds = serialized.interviewRounds.map((round) => {
-                if (canViewRoundFeedback(round, user)) {
+                if (canViewRoundFeedback(round, user, serialized)) {
                     return round;
                 }
 
@@ -177,7 +198,7 @@ const serializeCandidateForViewer = ({
             });
         }
 
-        if (serialized.phase2InterviewerFeedback !== undefined) {
+        if (!isUserAssignedToAnyRound && serialized.phase2InterviewerFeedback !== undefined) {
             serialized.phase2InterviewerFeedback = '';
         }
     }
