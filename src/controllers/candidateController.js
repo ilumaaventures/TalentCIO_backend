@@ -3598,7 +3598,7 @@ exports.getCandidateCardFilters = async (req, res) => {
 
         // Fetch only minimal fields for counts
         const candidates = await Candidate.find(candidateQuery)
-            .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience preference isTransferred uploadedBy resumeUrl')
+            .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience preference isTransferred uploadedBy resumeUrl phase2Decision phase2InterviewStatus phase2InterviewerFeedback phase3Decision')
             .populate('uploadedBy', 'firstName lastName')
             .lean();
 
