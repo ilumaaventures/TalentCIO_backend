@@ -17,12 +17,12 @@ const hrEmailLogSchema = new mongoose.Schema({
     sentBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false
     },
     recipientUserId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        required: false,
         index: true
     },
     recipientEmail: {
@@ -34,6 +34,16 @@ const hrEmailLogSchema = new mongoose.Schema({
         type: String,
         trim: true,
         default: ''
+    },
+    body: {
+        type: String,
+        default: ''
+    },
+    type: {
+        type: String,
+        enum: ['onboarding', 'general', 'offboarding'],
+        default: 'general',
+        index: true
     },
     templateId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -85,5 +95,40 @@ const hrEmailLogSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 hrEmailLogSchema.index({ companyId: 1, recipientUserId: 1, sentAt: -1 });
+hrEmailLogSchema.index({ companyId: 1, recipientUserId: 1, type: 1, sentAt: -1 });
+hrEmailLogSchema.index({ companyId: 1, recipientEmail: 1, type: 1, sentAt: -1 });
+
+// Post-save hook to enforce FIFO cap of 20 latest emails per recipient and type
+hrEmailLogSchema.post('save', async function (doc) {
+    try {
+        const HREmailLog = mongoose.model('HREmailLog');
+        const query = {
+            companyId: doc.companyId,
+            type: doc.type
+        };
+
+        if (doc.recipientUserId) {
+            query.$or = [
+                { recipientUserId: doc.recipientUserId },
+                { recipientEmail: doc.recipientEmail }
+            ];
+        } else {
+            query.recipientEmail = doc.recipientEmail;
+        }
+
+        const count = await HREmailLog.countDocuments(query);
+        if (count > 20) {
+            const oldestLogs = await HREmailLog.find(query)
+                .sort({ sentAt: 1 })
+                .limit(count - 20)
+                .select('_id')
+                .lean();
+            const idsToDelete = oldestLogs.map(l => l._id);
+            await HREmailLog.deleteMany({ _id: { $in: idsToDelete } });
+        }
+    } catch (err) {
+        console.error('Error in HREmailLog FIFO hook:', err);
+    }
+});
 
 module.exports = mongoose.model('HREmailLog', hrEmailLogSchema);

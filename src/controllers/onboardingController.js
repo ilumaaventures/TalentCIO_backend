@@ -2,6 +2,7 @@ const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
 const EmailTemplate = require('../models/EmailTemplate');
+const HREmailLog = require('../models/HREmailLog');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const { getCompanyBranding } = require('../services/emailService');
 const NotificationService = require('../services/notificationService');
@@ -638,6 +639,27 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             ...branding
         });
 
+        await HREmailLog.create({
+            companyId: employee.companyId,
+            sentBy: req.user?._id,
+            recipientUserId: employee.transferredToUserId || null,
+            recipientEmail: employee.email,
+            subject: resolvedSubject,
+            body: emailHtml,
+            type: 'onboarding',
+            templateId: selectedTemplate?._id || null,
+            templateName: selectedTemplate?.name || 'Default Pre-Onboarding Template',
+            emailAccountId: delivery.emailAccountId || 'platform',
+            emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+            attachments: (attachments || []).map(att => ({
+                filename: att.filename,
+                cloudinaryUrl: att.path,
+                publicId: extractPublicIdFromUrl(att.path) || '',
+                dossierDocId: null
+            })),
+            sentAt: new Date()
+        });
+
         // Add audit log
         await OnboardingEmployee.findByIdAndUpdate(employee._id, {
             $push: {
@@ -813,6 +835,27 @@ exports.sendCustomFile = async (req, res) => {
             attachments,
             ...branding
         });
+
+        if (sent) {
+            await HREmailLog.create({
+                companyId: employee.companyId,
+                sentBy: req.user?._id,
+                recipientUserId: employee.transferredToUserId || null,
+                recipientEmail: employee.email,
+                subject: `Action Required: New ${files.length > 1 ? 'Documents' : 'Document'} for Your Onboarding`,
+                body: emailHtml,
+                type: 'onboarding',
+                emailAccountId: delivery.emailAccountId || 'platform',
+                emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+                attachments: (attachments || []).map(att => ({
+                    filename: att.filename,
+                    cloudinaryUrl: att.path,
+                    publicId: extractPublicIdFromUrl(att.path) || '',
+                    dossierDocId: null
+                })),
+                sentAt: new Date()
+            });
+        }
 
         if (!sent) {
             return res.status(500).json({ message: 'Failed to send email' });
@@ -1152,12 +1195,7 @@ exports.flagDocument = async (req, res) => {
                     'onboarding_document_reupload_required'
                 );
                 if (delivery.shouldSendEmail) {
-                    await sendEmailForCompany({
-                        companyId: employee.companyId,
-                        emailAccountId: delivery.emailAccountId,
-                        to: employee.email,
-                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
-                        html: `
+                    const emailHtml = `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
                             <h2 style="color: #e53e3e;">Document Updates Required</h2>
                             <p>Hello ${employee.firstName},</p>
@@ -1166,8 +1204,27 @@ exports.flagDocument = async (req, res) => {
                             <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
-                    `,
+                    `;
+                    await sendEmailForCompany({
+                        companyId: employee.companyId,
+                        emailAccountId: delivery.emailAccountId,
+                        to: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        html: emailHtml,
                         ...branding
+                    });
+
+                    await HREmailLog.create({
+                        companyId: employee.companyId,
+                        sentBy: req.user?._id,
+                        recipientUserId: employee.transferredToUserId || null,
+                        recipientEmail: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        body: emailHtml,
+                        type: 'onboarding',
+                        emailAccountId: delivery.emailAccountId || 'platform',
+                        emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+                        sentAt: new Date()
                     });
                 }
             }
@@ -1230,12 +1287,7 @@ exports.approveDocument = async (req, res) => {
                     'onboarding_document_reupload_required'
                 );
                 if (delivery.shouldSendEmail) {
-                    await sendEmailForCompany({
-                        companyId: employee.companyId,
-                        emailAccountId: delivery.emailAccountId,
-                        to: employee.email,
-                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
-                        html: `
+                    const emailHtml = `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
                             <h2 style="color: #e53e3e;">Document Updates Required</h2>
                             <p>Hello ${employee.firstName},</p>
@@ -1244,8 +1296,27 @@ exports.approveDocument = async (req, res) => {
                             <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
-                    `,
+                    `;
+                    await sendEmailForCompany({
+                        companyId: employee.companyId,
+                        emailAccountId: delivery.emailAccountId,
+                        to: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        html: emailHtml,
                         ...branding
+                    });
+
+                    await HREmailLog.create({
+                        companyId: employee.companyId,
+                        sentBy: req.user?._id,
+                        recipientUserId: employee.transferredToUserId || null,
+                        recipientEmail: employee.email,
+                        subject: `Action Required: Document Updates Needed for Your Onboarding`,
+                        body: emailHtml,
+                        type: 'onboarding',
+                        emailAccountId: delivery.emailAccountId || 'platform',
+                        emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+                        sentAt: new Date()
                     });
                 }
             }
@@ -2757,12 +2828,7 @@ exports.transferToActiveEmployee = async (req, res) => {
             'onboarding_account_ready'
         );
         if (delivery.shouldSendEmail) {
-            await sendEmailForCompany({
-                companyId: employee.companyId,
-                emailAccountId: delivery.emailAccountId,
-                to: employee.email,
-                subject: `Welcome! Your Employee Account is Ready`,
-            html: `
+            const emailHtml = `
                 <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
                     <div style="background: linear-gradient(135deg, #059669, #10b981); padding: 32px; text-align: center;">
                         <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to the Team! 🎉</h1>
@@ -2788,8 +2854,28 @@ exports.transferToActiveEmployee = async (req, res) => {
                         © ${new Date().getFullYear()} TalentCio. All rights reserved.
                     </div>
                 </div>
-            `,
-            ...branding
+            `;
+
+            await sendEmailForCompany({
+                companyId: employee.companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: employee.email,
+                subject: `Welcome! Your Employee Account is Ready`,
+                html: emailHtml,
+                ...branding
+            });
+
+            await HREmailLog.create({
+                companyId: employee.companyId,
+                sentBy: req.user?._id,
+                recipientUserId: newUser._id,
+                recipientEmail: employee.email,
+                subject: `Welcome! Your Employee Account is Ready`,
+                body: emailHtml,
+                type: 'onboarding',
+                emailAccountId: delivery.emailAccountId || 'platform',
+                emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+                sentAt: new Date()
             });
         }
 

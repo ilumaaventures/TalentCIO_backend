@@ -496,6 +496,8 @@ exports.sendHREmail = async (req, res) => {
                     recipientUserId: user._id,
                     recipientEmail: resolvedEmail,
                     subject: resolvedSubject,
+                    body: resolvedHtml,
+                    type: 'general',
                     templateId: selectedTemplate?._id || null,
                     templateName: selectedTemplate?.name || '',
                     emailAccountId: emailAccountSnapshot.emailAccountId,
@@ -537,14 +539,39 @@ exports.sendHREmail = async (req, res) => {
 
 exports.getHistory = async (req, res) => {
     try {
-        const history = await HREmailLog.find({
+        const { type = 'general' } = req.query;
+        const user = await User.findById(req.params.userId).select('email').lean();
+        const emailList = [];
+        if (user && user.email) {
+            emailList.push(user.email.toLowerCase());
+        }
+        const profile = await EmployeeProfile.findOne({ user: req.params.userId })
+            .select('contact.workEmail contact.personalEmail')
+            .lean();
+        if (profile && profile.contact) {
+            if (profile.contact.workEmail) emailList.push(profile.contact.workEmail.toLowerCase());
+            if (profile.contact.personalEmail) emailList.push(profile.contact.personalEmail.toLowerCase());
+        }
+
+        const query = {
             companyId: req.companyId,
-            recipientUserId: req.params.userId
-        })
+            type
+        };
+
+        if (emailList.length > 0) {
+            query.$or = [
+                { recipientUserId: req.params.userId },
+                { recipientEmail: { $in: emailList } }
+            ];
+        } else {
+            query.recipientUserId = req.params.userId;
+        }
+
+        const history = await HREmailLog.find(query)
             .populate('sentBy', 'firstName lastName')
             .populate('templateId', 'name')
             .sort({ sentAt: -1 })
-            .limit(50)
+            .limit(20)
             .lean();
 
         return res.json({ history });
