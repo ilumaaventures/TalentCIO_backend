@@ -449,6 +449,7 @@ const getMyself = async (req, res) => {
             lastName: req.user.lastName,
             email: req.user.email,
             profilePicture: req.user.profilePicture,
+            profilePictureMetadata: req.user.profilePictureMetadata,
             employeeCode: req.user.employeeCode,
             department: req.user.department,
             workLocation: req.user.workLocation,
@@ -485,7 +486,7 @@ const getUserById = async (req, res) => {
             null,
             includeDeleted ? { includeDeleted: true } : undefined
         )
-            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode')
+            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode')
             .populate('roles', 'name isSystem')
             .populate('reportingManagers', 'firstName lastName email')
             .lean();

@@ -51,7 +51,27 @@ const MINIMUM_INTERVIEWER_CANDIDATE_FIELDS = [
     'hiringRequestId'
 ];
 
-const normalizeId = (value) => String(value?._id || value || '');
+const normalizeId = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') {
+        if ('_id' in value && value._id && value._id !== value) {
+            return normalizeId(value._id);
+        }
+        if (value.buffer && (value.buffer instanceof Uint8Array || Array.isArray(value.buffer) || ArrayBuffer.isView(value.buffer))) {
+            const buf = Uint8Array.from(value.buffer);
+            if (buf.length === 12) {
+                return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+        }
+        if (typeof value.toString === 'function') {
+            const str = value.toString();
+            if (str !== '[object Object]') return str;
+        }
+    }
+    const strVal = String(value);
+    return strVal === '[object Object]' ? '' : strVal;
+};
 
 const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
     const permissions = getUserPermissionKeys(user);

@@ -97,14 +97,14 @@ const formatTimestamp = () => {
 const formatLog = (level, message, ...args) => {
     const timestamp = formatTimestamp();
     const store = contextStore.getStore();
-    
+
     let reqId = '[SYSTEM]';
     let userContext = 'Anonymous';
     let companyContext = '';
 
     if (store) {
         reqId = `[${store.requestId}]`;
-        
+
         // Dynamically extract context from the Express request object
         const req = store.req;
         if (req) {
@@ -215,7 +215,7 @@ const loggerMiddleware = (req, res, next) => {
     const requestId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const start = process.hrtime.bigint();
     const clientIp = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'unknown';
-    
+
     // Store reference that we can mutate later
     const store = {
         requestId,
@@ -225,13 +225,13 @@ const loggerMiddleware = (req, res, next) => {
 
     contextStore.run(store, () => {
         const isExcluded = !shouldLogRequest(req);
-        
+
         // Redact request body for logging
         const redactedBody = req.body && Object.keys(req.body).length > 0 ? JSON.stringify(redact(req.body)) : null;
         const queryParams = req.query && Object.keys(req.query).length > 0 ? JSON.stringify(req.query) : null;
-        
+
         const inboundMsg = `Inbound: ${req.method} ${req.originalUrl} - IP: ${clientIp} - Query: ${queryParams || '{}'} - Body: ${redactedBody || '{}'}`;
-        
+
         // Only log inbound request immediately if it's not excluded
         if (!isExcluded) {
             console.log(inboundMsg);
@@ -239,7 +239,7 @@ const loggerMiddleware = (req, res, next) => {
 
         res.on('finish', () => {
             const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-            
+
             // If the route was excluded but failed, print the cached inbound details first
             if (isExcluded && res.statusCode >= 400) {
                 console.log(inboundMsg);
