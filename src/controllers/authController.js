@@ -364,11 +364,14 @@ const uploadProfilePicture = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        const { address = '' } = req.body;
+
         user.profilePicture = req.file.path;
         user.profilePictureMetadata = {
             latitude: latNum,
             longitude: lngNum,
-            timestamp: parsedTimestamp
+            timestamp: parsedTimestamp,
+            address: String(address || '').trim()
         };
 
         await user.save();

@@ -650,7 +650,7 @@ const updateOwnAttendanceSettings = async (req, res) => {
 const getOwnBrandingSettings = async (req, res) => {
     try {
         const company = req.company || await Company.findById(req.companyId)
-            .select('name settings.logo settings.logoPublicId settings.workspaceBranding')
+            .select('name settings.logo settings.logoPublicId settings.workspaceBranding settings.profile')
             .lean();
 
         if (!company) {
@@ -662,7 +662,8 @@ const getOwnBrandingSettings = async (req, res) => {
             logoAlignment: normalizeWorkspaceLogoAlignment(company?.settings?.workspaceBranding?.logoAlignment),
             logoSize: normalizeWorkspaceLogoSize(company?.settings?.workspaceBranding?.logoSize),
             companyLogoUrl: company?.settings?.logo || '',
-            hasCompanyLogo: Boolean(company?.settings?.logo)
+            hasCompanyLogo: Boolean(company?.settings?.logo),
+            requireCameraCapture: Boolean(company?.settings?.profile?.requireCameraCapture)
         });
     } catch (error) {
         console.error('getOwnBrandingSettings error:', error);
@@ -676,6 +677,7 @@ const updateOwnBrandingSettings = async (req, res) => {
         const displayMode = normalizeWorkspaceLogoMode(req.body?.displayMode);
         const logoAlignment = normalizeWorkspaceLogoAlignment(req.body?.logoAlignment);
         const logoSize = normalizeWorkspaceLogoSize(req.body?.logoSize);
+        const requireCameraCapture = Boolean(req.body?.requireCameraCapture);
 
         const company = await Company.findByIdAndUpdate(
             req.companyId,
@@ -683,12 +685,13 @@ const updateOwnBrandingSettings = async (req, res) => {
                 $set: {
                     'settings.workspaceBranding.displayMode': displayMode,
                     'settings.workspaceBranding.logoAlignment': logoAlignment,
-                    'settings.workspaceBranding.logoSize': logoSize
+                    'settings.workspaceBranding.logoSize': logoSize,
+                    'settings.profile.requireCameraCapture': requireCameraCapture
                 }
             },
             {
                 new: true,
-                select: 'settings.logo settings.workspaceBranding'
+                select: 'settings.logo settings.workspaceBranding settings.profile'
             }
         ).lean();
 
@@ -701,6 +704,7 @@ const updateOwnBrandingSettings = async (req, res) => {
             displayMode,
             logoAlignment,
             logoSize,
+            requireCameraCapture,
             companyLogoUrl: company?.settings?.logo || ''
         });
     } catch (error) {

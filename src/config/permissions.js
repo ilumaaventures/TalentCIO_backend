@@ -242,6 +242,11 @@ module.exports = [
         module: "DOSSIER",
         description: "Export employee dossier details"
     },
+    {
+        key: "dossier.profile_photo.upload",
+        module: "DOSSIER",
+        description: "Allow uploading profile photo from local storage (otherwise forces direct camera capture)"
+    },
 
     // TALENT ACQUISITION (TA)
     {
@@ -484,6 +489,16 @@ module.exports = [
         key: "settings.notification.manage",
         module: "SETTINGS",
         description: "Manage company notification settings"
+    },
+    {
+        key: "settings.company.view",
+        module: "SETTINGS",
+        description: "View company settings and branding"
+    },
+    {
+        key: "settings.company.manage",
+        module: "SETTINGS",
+        description: "Manage company settings and branding"
     },
 
     // ONBOARDING
