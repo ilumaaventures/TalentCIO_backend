@@ -337,6 +337,27 @@ const uploadProfilePicture = async (req, res) => {
             return res.status(400).json({ message: 'No file uploaded' });
         }
 
+        const { latitude, longitude, timestamp } = req.body;
+
+        if (latitude === undefined || longitude === undefined || !timestamp || latitude === '' || longitude === '') {
+            return res.status(400).json({ message: 'Current location coordinates and timestamp are mandatory for profile picture upload.' });
+        }
+
+        const latNum = parseFloat(latitude);
+        const lngNum = parseFloat(longitude);
+
+        if (isNaN(latNum) || latNum < -90 || latNum > 90) {
+            return res.status(400).json({ message: 'Invalid latitude coordinate.' });
+        }
+        if (isNaN(lngNum) || lngNum < -180 || lngNum > 180) {
+            return res.status(400).json({ message: 'Invalid longitude coordinate.' });
+        }
+
+        const parsedTimestamp = new Date(timestamp);
+        if (isNaN(parsedTimestamp.getTime())) {
+            return res.status(400).json({ message: 'Invalid timestamp.' });
+        }
+
         const user = await User.findById(req.user._id);
 
         if (!user) {
@@ -344,11 +365,19 @@ const uploadProfilePicture = async (req, res) => {
         }
 
         user.profilePicture = req.file.path;
+        user.profilePictureMetadata = {
+            latitude: latNum,
+            longitude: lngNum,
+            timestamp: parsedTimestamp
+        };
+
         await user.save();
+        invalidateAuthUserCache(user._id);
 
         res.json({
             message: 'Profile picture uploaded successfully',
-            profilePicture: user.profilePicture
+            profilePicture: user.profilePicture,
+            profilePictureMetadata: user.profilePictureMetadata
         });
     } catch (error) {
         console.error('UPLOAD ERROR:', error);

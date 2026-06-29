@@ -76,7 +76,7 @@ const protect = async (req, res, next) => {
                 // CRIT-2: Run User fetch and Company fetch in parallel (was sequential)
                 const [userDoc, companyDoc] = await Promise.all([
                     User.findById(decoded.id)
-                        .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients')
+                        .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients')
                         .lean(),
                     effectiveCompanyId
                         ? null // already have company on req (from tenantMiddleware)
@@ -103,6 +103,43 @@ const protect = async (req, res, next) => {
 
                 req.user.roles = resolvedRoleContext.roles;
                 req.user.permissions = resolvedRoleContext.permissionKeys;
+
+                // Normalize any BSON ObjectIds inside roles and reportingManagers to strings
+                // before caching to prevent structuredClone from converting them to plain `{ buffer: ... }` objects.
+                if (Array.isArray(req.user.roles)) {
+                    req.user.roles = req.user.roles.map(role => {
+                        const normalizedRole = {
+                            ...role,
+                            _id: role._id ? role._id.toString() : '',
+                            companyId: role.companyId ? role.companyId.toString() : null
+                        };
+                        if (Array.isArray(role.inheritsFrom)) {
+                            normalizedRole.inheritsFrom = role.inheritsFrom.map(parent => ({
+                                ...parent,
+                                _id: parent._id ? parent._id.toString() : ''
+                            }));
+                        }
+                        if (Array.isArray(role.directPermissions)) {
+                            normalizedRole.directPermissions = role.directPermissions.map(p => ({
+                                ...p,
+                                _id: p._id ? p._id.toString() : ''
+                            }));
+                        }
+                        if (Array.isArray(role.permissions)) {
+                            normalizedRole.permissions = role.permissions.map(p => ({
+                                ...p,
+                                _id: p._id ? p._id.toString() : ''
+                            }));
+                        }
+                        return normalizedRole;
+                    });
+                }
+
+                if (Array.isArray(req.user.reportingManagers)) {
+                    req.user.reportingManagers = req.user.reportingManagers
+                        .map(m => m ? m.toString() : '')
+                        .filter(Boolean);
+                }
 
                 // Filter permissions based on enabled modules of the current company
                 let companyModules = [];
