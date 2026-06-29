@@ -237,4 +237,8 @@ const companySchema = new mongoose.Schema({
     trialEndsAt: { type: Date }
 }, { timestamps: true });
 
+// Explicit index for tenant middleware lookup — this is the hottest query path
+companySchema.index({ subdomain: 1 }, { unique: true });
+companySchema.index({ status: 1 });
+
 module.exports = mongoose.model('Company', companySchema);

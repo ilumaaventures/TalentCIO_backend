@@ -4,25 +4,27 @@ const { hasEnabledModule, normalizeEnabledModules } = require('../utils/enabledM
 /**
  * Middleware factory that checks if a specific module is enabled for the requesting tenant.
  * Prevents API-level access to disabled modules even if someone bypasses the frontend.
- * 
+ *
  * Usage: router.use(requireModule('attendance'))
- * 
- * @param {string} moduleId - The module ID to check (must match what's stored in Company.enabledModules)
+ *
+ * HIGH-4 Performance: tenantMiddleware now selects enabledModules, so req.company.enabledModules
+ * is always available without an extra DB query. The fallback DB call only fires on routes
+ * that bypass tenantMiddleware (superadmin routes, /api/v1, etc.).
+ *
+ * @param {string|string[]} moduleIds - The module ID(s) to check
  */
 const requireModule = (moduleIds) => async (req, res, next) => {
     try {
         const idsToCheck = Array.isArray(moduleIds) ? moduleIds : [moduleIds];
-        // We need the company to check enabled modules.
-        // req.company is set by tenantMiddleware when subdomain is detected.
-        // On localhost without subdomain, we fall back to the authenticated user's companyId.
+
         let company = req.company;
 
         if (!company) {
             const companyId = req.companyId || req.user?.companyId;
             if (!companyId) {
-                // No company context at all - this should not happen for tenant routes.
                 return res.status(403).json({ message: 'No tenant context found. Please access via your workspace URL.' });
             }
+            // Fallback DB query — only hits on routes that bypass tenantMiddleware
             company = await Company.findById(companyId).select('enabledModules status').lean();
         }
 

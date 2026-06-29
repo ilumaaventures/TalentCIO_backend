@@ -263,24 +263,20 @@ onboardingEmployeeSchema.methods.matchPassword = async function (enteredPassword
     return await bcrypt.compare(enteredPassword, this.tempPassword);
 };
 
-// Generate Temp Employee ID
+// Generate Temp Employee ID — atomic via SequenceCounter to prevent race conditions
 onboardingEmployeeSchema.statics.generateTempId = async function (companyId) {
+    const SequenceCounter = require('./SequenceCounter');
     const year = new Date().getFullYear();
-    const prefix = `EMP-${year}-`;
 
-    // Find the record with the highest numeric suffix for this year
-    const lastEmployee = await this.findOne({
-        companyId,
-        tempEmployeeId: { $regex: new RegExp(`^${prefix}`) }
-    }).sort({ tempEmployeeId: -1 });
+    // findOneAndUpdate with $inc is atomic in MongoDB — no race condition possible
+    const counter = await SequenceCounter.findOneAndUpdate(
+        { companyId, key: 'onboarding_emp', year },
+        { $inc: { seq: 1 } },
+        { upsert: true, new: true }
+    );
 
-    let lastNumber = 0;
-    if (lastEmployee) {
-        const parts = lastEmployee.tempEmployeeId.split('-');
-        lastNumber = parseInt(parts[parts.length - 1], 10) || 0;
-    }
-
-    return `${prefix}${String(lastNumber + 1).padStart(4, '0')}`;
+    return `EMP-${year}-${String(counter.seq).padStart(4, '0')}`;
 };
+
 
 module.exports = mongoose.model('OnboardingEmployee', onboardingEmployeeSchema);

@@ -15,6 +15,9 @@ const Company = require('../models/Company');
  *   - ilumaa.talentcio.in → tenant: ilumaa       (subdomain of main custom domain)
  *   - talentcio.in        → no tenant (main marketing site)
  *   - talentcio.onrender.com → no tenant (backend itself)
+ *
+ * CRIT-3 Performance: Company lookups are cached for 60 seconds per subdomain
+ * to avoid a DB query on every single API request.
  */
 
 // Hostnames that are infrastructure — NOT tenant subdomains
@@ -27,6 +30,28 @@ const NON_TENANT_HOSTS = new Set([
 
 // Root domains we own — subdomains of these ARE tenant slugs
 const OWN_ROOT_DOMAINS = ['talentcio.in', 'telentcio.in', 'talentcio.com', 'telentcio.com'];
+
+// ─── In-process tenant cache (CRIT-3 fix) ────────────────────────────────────
+const TENANT_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+const tenantCache = new Map();
+
+// Periodically evict stale cache entries (MED-8 pattern)
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of tenantCache.entries()) {
+        if (now - entry.cachedAt > TENANT_CACHE_TTL_MS * 2) {
+            tenantCache.delete(key);
+        }
+    }
+}, 120_000);
+
+/**
+ * Call this whenever company settings change (e.g., status, enabledModules)
+ * to force the next request to re-fetch from MongoDB.
+ */
+const invalidateTenantCache = (subdomain) => {
+    if (subdomain) tenantCache.delete(String(subdomain).toLowerCase().trim());
+};
 
 const tenantMiddleware = async (req, res, next) => {
     try {
@@ -80,8 +105,24 @@ const tenantMiddleware = async (req, res, next) => {
             return next();
         }
 
-        // ── Step 4: Resolve to Company ──
-        const company = await Company.findOne({ subdomain });
+        // ── Step 4: Serve from cache if fresh (CRIT-3) ──
+        const cached = tenantCache.get(subdomain);
+        if (cached && (Date.now() - cached.cachedAt) < TENANT_CACHE_TTL_MS) {
+            req.company   = cached.company;
+            req.companyId = cached.company._id;
+
+            if (cached.company.status === 'Suspended') {
+                return res.status(403).json({ message: 'This workspace is suspended. Please contact support.' });
+            }
+
+            return next();
+        }
+
+        // ── Step 5: Resolve to Company (DB query) ──
+        // HIGH-4: select includes enabledModules so moduleGuard never re-queries
+        const company = await Company.findOne({ subdomain })
+            .select('_id name subdomain status enabledModules trialEndsAt planId settings.attendance settings.timesheet')
+            .lean();
 
         if (!company) {
             console.warn(`[TENANT] Workspace '${subdomain}' not found.`);
@@ -92,8 +133,11 @@ const tenantMiddleware = async (req, res, next) => {
             return res.status(403).json({ message: 'This workspace is suspended. Please contact support.' });
         }
 
+        // Cache the resolved company
+        tenantCache.set(subdomain, { company, cachedAt: Date.now() });
+
         // Attach to request for downstream use
-        req.company = company;
+        req.company   = company;
         req.companyId = company._id;
 
         next();
@@ -104,3 +148,4 @@ const tenantMiddleware = async (req, res, next) => {
 };
 
 module.exports = tenantMiddleware;
+module.exports.invalidateTenantCache = invalidateTenantCache;

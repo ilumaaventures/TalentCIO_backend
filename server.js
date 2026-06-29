@@ -1,7 +1,11 @@
 require('dotenv').config();
+const { initializeLogger, loggerMiddleware } = require('./src/utils/logger');
+initializeLogger();
+
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
+const compression = require('compression');
 const http = require('http');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
@@ -20,7 +24,6 @@ const MAX_SOCKET_ROOMS_PER_SOCKET = Math.max(parseInt(process.env.SOCKET_MAX_ROO
 const SOCKET_MAX_HTTP_BUFFER_SIZE = Math.max(parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_SIZE || '1048576', 10), 1024);
 const activeSocketCounts = new Map();
 const trackedSocketIps = new Map();
-const requestTiming = require('./src/middlewares/requestTiming');
 
 server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS;
 server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
@@ -90,6 +93,16 @@ app.use(helmet({
     crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
 }));
+
+// MED-7: Gzip compression — reduces JSON response payloads by 50-80%
+app.use(compression({
+    threshold: 1024, // only compress responses larger than 1 KB
+    filter: (req, res) => {
+        if (req.headers['x-no-compression']) return false;
+        return compression.filter(req, res);
+    }
+}));
+
 app.use((req, res, next) => {
     if (shouldDisableRequestTimeout(req)) {
         req.setTimeout(0);
@@ -101,7 +114,6 @@ app.use((req, res, next) => {
 
     next();
 });
-
 
 // DEPLOY MARKER v4 – requireAttachment fix – 2026-04-20
 
@@ -184,8 +196,8 @@ io.on('connection', (socket) => {
     });
 });
 
-app.use(requestTiming);
 app.use(express.json());
+app.use(loggerMiddleware);
 
 require('./src/models/Permission');
 require('./src/models/Role');

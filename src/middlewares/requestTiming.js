@@ -5,7 +5,9 @@ const requestTiming = (req, res, next) => {
 
     res.on('finish', () => {
         const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-        // Request logging removed per user request
+        if (SLOW_REQUEST_THRESHOLD_MS > 0 && durationMs > SLOW_REQUEST_THRESHOLD_MS) {
+            console.warn(`[SLOW] ${req.method} ${req.originalUrl} — ${durationMs.toFixed(1)}ms`);
+        }
     });
 
     next();

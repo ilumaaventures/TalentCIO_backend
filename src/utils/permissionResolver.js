@@ -25,50 +25,52 @@ const getRoleCompanyMatch = (companyId) => (
         : {}
 );
 
-const fetchRoleGraph = async ({ roleIds = [], companyId }) => {
-    const queue = [...new Set(roleIds.map(normalizeId).filter(Boolean))];
-    const roleMap = new Map();
+// ─── Permission Cache (HIGH-1 moved here for permission resolution) ───────────
+// Permissions are system-wide and almost never change at runtime.
+const PERMISSION_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let permissionCache = null;
+let permissionCachedAt = 0;
 
-    while (queue.length > 0) {
-        const batchIds = queue.splice(0, queue.length);
-        const roles = await Role.find({
-            _id: { $in: batchIds },
-            ...getRoleCompanyMatch(companyId)
-        })
-            .select('name isSystem permissions inheritsFrom companyId')
-            .lean();
-
-        roles.forEach((role) => {
-            const roleId = normalizeId(role._id);
-            if (roleMap.has(roleId)) {
-                return;
-            }
-
-            roleMap.set(roleId, role);
-
-            (role.inheritsFrom || []).map(normalizeId).forEach((parentRoleId) => {
-                if (parentRoleId && !roleMap.has(parentRoleId) && !queue.includes(parentRoleId)) {
-                    queue.push(parentRoleId);
-                }
-            });
-        });
+const getAllPermissions = async () => {
+    if (permissionCache && (Date.now() - permissionCachedAt) < PERMISSION_CACHE_TTL_MS) {
+        return permissionCache;
     }
+    permissionCache = await Permission.find({}).select('key description module isDeprecated').lean();
+    permissionCachedAt = Date.now();
+    return permissionCache;
+};
 
+/**
+ * HIGH-2 Fix: Load the ENTIRE company role graph in a SINGLE query,
+ * then resolve inheritance entirely in memory.
+ *
+ * Old approach: BFS while-loop that issued one DB query per inheritance level
+ * (e.g., 3-level deep = 3 sequential round-trips).
+ *
+ * New approach: One query loads all roles for the company + global roles,
+ * then the BFS traversal is pure in-memory Map lookups — O(N) total.
+ */
+const fetchRoleGraph = async ({ roleIds = [], companyId }) => {
+    // Fetch ALL roles relevant to this company in a SINGLE query
+    const allRoles = await Role.find({
+        ...getRoleCompanyMatch(companyId)
+    })
+        .select('name isSystem permissions inheritsFrom companyId')
+        .lean();
+
+    // Build a Map of all available roles for O(1) lookup during BFS
+    const roleMap = new Map(allRoles.map(role => [normalizeId(role._id), role]));
+
+    // Collect all permission IDs referenced by any role
     const permissionIds = [...new Set(
-        [...roleMap.values()].flatMap((role) => (
+        allRoles.flatMap(role =>
             Array.isArray(role.permissions) ? role.permissions.map(normalizeId).filter(Boolean) : []
-        ))
+        )
     )];
 
-    const permissions = permissionIds.length > 0
-        ? await Permission.find({ _id: { $in: permissionIds } })
-            .select('key description module isDeprecated')
-            .lean()
-        : [];
-
-    const permissionMap = new Map(
-        permissions.map((permission) => [normalizeId(permission._id), permission])
-    );
+    // Fetch permissions — uses cache to avoid repeated DB hits
+    const allPermissions = await getAllPermissions();
+    const permissionMap = new Map(allPermissions.map(p => [normalizeId(p._id), p]));
 
     return { roleMap, permissionMap };
 };
@@ -211,5 +213,6 @@ const validateRoleInheritanceGraph = async ({ roleId = null, inheritsFrom = [], 
 module.exports = {
     augmentPermissionKeysForRoles,
     resolveRolesWithInheritance,
-    validateRoleInheritanceGraph
+    validateRoleInheritanceGraph,
+    getAllPermissions // exported for use in pageBootstrapController
 };
