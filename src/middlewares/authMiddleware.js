@@ -87,6 +87,13 @@ const protect = async (req, res, next) => {
                     return res.status(401).json({ message: 'Not authorized, user not found' });
                 }
 
+                if (userDoc._id) {
+                    userDoc._id = userDoc._id.toString();
+                }
+                if (userDoc.companyId) {
+                    userDoc.companyId = userDoc.companyId.toString();
+                }
+
                 req.user = userDoc;
 
                 const resolvedRoleContext = await resolveRolesWithInheritance({
