@@ -1,4 +1,5 @@
 const { startOfMonth, endOfMonth, format } = require('date-fns');
+const { Types: { ObjectId: MongooseObjectId } } = require('mongoose'); // MED-6: moved from inside aggregation
 const Attendance = require('../models/Attendance');
 const Candidate = require('../models/Candidate');
 const BusinessUnit = require('../models/BusinessUnit');
@@ -24,6 +25,19 @@ const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
 const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
+
+// HIGH-1: Global permission cache — permissions rarely change, 10-minute TTL is safe
+const PERMISSION_CACHE_TTL_MS = 10 * 60 * 1000;
+let _permissionCache = null;
+let _permissionCachedAt = 0;
+const getCachedPermissions = async () => {
+    if (_permissionCache && (Date.now() - _permissionCachedAt) < PERMISSION_CACHE_TTL_MS) {
+        return _permissionCache;
+    }
+    _permissionCache = await Permission.find({}).lean();
+    _permissionCachedAt = Date.now();
+    return _permissionCache;
+};
 
 const LEGACY_HIDDEN_PERMISSION_KEYS = new Set([
     'ta.analytics.requisition',
@@ -79,66 +93,48 @@ const canManageProjectDirectory = (user) =>
     isAdminUser(user) ||
     hasAnyPermission(user, ['project.create', 'project.update', 'task.create', 'task.update']);
 
+// MED-9: Parallelized into two tiers instead of 5 sequential awaits
 const buildProjectVisibilityFilter = async ({ requestUser, companyId }) => {
     const filter = { companyId };
-    const canViewAll = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
+    const canViewAll      = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
     const canViewAssigned = hasPermission(requestUser, 'project.view_assigned');
-    const canViewTeam = hasPermission(requestUser, 'project.view_team');
+    const canViewTeam     = hasPermission(requestUser, 'project.view_team');
 
-    if (canViewAll) {
-        return filter;
-    }
+    if (canViewAll) return filter;
+    if (!canViewAssigned && !canViewTeam) return { ...filter, _id: null };
 
-    if (!canViewAssigned && !canViewTeam) {
-        return { ...filter, _id: null };
-    }
+    // ── Tier 1: Parallel — user's own assigned tasks + direct reports ────────
+    const [assignedModuleIds, directReports] = await Promise.all([
+        Task.distinct('module', { assignees: requestUser._id, companyId }),
+        canViewTeam
+            ? User.find({ reportingManagers: requestUser._id, companyId }).select('_id').lean()
+            : Promise.resolve([])
+    ]);
 
-    const orConditions = [];
-    const assignedModuleIds = await Task.distinct('module', {
-        assignees: requestUser._id,
-        companyId
-    });
-    const taskProjectIds = assignedModuleIds.length > 0
-        ? await Module.distinct('project', {
-            _id: { $in: assignedModuleIds },
-            companyId
-        })
+    const reportIds = directReports.map(u => u._id);
+
+    // ── Tier 2: Parallel — resolve module IDs → project IDs ─────────────────
+    const [taskProjectIds, teamAssignedModuleIds] = await Promise.all([
+        assignedModuleIds.length > 0
+            ? Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId })
+            : Promise.resolve([]),
+        reportIds.length > 0
+            ? Task.distinct('module', { assignees: { $in: reportIds }, companyId })
+            : Promise.resolve([])
+    ]);
+
+    // ── Tier 3: Resolve team module IDs → project IDs ───────────────────────
+    const teamTaskProjectIds = teamAssignedModuleIds.length > 0
+        ? await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId })
         : [];
 
-    orConditions.push({ manager: requestUser._id });
-    orConditions.push({ members: requestUser._id });
-
-    if (taskProjectIds.length > 0) {
-        orConditions.push({ _id: { $in: taskProjectIds } });
-    }
-
-    if (canViewTeam) {
-        const directReports = await User.find({
-            reportingManagers: requestUser._id,
-            companyId
-        }).select('_id').lean();
-        const reportIds = directReports.map((user) => user._id);
-
-        if (reportIds.length > 0) {
-            orConditions.push({ manager: { $in: reportIds } });
-            orConditions.push({ members: { $in: reportIds } });
-
-            const teamAssignedModuleIds = await Task.distinct('module', {
-                assignees: { $in: reportIds },
-                companyId
-            });
-            const teamTaskProjectIds = teamAssignedModuleIds.length > 0
-                ? await Module.distinct('project', {
-                    _id: { $in: teamAssignedModuleIds },
-                    companyId
-                })
-                : [];
-
-            if (teamTaskProjectIds.length > 0) {
-                orConditions.push({ _id: { $in: teamTaskProjectIds } });
-            }
-        }
-    }
+    const orConditions = [
+        { manager: requestUser._id },
+        { members: requestUser._id },
+        ...(taskProjectIds.length > 0     ? [{ _id: { $in: taskProjectIds } }] : []),
+        ...(reportIds.length > 0          ? [{ manager: { $in: reportIds } }, { members: { $in: reportIds } }] : []),
+        ...(teamTaskProjectIds.length > 0 ? [{ _id: { $in: teamTaskProjectIds } }] : [])
+    ];
 
     return orConditions.length > 0
         ? { ...filter, $or: orConditions }
@@ -205,32 +201,33 @@ const getTimesheetProjectsForUser = async ({ requestUser, companyId, targetUserI
     }).lean();
 };
 
+// HIGH-3: Parallelized timesheet + user + company queries (were 3 sequential awaits)
 const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, periodId }) => {
-    let timesheet = await Timesheet.findOne({
-        user: targetUserId,
-        month: periodId,
-        companyId
-    }).lean();
+    // First get the company to determine cycle (needed for period range calculation)
+    // Run timesheet + user + company fetches simultaneously
+    const [timesheetRaw, fullUser, company] = await Promise.all([
+        Timesheet.findOne({ user: targetUserId, month: periodId, companyId }).lean(),
+        User.findOne({ _id: targetUserId, companyId })
+            .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode')
+            .populate('reportingManagers', 'firstName lastName email')
+            .lean(),
+        Company.findById(companyId)
+            .select('settings.attendance.weeklyOff settings.timesheet.approvalCycle')
+            .lean()
+    ]);
 
+    let timesheet = timesheetRaw;
     if (!timesheet && String(targetUserId) === String(requestUser._id)) {
-        timesheet = await Timesheet.create({
+        const created = await Timesheet.create({
             user: targetUserId,
             month: periodId,
             companyId,
             status: 'DRAFT',
             rejectionReason: ''
         });
-        timesheet = timesheet.toObject();
+        timesheet = created.toObject();
     }
 
-    const fullUser = await User.findOne({ _id: targetUserId, companyId })
-        .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode')
-        .populate('reportingManagers', 'firstName lastName email')
-        .lean();
-
-    const company = await Company.findById(companyId)
-        .select('settings.attendance.weeklyOff settings.timesheet.approvalCycle')
-        .lean();
     const cycle = company?.settings?.timesheet?.approvalCycle || 'Monthly';
     const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
 
@@ -330,10 +327,14 @@ exports.getAttendanceBootstrap = async (req, res) => {
             .select('name date isOptional')
             .sort({ date: 1 })
             .lean();
+        // MED-4: Add year date-range so we don't load years of leave history
+        const yearStart = new Date(`${year}-01-01T00:00:00.000+05:30`);
+        const yearEnd   = new Date(`${year + 1}-01-01T00:00:00.000+05:30`);
         const leavesPromise = LeaveRequest.find({
             user: targetUserId,
             companyId: req.companyId,
-            status: 'Approved'
+            status: 'Approved',
+            startDate: { $gte: yearStart, $lt: yearEnd }
         })
             .sort({ createdAt: -1 })
             .select('leaveType startDate endDate isHalfDay reason status createdAt daysCount')
@@ -409,8 +410,9 @@ exports.getLeavesBootstrap = async (req, res) => {
         const skip = (page - 1) * limit;
         const userEmploymentType = req.user.employmentType || 'Full Time';
 
-        const [allPolicies, existingBalances, leaves, total, configs] = await Promise.all([
-            LeaveConfig.find({ isActive: true, companyId: req.companyId }).lean(),
+        // MED-5: Merged two LeaveConfig.find() calls into one; derive both in memory
+        const [allLeaveConfigs, existingBalances, leaves, total] = await Promise.all([
+            LeaveConfig.find({ companyId: req.companyId }).lean(),
             LeaveBalance.find({ user: req.user._id, year, companyId: req.companyId }).lean(),
             LeaveRequest.find({ user: req.user._id, companyId: req.companyId })
                 .sort({ createdAt: -1 })
@@ -418,9 +420,12 @@ exports.getLeavesBootstrap = async (req, res) => {
                 .limit(limit)
                 .select('leaveType startDate endDate isHalfDay reason status createdAt daysCount')
                 .lean(),
-            LeaveRequest.countDocuments({ user: req.user._id, companyId: req.companyId }),
-            LeaveConfig.find({ companyId: req.companyId }).select('leaveType sandwichRule').lean()
+            LeaveRequest.countDocuments({ user: req.user._id, companyId: req.companyId })
         ]);
+
+        // Derive both active policies and sandwichMap from the single query result
+        const allPolicies = allLeaveConfigs.filter(c => c.isActive);
+        const sandwichMap = Object.fromEntries(allLeaveConfigs.map(c => [c.leaveType, c.sandwichRule || false]));
 
         const policies = allPolicies.filter(policy =>
             !policy.employeeTypes ||
@@ -455,11 +460,6 @@ exports.getLeavesBootstrap = async (req, res) => {
                 proofRequiredAbove: policy.proofRequiredAbove
             };
         });
-
-        const sandwichMap = configs.reduce((accumulator, config) => {
-            accumulator[config.leaveType] = config.sandwichRule || false;
-            return accumulator;
-        }, {});
 
         res.json({
             balances,
@@ -684,9 +684,11 @@ exports.getDiscussionsBootstrap = async (req, res) => {
             { $skip: skip },
             { $limit: limit }
         ]);
+        // HIGH-7: limit supervisors list — loading ALL users is O(N) with no benefit
         const supervisorsPromise = User.find({ companyId: req.companyId, isActive: true })
             .select('firstName lastName email profilePicture')
             .sort({ firstName: 1 })
+            .limit(300)
             .lean();
 
         const [total, discussionRows, supervisors] = await Promise.all([
@@ -722,22 +724,31 @@ exports.getHelpdeskBootstrap = async (req, res) => {
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
         const isResolverRole = req.user.roles.some(r => ['HR', 'Supervisor', 'Admin', 'System'].includes(r.name || r));
 
+        // CRIT-4: Added limits to all queries — previously loaded unlimited documents
+        const { page: qPage = 1, limit: qLimit = 25 } = req.query;
+        const qPageNum  = Math.max(parseInt(qPage, 10)  || 1, 1);
+        const qLimitNum = Math.min(parseInt(qLimit, 10) || 25, 100);
+        const qSkip     = (qPageNum - 1) * qLimitNum;
+
         const myQueriesPromise = HelpdeskQuery.find({ raisedBy: req.user._id, companyId: req.companyId })
             .populate('queryType', 'name')
             .populate('assignedTo', 'firstName lastName email')
             .sort({ createdAt: -1 })
+            .limit(50) // personal queries capped at 50
             .lean();
         const assignedQueriesPromise = HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
-                .populate('raisedBy', 'firstName lastName email')
-                .populate('queryType', 'name')
-                .sort({ priority: -1, createdAt: 1 })
-                .lean();
+            .populate('raisedBy', 'firstName lastName email')
+            .populate('queryType', 'name')
+            .sort({ priority: -1, createdAt: 1 })
+            .limit(50) // assigned queries capped at 50
+            .lean();
         const allQueriesPromise = isAdmin
             ? HelpdeskQuery.find({ companyId: req.companyId })
                 .populate('raisedBy', 'firstName lastName email')
                 .populate('assignedTo', 'firstName lastName email')
                 .populate('queryType', 'name')
                 .sort({ priority: -1, createdAt: -1 })
+                .skip(qSkip).limit(qLimitNum) // paginated for admins
                 .lean()
             : Promise.resolve([]);
         const escalatedQueriesPromise = isAdmin
@@ -746,14 +757,19 @@ exports.getHelpdeskBootstrap = async (req, res) => {
                 .populate('assignedTo', 'firstName lastName email')
                 .populate('queryType', 'name')
                 .sort({ escalatedAt: -1 })
+                .limit(50) // escalated also capped
                 .lean()
             : Promise.resolve([]);
+        const allQueriesTotalPromise = isAdmin
+            ? HelpdeskQuery.countDocuments({ companyId: req.companyId })
+            : Promise.resolve(0);
 
-        const [myQueries, assignedQueries, allQueries, escalatedQueries] = await Promise.all([
+        const [myQueries, assignedQueries, allQueries, escalatedQueries, allQueriesTotal] = await Promise.all([
             myQueriesPromise,
             assignedQueriesPromise,
             allQueriesPromise,
-            escalatedQueriesPromise
+            escalatedQueriesPromise,
+            allQueriesTotalPromise
         ]);
 
         res.status(200).json({
@@ -762,7 +778,8 @@ exports.getHelpdeskBootstrap = async (req, res) => {
             allQueries,
             escalatedQueries,
             isAdmin,
-            isResolverRole
+            isResolverRole,
+            pagination: isAdmin ? { page: qPageNum, limit: qLimitNum, total: allQueriesTotal, totalPages: Math.ceil(allQueriesTotal / qLimitNum) } : null
         });
     } catch (error) {
         console.error('getHelpdeskBootstrap error:', error);
@@ -818,7 +835,7 @@ exports.getRoleBootstrap = async (req, res) => {
         res.set('Cache-Control', 'no-cache');
         const [rawRoles, permissions, company] = await Promise.all([
             Role.find({ companyId: req.companyId }).populate('permissions').lean(),
-            Permission.find({}).lean(),
+            getCachedPermissions(), // HIGH-1: use cache instead of Permission.find({}) every time
             Company.findById(req.companyId).select('enabledModules').lean()
         ]);
         const enabledModules = company?.enabledModules || [];
@@ -907,7 +924,7 @@ exports.getOnboardingBootstrap = async (req, res) => {
                 .lean(),
             OnboardingEmployee.countDocuments(query),
             OnboardingEmployee.aggregate([
-                { $match: { companyId: new (require('mongoose')).Types.ObjectId(req.companyId) } },
+                { $match: { companyId: new MongooseObjectId(req.companyId) } }, // MED-6: uses top-level import
                 { $group: { _id: '$status', count: { $sum: 1 } } }
             ])
         ]);

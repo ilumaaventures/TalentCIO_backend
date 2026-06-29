@@ -19,11 +19,7 @@ const getIstDayRange = (attendanceDateParam) => {
             const start = new Date(`${safeLabel}T00:00:00.000+05:30`);
             if (!Number.isNaN(start.getTime())) {
                 const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-                return {
-                    start,
-                    end,
-                    label: safeLabel
-                };
+                return { start, end, label: safeLabel };
             }
         }
     }
@@ -31,12 +27,7 @@ const getIstDayRange = (attendanceDateParam) => {
     const istString = todayLabel;
     const start = new Date(`${istString}T00:00:00.000+05:30`);
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-
-    return {
-        start,
-        end,
-        label: istString
-    };
+    return { start, end, label: istString };
 };
 
 // @desc    Get Dashboard Statistics
@@ -57,37 +48,66 @@ const getDashboardStats = async (req, res) => {
         const today = attendanceDay.start;
         const tomorrow = attendanceDay.end;
 
-        // 1. Identify all active users for the company
-        const allActiveUsers = await User.find({
-            isActive: true,
-            companyId: req.companyId
-        })
-            .populate('roles', 'name isSystem')
-            .lean();
+        // CRIT-1 Fix: Use aggregation instead of loading ALL users into Node.js memory.
+        // Single pipeline: matches active users, joins roles, identifies system/primary users,
+        // and groups to produce the user ID list — all on the DB side.
+        const [activeUsersResult, company] = await Promise.all([
+            User.aggregate([
+                {
+                    $match: {
+                        companyId: req.companyId,
+                        isActive: true,
+                        isDeleted: { $ne: true }
+                    }
+                },
+                {
+                    // Lookup only needed role fields
+                    $lookup: {
+                        from: 'roles',
+                        localField: 'roles',
+                        foreignField: '_id',
+                        as: 'rolesResolved',
+                        pipeline: [{ $project: { name: 1, isSystem: 1 } }]
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        email: 1,
+                        createdAt: 1,
+                        firstName: 1,
+                        lastName: 1,
+                        employmentType: 1,
+                        roles: '$rolesResolved',
+                        isSystemUser: {
+                            $gt: [
+                                { $size: { $filter: { input: '$rolesResolved', as: 'r', cond: { $eq: ['$$r.isSystem', true] } } } },
+                                0
+                            ]
+                        }
+                    }
+                }
+            ]),
+            Company.findById(req.companyId).select('email').lean()
+        ]);
 
-        // 2. Fetch company to identify primary admin
-        const company = await Company.findById(req.companyId).select('email').lean();
         const primaryAdminEmail = company?.email?.toLowerCase();
 
-        // 3. Identify the Primary Admin based on email match OR being the earliest created system user
-        const systemUsers = allActiveUsers.filter(u => u.roles?.some(r => r.isSystem === true));
+        // Identify primary admin (same logic as before, but data came from aggregation)
+        const systemUsers = activeUsersResult.filter(u => u.isSystemUser);
         const oldestSystemUser = systemUsers.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
         const oldestSystemUserId = oldestSystemUser?._id?.toString();
 
-        // 4. Filter for dashboard metrics
-        const filteredUsers = allActiveUsers.filter(u => {
-            const hasSystemRole = u.roles?.some(r => r.isSystem === true);
-            const isMatchByEmail = u.email?.toLowerCase() === primaryAdminEmail;
-            const isMatchByOldest = u._id?.toString() === oldestSystemUserId;
-
-            // Targeted exclusion: Only exclude the original account (Primary Admin)
+        const filteredUsers = activeUsersResult.filter(u => {
+            const isMatchByEmail   = u.email?.toLowerCase() === primaryAdminEmail;
+            const isMatchByOldest  = u._id?.toString() === oldestSystemUserId;
             const isPrimaryAccount = isMatchByEmail || isMatchByOldest;
-
-            return !(hasSystemRole && isPrimaryAccount);
+            return !(u.isSystemUser && isPrimaryAccount);
         });
 
         const nonSystemUserIds = filteredUsers.map(u => u._id);
         const totalEmployees = nonSystemUserIds.length;
+
         const attendanceQuery = {
             companyId: req.companyId,
             user: { $in: nonSystemUserIds },
@@ -95,7 +115,7 @@ const getDashboardStats = async (req, res) => {
             status: { $in: ['PRESENT', 'HALF_DAY'] }
         };
 
-        // 5. Run calculations based on filtered user list
+        // HIGH-5 Fix: Replace nested populate (N+1) with $lookup aggregation for leaves
         const [
             presentTodayCount,
             pendingRequests,
@@ -108,7 +128,7 @@ const getDashboardStats = async (req, res) => {
             Attendance.countDocuments({
                 approvalStatus: 'PENDING',
                 companyId: req.companyId,
-                user: { $in: nonSystemUserIds } // Only count pending requests from non-system users
+                user: { $in: nonSystemUserIds }
             }),
             Attendance.find(attendanceQuery)
                 .sort({ clockIn: -1, createdAt: -1 })
@@ -120,21 +140,54 @@ const getDashboardStats = async (req, res) => {
                 .limit(10)
                 .select('name isActive status dueDate')
                 .lean(),
-            LeaveRequest.find({
-                companyId: req.companyId,
-                user: { $in: nonSystemUserIds },
-                status: 'Approved',
-                startDate: { $lt: tomorrow },
-                endDate: { $gte: today }
-            })
-                .populate({
-                    path: 'user',
-                    select: 'firstName lastName roles employmentType',
-                    populate: { path: 'roles', select: 'name' }
-                })
-                .sort({ startDate: 1, createdAt: -1 })
-                .select('user leaveType startDate endDate daysCount isHalfDay halfDaySession status')
-                .lean(),
+            // HIGH-5: $lookup replaces nested populate — 1 query instead of 1 + N*2
+            LeaveRequest.aggregate([
+                {
+                    $match: {
+                        companyId: req.companyId,
+                        user: { $in: nonSystemUserIds },
+                        status: 'Approved',
+                        startDate: { $lt: tomorrow },
+                        endDate: { $gte: today }
+                    }
+                },
+                { $sort: { startDate: 1, createdAt: -1 } },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'user',
+                        foreignField: '_id',
+                        as: 'userDoc',
+                        pipeline: [{ $project: { firstName: 1, lastName: 1, employmentType: 1, roles: 1 } }]
+                    }
+                },
+                { $unwind: { path: '$userDoc', preserveNullAndEmptyArrays: true } },
+                {
+                    $lookup: {
+                        from: 'roles',
+                        localField: 'userDoc.roles',
+                        foreignField: '_id',
+                        as: 'userDoc.rolesResolved',
+                        pipeline: [{ $project: { name: 1 } }]
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        leaveType: 1,
+                        startDate: 1,
+                        endDate: 1,
+                        daysCount: 1,
+                        isHalfDay: 1,
+                        halfDaySession: 1,
+                        status: 1,
+                        'userDoc.firstName': 1,
+                        'userDoc.lastName': 1,
+                        'userDoc.employmentType': 1,
+                        'userDoc.rolesResolved': 1
+                    }
+                }
+            ]),
             LeaveRequest.countDocuments({
                 companyId: req.companyId,
                 user: { $in: nonSystemUserIds },
@@ -143,11 +196,9 @@ const getDashboardStats = async (req, res) => {
         ]);
 
         const presentToday = presentTodayCount;
-        const absentToday = Math.max(0, totalEmployees - presentToday);
+        const absentToday  = Math.max(0, totalEmployees - presentToday);
 
-        const usersById = new Map(
-            filteredUsers.map(user => [user._id.toString(), user])
-        );
+        const usersById = new Map(filteredUsers.map(user => [user._id.toString(), user]));
 
         const dailyStatusList = todaysAttendance.reduce((acc, record) => {
             const user = usersById.get(record.user.toString());
@@ -172,7 +223,6 @@ const getDashboardStats = async (req, res) => {
             return acc;
         }, []);
 
-        // Map projects to safe structure
         const projectsFormatted = allProjects.map(p => ({
             _id: p._id,
             name: p.name,
@@ -181,16 +231,15 @@ const getDashboardStats = async (req, res) => {
         }));
 
         const leavesToday = approvedLeavesToday.map(leave => {
-            const roleName = leave.user?.roles?.length > 0
-                ? (typeof leave.user.roles[0] === 'string' ? leave.user.roles[0] : leave.user.roles[0].name)
-                : 'Employee';
+            const rolesArr = leave.userDoc?.rolesResolved || [];
+            const roleName = rolesArr.length > 0 ? rolesArr[0].name : 'Employee';
 
             return {
                 _id: leave._id,
                 user: {
-                    name: `${leave.user?.firstName || ''} ${leave.user?.lastName || ''}`.trim() || 'Employee',
+                    name: `${leave.userDoc?.firstName || ''} ${leave.userDoc?.lastName || ''}`.trim() || 'Employee',
                     role: roleName,
-                    employmentType: leave.user?.employmentType || 'Employee'
+                    employmentType: leave.userDoc?.employmentType || 'Employee'
                 },
                 leaveType: leave.leaveType,
                 startDate: leave.startDate,
