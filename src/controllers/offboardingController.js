@@ -5,6 +5,8 @@ const User = require('../models/User');
 const EmployeeProfile = require('../models/EmployeeProfile');
 const Company = require('../models/Company');
 const EmailTemplate = require('../models/EmailTemplate');
+const HREmailLog = require('../models/HREmailLog');
+const { extractPublicIdFromUrl } = require('../utils/cloudinaryHelper');
 const { cloudinary } = require('../config/cloudinary');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const { sendEmail } = require('../services/emailService');
@@ -847,6 +849,27 @@ exports.sendOffboardingEmail = async (req, res) => {
 
         await record.save();
 
+        if (sent) {
+            await HREmailLog.create({
+                companyId: req.companyId,
+                sentBy: req.user?._id,
+                recipientUserId: record.userId || null,
+                recipientEmail: recipientEmail,
+                subject: resolvedSubject,
+                body: resolvedHtml,
+                type: 'offboarding',
+                emailAccountId: req.body?.emailAccountId || 'platform',
+                emailAccountLabel: req.body?.emailAccountId === 'platform' ? 'TalentCIO Platform' : (req.body?.emailAccountId || 'TalentCIO Platform'),
+                attachments: uploadedAttachments.map(ua => ({
+                    filename: ua.file.originalname,
+                    cloudinaryUrl: ua.url,
+                    publicId: ua.publicId || '',
+                    dossierDocId: null
+                })),
+                sentAt: new Date()
+            });
+        }
+
         return res.json({
             success: true,
             sentTo: recipientEmail,
@@ -1084,6 +1107,27 @@ exports.sendExitDocuments = async (req, res) => {
             return res.status(500).json({ message: 'Failed to send exit documents' });
         }
 
+        if (sent) {
+            await HREmailLog.create({
+                companyId: req.companyId,
+                sentBy: req.user?._id,
+                recipientUserId: offboarding.userId || null,
+                recipientEmail: resolvedRecipientEmail,
+                subject: resolvedSubject,
+                body: resolvedEmailHtml,
+                type: 'offboarding',
+                emailAccountId: emailAccountId || 'platform',
+                emailAccountLabel: emailAccountLabel || getSenderLabel(emailAccountId),
+                attachments: generatedDocuments.map(doc => ({
+                    filename: `${doc.type.replace(/[^a-zA-Z0-9]+/g, '_')}.html`,
+                    cloudinaryUrl: doc.cloudinaryUrl,
+                    publicId: extractPublicIdFromUrl(doc.cloudinaryUrl) || '',
+                    dossierDocId: null
+                })),
+                sentAt: new Date()
+            });
+        }
+
         const sentAt = new Date();
         generatedDocuments.forEach((document) => {
             offboarding.documentsIssued.push({
@@ -1192,6 +1236,21 @@ exports.completeOffboarding = async (req, res) => {
                 html: farewellHtml,
                 text: `Your offboarding has been completed. Last working day: ${formatDateValue(record.lastWorkingDay)}.`
             });
+
+            if (emailSent) {
+                await HREmailLog.create({
+                    companyId: req.companyId,
+                    sentBy: req.user?._id,
+                    recipientUserId: record.userId || null,
+                    recipientEmail: resolvedRecipientEmail,
+                    subject: `Your offboarding has been completed - ${companyName}`,
+                    body: farewellHtml,
+                    type: 'offboarding',
+                    emailAccountId: 'platform',
+                    emailAccountLabel: 'TalentCIO Platform',
+                    sentAt: new Date()
+                });
+            }
         }
 
         const updatedRecord = await populateOffboardingQuery(
