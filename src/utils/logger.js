@@ -72,15 +72,25 @@ const writeLogToFile = (filePath, content) => {
 
 const formatTimestamp = () => {
     const d = new Date();
-    // Return format: YYYY-MM-DD HH:mm:ss.SSS in local time
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const date = String(d.getDate()).padStart(2, '0');
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    const seconds = String(d.getSeconds()).padStart(2, '0');
+    // Use Intl.DateTimeFormat to force IST (Asia/Kolkata) timezone formatting
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(d);
+
+    const partMap = {};
+    for (const part of parts) {
+        partMap[part.type] = part.value;
+    }
+
     const ms = String(d.getMilliseconds()).padStart(3, '0');
-    return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}.${ms}`;
+    return `${partMap.year}-${partMap.month}-${partMap.day} ${partMap.hour}:${partMap.minute}:${partMap.second}.${ms}`;
 };
 
 // Formats a message with context information
