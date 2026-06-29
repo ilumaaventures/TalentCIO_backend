@@ -216,7 +216,9 @@ const admin = (req, res, next) => {
     const hasAdminPermission = req.user && req.user.permissions && (
         req.user.permissions.includes('*') ||
         req.user.permissions.includes('all') ||
-        req.user.permissions.includes('admin')
+        req.user.permissions.includes('admin') ||
+        req.user.permissions.includes('settings.company.view') ||
+        req.user.permissions.includes('settings.company.manage')
     );
 
     if (isAdminRole || hasAdminPermission) {

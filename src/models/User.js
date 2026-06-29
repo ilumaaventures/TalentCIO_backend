@@ -45,6 +45,10 @@ const userSchema = new mongoose.Schema({
         timestamp: {
             type: Date,
             default: null
+        },
+        address: {
+            type: String,
+            default: ''
         }
     },
     workLocation: {

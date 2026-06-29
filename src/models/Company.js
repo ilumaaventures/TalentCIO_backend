@@ -229,6 +229,10 @@ const companySchema = new mongoose.Schema({
             webhookUrl: { type: String, default: '', trim: true },
             webhookSecret: { type: String, default: '' }
         },
+        // Profile settings
+        profile: {
+            requireCameraCapture: { type: Boolean, default: false }
+        },
         // File Import/Export
         excelImportFormat: { type: String, default: 'default' },
     },
