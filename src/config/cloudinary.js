@@ -60,7 +60,22 @@ const uploadDossierDocuments = multer({
         fileSize: 5 * 1024 * 1024
     },
     fileFilter: (req, file, cb) => {
-        const isAllowed = DOSSIER_DOCUMENT_MIME_TYPES.has(file.mimetype);
+        let isAllowed = DOSSIER_DOCUMENT_MIME_TYPES.has(file.mimetype);
+
+        // Fallback check for generic octet-stream using file extension (common on mobile)
+        if (!isAllowed && file.mimetype === 'application/octet-stream' && file.originalname) {
+            const ext = file.originalname.split('.').pop().toLowerCase();
+            const allowedExts = new Set(['pdf', 'jpg', 'jpeg', 'png', 'webp']);
+            if (allowedExts.has(ext)) {
+                isAllowed = true;
+                // Normalize mimetype so storage and Cloudinary can classify it correctly
+                if (ext === 'pdf') {
+                    file.mimetype = 'application/pdf';
+                } else {
+                    file.mimetype = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                }
+            }
+        }
 
         if (!isAllowed) {
             return cb(new Error('Only PDF and image files are allowed.'));
