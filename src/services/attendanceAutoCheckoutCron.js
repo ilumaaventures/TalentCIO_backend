@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 const Attendance = require('../models/Attendance');
 const Company = require('../models/Company');
 const User = require('../models/User');
@@ -49,8 +50,8 @@ const startAutoCheckoutCron = () => {
                 return;
             }
 
-            const userIds = [...new Set(openSessions.map((record) => String(record.user)).filter(Boolean))];
-            const companyIds = [...new Set(openSessions.map((record) => String(record.companyId)).filter(Boolean))];
+            const userIds = [...new Set(openSessions.map((record) => record.user).filter((id) => id && mongoose.isValidObjectId(id)).map((id) => String(id)))];
+            const companyIds = [...new Set(openSessions.map((record) => record.companyId).filter((id) => id && mongoose.isValidObjectId(id)).map((id) => String(id)))];
 
             const [users, companies] = await Promise.all([
                 User.find({ _id: { $in: userIds } })
