@@ -79,14 +79,8 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     probationPeriod: { type: String, default: '' },
 
     // --- Salary / Compensation ---
-    salary: {
-        annualCTC: { type: String, default: '' },
-        basic: { type: String, default: '' },
-        hra: { type: String, default: '' },
-        specialAllowance: { type: String, default: '' },
-        monthlyGross: { type: String, default: '' },
-        monthlyCTC: { type: String, default: '' }
-    },
+    salary: { type: mongoose.Schema.Types.Mixed, default: {} },
+
 
     // --- Letter generation tracking ---
     letterGenerated: { type: Boolean, default: false },
