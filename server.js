@@ -34,16 +34,16 @@ const allowedOriginPatterns = [
     /^https?:\/\/localhost(?::\d+)?$/i,
     /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i,
     /^https?:\/\/([a-z0-9-]+\.)+localhost(?::\d+)?$/i,
-    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
+    /^https?:\/\/[a-z0-9-]+\.vercel\.app$/i,
     /^https?:\/\/talentcio\.in$/i,
     /^https?:\/\/www\.talentcio\.in$/i,
-    /^https:\/\/([a-z0-9-]+\.)*talentcio\.in$/i,
-    /^https:\/\/([a-z0-9-]+\.)*telentcio\.in$/i,
+    /^https?:\/\/([a-z0-9-]+\.)*talentcio\.in$/i,
+    /^https?:\/\/([a-z0-9-]+\.)*telentcio\.in$/i,
     /^https?:\/\/resourcegateway\.in$/i,
     /^https?:\/\/www\.resourcegateway\.in$/i,
-    /^https:\/\/([a-z0-9-]+\.)*resourcegateway\.in$/i,
-    /^https:\/\/telentcio\.com$/i,
-    /^https:\/\/([a-z0-9-]+\.)*onrender\.(?:com|in)$/i
+    /^https?:\/\/([a-z0-9-]+\.)*resourcegateway\.in$/i,
+    /^https?:\/\/telentcio\.com$/i,
+    /^https?:\/\/([a-z0-9-]+\.)*onrender\.(?:com|in)$/i
 ];
 
 const isAllowedOrigin = (origin) => {
