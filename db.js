@@ -6,6 +6,7 @@ const connectDB = async () => {
             maxPoolSize: 10,                  // allow up to 10 concurrent connections
             serverSelectionTimeoutMS: 5000,   // fail fast if MongoDB unreachable
             socketTimeoutMS: 45000,           // drop idle sockets after 45 s
+            bufferCommands: false,            // disable query buffering when disconnected
         });
         console.log('MongoDB Connected');
     } catch (err) {

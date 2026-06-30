@@ -58,6 +58,21 @@ const getCookieOptions = (req, maxAgeMs = null) => {
         options.maxAge = maxAgeMs;
     }
 
+    // Set wildcard domain dynamically if the request belongs to our known root domains
+    // to allow sharing session cookies across subdomains (e.g. from api.talentcio.in to rg.talentcio.in)
+    const host = req?.headers?.host || '';
+    const domainName = host.split(':')[0].toLowerCase();
+    const parts = domainName.split('.');
+    if (parts.length >= 2) {
+        const parentDomain = parts.slice(-2).join('.');
+        if (parentDomain !== 'localhost' && !/^\d+\.\d+\.\d+\.\d+$/.test(parentDomain)) {
+            const OWN_ROOT_DOMAINS = ['talentcio.in', 'telentcio.in', 'talentcio.com', 'telentcio.com', 'resourcegateway.in'];
+            if (OWN_ROOT_DOMAINS.some(root => parentDomain === root || domainName.endsWith('.' + root))) {
+                options.domain = `.${parentDomain}`;
+            }
+        }
+    }
+
     return options;
 };
 
