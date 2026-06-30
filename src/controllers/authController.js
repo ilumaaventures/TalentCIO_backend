@@ -11,6 +11,8 @@ const { augmentPermissionKeysForRoles } = require('../utils/permissionResolver')
 const { invalidateAuthUserCache } = require('../middlewares/authMiddleware');
 const { clearSessionCookie, setSessionCookie } = require('../utils/sessionCookies');
 const Company = require('../models/Company');
+const EmployeeProfile = require('../models/EmployeeProfile');
+const { checkDossierCompleteness } = require('../utils/dossierCompleteness');
 
 //adding comment to check the CI/CD pipeline
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -303,6 +305,11 @@ const loginUser = async (req, res) => {
             ? { ...company, enabledModules: normalizeEnabledModules(company.enabledModules || []) }
             : null;
 
+        const dossierProfile = await EmployeeProfile.findOne({ user: user._id })
+            .select('personal contact employment hris documentSubmissionStatus documents +identity.aadhaarNumber +identity.panNumber')
+            .lean();
+        const dossierStatus = checkDossierCompleteness(dossierProfile || {});
+
         const jwtToken = generateToken(user._id, user.tokenVersion);
         setSessionCookie(res, req, jwtToken);
 
@@ -320,6 +327,11 @@ const loginUser = async (req, res) => {
             isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
             isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
             company: normalizedCompany, // Full configuration for the frontend
+            dossierStatus: {
+                isComplete: dossierStatus.isComplete,
+                missingSections: dossierStatus.missingSections,
+                missingFields: dossierStatus.missingFields
+            },
             token: jwtToken
         });
     } catch (error) {

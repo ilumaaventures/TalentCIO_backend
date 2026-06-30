@@ -6,8 +6,7 @@ const handoffTokenSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        default: () => crypto.randomBytes(48).toString('hex'),
-        index: true
+        default: () => crypto.randomBytes(48).toString('hex')
     },
     userId: {
         type: mongoose.Schema.Types.ObjectId,

@@ -247,6 +247,11 @@ module.exports = [
         module: "DOSSIER",
         description: "Allow uploading profile photo from local storage (otherwise forces direct camera capture)"
     },
+    {
+        key: "dossier.bypass_completeness_gate",
+        module: "DOSSIER",
+        description: "Bypass the mandatory dossier completeness check — allows performing attendance, timesheet, and leave actions even when dossier is incomplete"
+    },
 
     // TALENT ACQUISITION (TA)
     {

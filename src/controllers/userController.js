@@ -4,7 +4,9 @@ const { HiringRequest } = require('../models/HiringRequest');
 const Candidate = require('../models/Candidate');
 const Company = require('../models/Company');
 const Permission = require('../models/Permission');
+const EmployeeProfile = require('../models/EmployeeProfile');
 const { normalizeEnabledModules } = require('../utils/enabledModules');
+const { checkDossierCompleteness } = require('../utils/dossierCompleteness');
 const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
@@ -383,7 +385,8 @@ const getMyself = async (req, res) => {
             taCount,
             reportingManagers,
             company,
-            analyticsViewerCount
+            analyticsViewerCount,
+            dossierProfile
         ] = await Promise.all([
             hasAllPermissions ? Promise.resolve(0) : Permission.countDocuments({ key: { $ne: '*' } }),
             User.countDocuments({ reportingManagers: req.user._id, companyId: effectiveCompanyId }),
@@ -409,7 +412,10 @@ const getMyself = async (req, res) => {
             HiringRequest.countDocuments({
                 companyId: effectiveCompanyId,
                 analyticsViewers: req.user._id
-            })
+            }),
+            EmployeeProfile.findOne({ user: req.user._id })
+                .select('personal contact employment hris documentSubmissionStatus documents +identity.aadhaarNumber +identity.panNumber')
+                .lean()
         ]);
 
         if (hasAllPermissions) {
@@ -442,6 +448,8 @@ const getMyself = async (req, res) => {
             }
             : company;
 
+        const dossierStatus = checkDossierCompleteness(dossierProfile || {});
+
         res.json({
             // Core identity
             _id: req.user._id,
@@ -470,7 +478,13 @@ const getMyself = async (req, res) => {
             directReportsCount,
             isTAParticipant: hasTAAccessByPermission || taCount > 0 || isInterviewer,
             isTAAnalyticsViewer: analyticsViewerCount > 0 || permissions.includes('ta.analytics.assigned') || permissions.includes('ta.analytics.global') || permissions.includes('ta.manage') || permissions.includes('*'),
-            company: normalizedCompany  // Always includes enabledModules
+            company: normalizedCompany,  // Always includes enabledModules
+            // Dossier completeness gate
+            dossierStatus: {
+                isComplete: dossierStatus.isComplete,
+                missingSections: dossierStatus.missingSections,
+                missingFields: dossierStatus.missingFields
+            }
         });
     } catch (error) {
         console.error(error);
