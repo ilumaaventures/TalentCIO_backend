@@ -1,6 +1,7 @@
 const Company = require('../models/Company');
 const User = require('../models/User');
 const Role = require('../models/Role');
+const { invalidateTenantCache } = require('../middlewares/tenantMiddleware');
 const Permission = require('../models/Permission');
 const ActivityLog = require('../models/ActivityLog');
 const Attendance = require('../models/Attendance');
@@ -553,6 +554,7 @@ const updateCompany = async (req, res) => {
         });
 
         await company.save();
+        invalidateTenantCache(company.subdomain);
         console.log('[updateCompany] Save completed', {
             companyId: company._id.toString(),
             requireAttachmentAfterSave: company.settings?.timesheet?.requireAttachment
@@ -622,6 +624,7 @@ const updateOwnAttendanceSettings = async (req, res) => {
         company.settings.attendance = sanitizeAttendanceSettings(editableAttendanceInput, currentAttendance);
         company.markModified('settings.attendance');
         await company.save();
+        invalidateTenantCache(company.subdomain);
 
         const actor = {
             _id: req.user?._id,
@@ -699,6 +702,8 @@ const updateOwnBrandingSettings = async (req, res) => {
             return res.status(404).json({ message: 'Company not found' });
         }
 
+        invalidateTenantCache(req.company?.subdomain || company?.subdomain);
+
         return res.json({
             message: 'Company branding updated successfully.',
             displayMode,
@@ -757,6 +762,8 @@ const uploadOwnCompanyLogo = async (req, res) => {
             }
         });
 
+        invalidateTenantCache(req.company?.subdomain);
+
         return res.json({
             message: 'Company logo uploaded successfully.',
             companyLogoUrl: result.secure_url,
@@ -795,6 +802,8 @@ const removeOwnCompanyLogo = async (req, res) => {
             }
         });
 
+        invalidateTenantCache(req.company?.subdomain);
+
         return res.json({
             message: 'Company logo removed.',
             companyLogoUrl: '',
@@ -814,6 +823,7 @@ const toggleCompanyStatus = async (req, res) => {
         const { status } = req.body;
         company.status = status || (company.status === 'Active' ? 'Suspended' : 'Active');
         await company.save();
+        invalidateTenantCache(company.subdomain);
         await logActivity('COMPANY_STATUS_CHANGED', 'Company', company._id, req.superAdmin, company._id, { status: company.status });
         res.json({ status: company.status, message: `Company ${company.status === 'Active' ? 'enabled' : 'suspended'}` });
     } catch (err) {
@@ -826,6 +836,7 @@ const deleteCompany = async (req, res) => {
     try {
         const company = await Company.findByIdAndDelete(req.params.id);
         if (!company) return res.status(404).json({ message: 'Company not found' });
+        invalidateTenantCache(company.subdomain);
         await logActivity('COMPANY_DELETED', 'Company', company._id, req.superAdmin, null, { name: company.name });
         res.json({ message: 'Company deleted' });
     } catch (err) {
