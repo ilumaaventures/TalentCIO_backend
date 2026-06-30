@@ -1,6 +1,7 @@
 const Company = require('../models/Company');
 const ActivityLog = require('../models/ActivityLog');
 const { ALL_COMPANY_MODULES, hasEnabledModule, normalizeEnabledModules } = require('../utils/enabledModules');
+const { invalidateTenantCache } = require('../middlewares/tenantMiddleware');
 
 // GET /api/superadmin/companies/:id/modules
 const getModules = async (req, res) => {
@@ -35,6 +36,8 @@ const updateModules = async (req, res) => {
             { $set: { enabledModules: enabledModules || [] } },
             { new: true, runValidators: true }
         );
+
+        invalidateTenantCache(company.subdomain);
 
         // Safety check for req.superAdmin
         const adminInfo = req.superAdmin ? {
