@@ -376,6 +376,7 @@ exports.addEmployee = async (req, res) => {
                             hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
                             useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
                             ptState: calculatedSalary.ptState || '',
+                            flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
                             insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                             employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
                             deductions: {
@@ -1217,6 +1218,7 @@ exports.updateEmployee = async (req, res) => {
                                 hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
                                 useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
                                 ptState: calculatedSalary.ptState || '',
+                                flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
                                 insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                                 employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
                                 deductions: {
@@ -1265,7 +1267,10 @@ exports.updateEmployee = async (req, res) => {
                     console.error('Error calculating candidate salary on backend update:', err);
                 }
             }
-            employee.salary = { ...employee.salary.toObject(), ...calculatedSalary };
+            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function') 
+                ? employee.salary.toObject() 
+                : (employee.salary || {});
+            employee.salary = { ...currentSalary, ...calculatedSalary };
         }
         if (selectionDraft) {
             const normalizeLabels = (labels) => [...new Set((Array.isArray(labels) ? labels : [])
@@ -1293,6 +1298,7 @@ exports.updateEmployee = async (req, res) => {
             details: `Details updated by ${req.user.firstName || 'Admin'}`
         });
 
+        employee.markModified('salary');
         await employee.save();
         res.status(200).json({ message: 'Employee updated successfully', employee });
     } catch (error) {
