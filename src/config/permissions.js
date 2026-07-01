@@ -560,6 +560,18 @@ module.exports = [
         description: "Send HR emails to active employees and save attachments to dossiers"
     },
 
+    // PAYROLL / SALARY CALCULATOR
+    {
+        key: "payroll.calculator.view",
+        module: "PAYROLL",
+        description: "Access and use the interactive Salary Calculator simulator"
+    },
+    {
+        key: "payroll.config.manage",
+        module: "PAYROLL",
+        description: "Create, update, and manage company payroll configurations (salary components, tax rates, EPF/ESI limits)"
+    },
+
     // LEAVE
     {
         key: "leave.config.manage",
