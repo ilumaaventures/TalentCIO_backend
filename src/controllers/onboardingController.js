@@ -3008,8 +3008,19 @@ exports.acceptOfferLetter = async (req, res) => {
             }
         });
 
+        const { eSignName, eSignType, eSignValue } = req.body;
+        if (!eSignName) {
+            return res.status(400).json({ message: 'Signature name is required.' });
+        }
+
         // 2. Ensure hasReadOfferLetter is true unconditionally upon offer acceptance
         employee.offerDeclaration.hasReadOfferLetter = true;
+        employee.offerDeclaration.eSignName = eSignName;
+        employee.offerDeclaration.eSignType = eSignType || 'typed';
+        employee.offerDeclaration.eSignValue = eSignValue || '';
+        employee.offerDeclaration.eSignDate = new Date();
+        employee.offerDeclaration.eSignIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+        employee.offerDeclaration.isComplete = true;
 
         // 3. Mark matching document status to Approved
         employee.documents.forEach(doc => {
@@ -3026,7 +3037,7 @@ exports.acceptOfferLetter = async (req, res) => {
 
         employee.auditLog.push({
             action: 'OFFER_ACCEPTED',
-            details: 'Employee accepted the offer and acknowledged all requested documents/policies.'
+            details: `Employee accepted the offer and digitally signed (${eSignType || 'typed'}) as "${eSignName}". IP: ${employee.offerDeclaration.eSignIp}`
         });
 
         await employee.save();
@@ -3034,7 +3045,7 @@ exports.acceptOfferLetter = async (req, res) => {
         // Sync TA phase3Decision → 'Offer Accepted'
         await syncTADecision(employee, 'Offer Accepted');
 
-        res.status(200).json({ message: 'Offer accepted successfully!', offerStatus: employee.offerStatus, status: employee.status });
+        res.status(200).json({ message: 'Offer accepted and signed successfully!', offerStatus: employee.offerStatus, status: employee.status });
     } catch (error) {
         console.error('Error accepting offer letter:', error);
         res.status(500).json({ message: 'Failed to accept offer letter', error: error.message });
