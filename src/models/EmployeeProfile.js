@@ -151,6 +151,9 @@ const employeeProfileSchema = new mongoose.Schema({
     // --- Compensation & Benefits ---
     compensation: {
         ctc: { type: Number, select: false }, // Confidential
+        payType: { type: String, default: 'salaried' },
+        hourlyRate: { type: Number, default: 0 },
+        hoursWorked: { type: Number, default: 0 },
         salaryBreakup: Map, // Flexible key-value structure
         bankDetails: {
             accountNumber: { type: String, select: false },
