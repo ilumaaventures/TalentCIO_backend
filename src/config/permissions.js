@@ -571,6 +571,21 @@ module.exports = [
         module: "PAYROLL",
         description: "Create, update, and manage company payroll configurations (salary components, tax rates, EPF/ESI limits)"
     },
+    {
+        key: "payroll.salary.view",
+        module: "PAYROLL",
+        description: "Access and view employee salary details and snapshots"
+    },
+    {
+        key: "payroll.salary.manage",
+        module: "PAYROLL",
+        description: "Create, update, and manage employee salary revisions and snapshots"
+    },
+    {
+        key: "payroll.salary.view.self",
+        module: "PAYROLL",
+        description: "Access and view own salary details and payslips in the dossier"
+    },
 
     // LEAVE
     {

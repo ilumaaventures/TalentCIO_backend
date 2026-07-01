@@ -25,6 +25,8 @@ const {
     validateTemplateSyntax
 } = require('../utils/templateResolver');
 const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
+const { buildMasterSalaryStructure } = require('../utils/payrollMath');
+
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -370,10 +372,14 @@ exports.addEmployee = async (req, res) => {
                             gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
                             includePfInCTC: !!calculatedSalary.includePfInCTC,
                             includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                            basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
+                            hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                            useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                            ptState: calculatedSalary.ptState || '',
                             insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                             employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
                             deductions: {
-                                professionalTax: calculatedSalary.ptEnabled !== false ? (parseFloat(calculatedSalary.professionalTax) || 200) : 0,
+                                professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                             }
                         };
                         
@@ -1207,10 +1213,14 @@ exports.updateEmployee = async (req, res) => {
                                 gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
                                 includePfInCTC: !!calculatedSalary.includePfInCTC,
                                 includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                                basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
+                                hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                                useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                                ptState: calculatedSalary.ptState || '',
                                 insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                                 employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
                                 deductions: {
-                                    professionalTax: calculatedSalary.ptEnabled !== false ? (parseFloat(calculatedSalary.professionalTax) || 200) : 0,
+                                    professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                                 }
                             };
                             
@@ -2361,13 +2371,30 @@ const getSalaryBreakups = async (employee) => {
             
             const source = {
                 monthlyCTC,
-                payType: 'salaried',
+                payType: employee.salary?.payType || 'salaried',
+                pfEnabled: employee.salary?.pfEnabled !== undefined ? !!employee.salary.pfEnabled : true,
+                esiEnabled: employee.salary?.esiEnabled !== undefined ? !!employee.salary.esiEnabled : true,
+                ptEnabled: employee.salary?.ptEnabled !== undefined ? !!employee.salary.ptEnabled : true,
+                lwfEnabled: employee.salary?.lwfEnabled !== undefined ? !!employee.salary.lwfEnabled : true,
+                gratuityEnabled: employee.salary?.gratuityEnabled !== undefined ? !!employee.salary.gratuityEnabled : true,
+                includePfInCTC: !!employee.salary?.includePfInCTC,
+                includeGratuityInCTC: employee.salary?.includeGratuityInCTC !== undefined ? !!employee.salary.includeGratuityInCTC : true,
+                basicPercent: employee.salary?.basicPercent !== undefined && employee.salary.basicPercent !== null ? Number(employee.salary.basicPercent) : null,
+                hraPercent: employee.salary?.hraPercent !== undefined && employee.salary.hraPercent !== null ? Number(employee.salary.hraPercent) : null,
+                useSalaryComponents: employee.salary?.useSalaryComponents !== undefined ? !!employee.salary.useSalaryComponents : true,
+                ptState: employee.salary?.ptState || '',
+                insuranceAmount: parseFloat(employee.salary?.insuranceAmount) || 0,
+                employerNPS: parseFloat(employee.salary?.employerNPS) || 0,
+                deductions: {
+                    professionalTax: employee.salary?.ptState === 'custom' ? (parseFloat(employee.salary?.professionalTax) || 0) : 0,
+                }
             };
             
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
-                        source[c.id] = c.linkValue || 0;
+                        const customVal = employee.salary?.[c.id];
+                        source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                     }
                 });
             }

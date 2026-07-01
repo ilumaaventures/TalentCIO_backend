@@ -218,6 +218,39 @@ const syncPermissions = async () => {
             }
         }
 
+        const payrollSalaryViewPerm = await Permission.findOne({ key: 'payroll.salary.view' }).select('_id');
+        if (payrollSalaryViewPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['HR Admin', 'HR Manager'],
+                [payrollSalaryViewPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated HR Admin/Manager roles with payroll.salary.view permission.');
+            }
+        }
+
+        const payrollSalaryManagePerm = await Permission.findOne({ key: 'payroll.salary.manage' }).select('_id');
+        if (payrollSalaryManagePerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['HR Admin'],
+                [payrollSalaryManagePerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated HR Admin role with payroll.salary.manage permission.');
+            }
+        }
+
+        const payrollSalaryViewSelfPerm = await Permission.findOne({ key: 'payroll.salary.view.self' }).select('_id');
+        if (payrollSalaryViewSelfPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['Employee', 'Manager', 'HR Manager', 'HR Admin'],
+                [payrollSalaryViewSelfPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated Employee/Manager/HR roles with payroll.salary.view.self permission.');
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);

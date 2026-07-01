@@ -160,7 +160,19 @@ const employeeProfileSchema = new mongoose.Schema({
             branchAddress: String
         },
         isUanApplicable: { type: Boolean, default: false },
-        uanNumber: String
+        uanNumber: String,
+        salaryRevisions: [{
+            effectiveDate: Date,
+            previousCTC: Number,
+            newCTC: Number,
+            reason: String
+        }],
+        payrollHistory: [{
+            period: String,
+            netSalary: Number,
+            status: { type: String, default: 'Paid' },
+            payslipUrl: String
+        }]
     },
 
     // --- Documents ---
