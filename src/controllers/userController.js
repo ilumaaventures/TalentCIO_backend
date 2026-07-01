@@ -233,8 +233,8 @@ const createUser = async (req, res) => {
             const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
             
             const calculatedSalary = { ...(salary || {}) };
-            let annualCTC = parseFloat(calculatedSalary.annualCTC) || 0;
-            let monthlyCTC = parseFloat(calculatedSalary.monthlyCTC) || 0;
+            let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
+            let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
             if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
                 monthlyCTC = Math.round(annualCTC / 12);
             } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {
@@ -438,8 +438,8 @@ const updateUser = async (req, res) => {
             const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
             
             const calculatedSalary = { ...salary };
-            let annualCTC = parseFloat(calculatedSalary.annualCTC) || 0;
-            let monthlyCTC = parseFloat(calculatedSalary.monthlyCTC) || 0;
+            let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
+            let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
             if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
                 monthlyCTC = Math.round(annualCTC / 12);
             } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {

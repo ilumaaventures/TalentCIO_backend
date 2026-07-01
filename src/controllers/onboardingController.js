@@ -330,7 +330,7 @@ exports.addEmployee = async (req, res) => {
         if (calculatedSalary && (calculatedSalary.annualCTC || calculatedSalary.hourlyRate)) {
             try {
                 const PayrollConfig = require('../models/PayrollConfig');
-                const config = await PayrollConfig.findOne({ companyId: req.companyId });
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
                 if (config) {
                     const payType = calculatedSalary.payType || 'salaried';
                     let annualCTC = 0;
@@ -1152,120 +1152,120 @@ exports.updateEmployee = async (req, res) => {
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
         // Update fields
-        if (firstName) employee.firstName = firstName;
-        if (lastName) employee.lastName = lastName;
-        if (email) employee.email = email;
-        if (phone) employee.phone = phone;
-        if (designation) employee.designation = designation;
-        if (department) employee.department = department;
-        if (joiningDate) employee.joiningDate = joiningDate;
-        if (offerDate) employee.offerDate = offerDate;
+        if (firstName !== undefined) employee.firstName = firstName;
+        if (lastName !== undefined) employee.lastName = lastName;
+        if (email !== undefined) employee.email = email;
+        if (phone !== undefined) employee.phone = phone;
+        if (designation !== undefined) employee.designation = designation;
+        if (department !== undefined) employee.department = department;
+        if (joiningDate !== undefined) employee.joiningDate = joiningDate || undefined;
+        if (offerDate !== undefined) employee.offerDate = offerDate || undefined;
         if (documentDeadline !== undefined) {
             employee.documentDeadline = documentDeadline ? new Date(documentDeadline) : undefined;
             employee.credentialsExpireAt = documentDeadline ? new Date(documentDeadline) : undefined;
         }
-        if (workLocation) employee.workLocation = workLocation;
-        if (address) employee.address = address;
+        if (workLocation !== undefined) employee.workLocation = workLocation;
+        if (address !== undefined) employee.address = address;
         if (probationPeriod !== undefined) employee.probationPeriod = probationPeriod || '';
         if (salary) {
             let calculatedSalary = { ...salary };
-            if (calculatedSalary.annualCTC || calculatedSalary.hourlyRate) {
-                try {
-                    const PayrollConfig = require('../models/PayrollConfig');
-                    const config = await PayrollConfig.findOne({ companyId: req.companyId });
-                    if (config) {
-                        const payType = calculatedSalary.payType || 'salaried';
-                        let annualCTC = 0;
-                        let monthlyCTC = 0;
+            try {
+                const PayrollConfig = require('../models/PayrollConfig');
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
+                
+                const payType = calculatedSalary.payType || 'salaried';
+                let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
+                let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
 
-                        if (payType === 'hourly') {
-                            const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
-                            const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
-                            monthlyCTC = hourlyRate * hoursWorked;
-                            annualCTC = monthlyCTC * 12;
+                if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
+                    monthlyCTC = Math.round(annualCTC / 12);
+                } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {
+                    annualCTC = monthlyCTC * 12;
+                }
 
-                            calculatedSalary.annualCTC = String(annualCTC);
-                            calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                            calculatedSalary.basic = String(Math.round(monthlyCTC));
-                            calculatedSalary.hra = '0';
-                            calculatedSalary.specialAllowance = '0';
-                            calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                        } else if (payType === 'flat') {
-                            monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
-                            annualCTC = monthlyCTC * 12;
+                if (payType === 'hourly') {
+                    const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
+                    const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
+                    monthlyCTC = hourlyRate * hoursWorked;
+                    annualCTC = monthlyCTC * 12;
 
-                            calculatedSalary.annualCTC = String(annualCTC);
-                            calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                            calculatedSalary.basic = String(Math.round(monthlyCTC));
-                            calculatedSalary.hra = '0';
-                            calculatedSalary.specialAllowance = '0';
-                            calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                        } else {
-                            annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
-                            monthlyCTC = annualCTC / 12;
-                            
-                            const source = {
-                                monthlyCTC,
-                                payType,
-                                pfEnabled: calculatedSalary.pfEnabled !== undefined ? !!calculatedSalary.pfEnabled : true,
-                                esiEnabled: calculatedSalary.esiEnabled !== undefined ? !!calculatedSalary.esiEnabled : true,
-                                ptEnabled: calculatedSalary.ptEnabled !== undefined ? !!calculatedSalary.ptEnabled : true,
-                                lwfEnabled: calculatedSalary.lwfEnabled !== undefined ? !!calculatedSalary.lwfEnabled : true,
-                                gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
-                                includePfInCTC: !!calculatedSalary.includePfInCTC,
-                                includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
-                                basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
-                                hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
-                                useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
-                                ptState: calculatedSalary.ptState || '',
-                                flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
-                                insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
-                                employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
-                                deductions: {
-                                    professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
-                                }
-                            };
-                            
-                            if (config.salaryComponents) {
-                                config.salaryComponents.forEach(c => {
-                                    if (c.linkedTo === 'fixed') {
-                                        const customVal = calculatedSalary[c.id];
-                                        source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
-                                    }
-                                });
+                    calculatedSalary.annualCTC = String(annualCTC);
+                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                    calculatedSalary.basic = String(Math.round(monthlyCTC));
+                    calculatedSalary.hra = '0';
+                    calculatedSalary.specialAllowance = '0';
+                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
+                } else if (payType === 'flat') {
+                    monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
+                    annualCTC = monthlyCTC * 12;
+
+                    calculatedSalary.annualCTC = String(annualCTC);
+                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                    calculatedSalary.basic = String(Math.round(monthlyCTC));
+                    calculatedSalary.hra = '0';
+                    calculatedSalary.specialAllowance = '0';
+                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
+                } else {
+                    const source = {
+                        monthlyCTC,
+                        payType,
+                        pfEnabled: calculatedSalary.pfEnabled !== false,
+                        esiEnabled: calculatedSalary.esiEnabled !== false,
+                        ptEnabled: calculatedSalary.ptEnabled !== false,
+                        lwfEnabled: calculatedSalary.lwfEnabled !== false,
+                        gratuityEnabled: calculatedSalary.gratuityEnabled !== false,
+                        includePfInCTC: !!calculatedSalary.includePfInCTC,
+                        includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                        basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
+                        hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                        useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                        ptState: calculatedSalary.ptState || '',
+                        flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
+                        insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
+                        employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
+                        deductions: {
+                            professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
+                        }
+                    };
+                    
+                    if (config.salaryComponents) {
+                        config.salaryComponents.forEach(c => {
+                            if (c.linkedTo === 'fixed') {
+                                const customVal = calculatedSalary[c.id];
+                                source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                             }
-                            
-                            const master = buildMasterSalaryStructure(source, config);
-                            if (master) {
-                                calculatedSalary.annualCTC = String(annualCTC);
-                                calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                                calculatedSalary.basic = String(master.basicMaster);
-                                calculatedSalary.hra = String(master.hraMaster);
-                                calculatedSalary.specialAllowance = String(master.specialAllowance);
-                                calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
-                                
-                                calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
-                                calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
-                                calculatedSalary.gratuity = String(master.gratuity || 0);
-                                calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
-                                calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
-                                calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
-                                calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
-                                calculatedSalary.professionalTax = String(master.professionalTax || 0);
-                                calculatedSalary.tds = String(master.tds || 0);
-                                calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                                
-                                if (master.earningsMap) {
-                                    Object.entries(master.earningsMap).forEach(([id, val]) => {
-                                        calculatedSalary[id] = String(val);
-                                    });
-                                }
-                            }
+                        });
+                    }
+                    
+                    const master = buildMasterSalaryStructure(source, config);
+                    if (master) {
+                        calculatedSalary.annualCTC = String(annualCTC);
+                        calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                        calculatedSalary.basic = String(master.basicMaster);
+                        calculatedSalary.hra = String(master.hraMaster);
+                        calculatedSalary.specialAllowance = String(master.specialAllowance);
+                        calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
+                        
+                        calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
+                        calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
+                        calculatedSalary.gratuity = String(master.gratuity || 0);
+                        calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
+                        calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
+                        calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
+                        calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
+                        calculatedSalary.professionalTax = String(master.professionalTax || 0);
+                        calculatedSalary.tds = String(master.tds || 0);
+                        calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
+                        
+                        if (master.earningsMap) {
+                            Object.entries(master.earningsMap).forEach(([id, val]) => {
+                                calculatedSalary[id] = String(val);
+                            });
                         }
                     }
-                } catch (err) {
-                    console.error('Error calculating candidate salary on backend update:', err);
                 }
+            } catch (err) {
+                console.error('Error calculating candidate salary on backend update:', err);
             }
             const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function') 
                 ? employee.salary.toObject() 
@@ -3198,7 +3198,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 employmentType: 'Full Time'
             },
             compensation: {
-                ctc: employee.salary?.annualCTC ? parseFloat(employee.salary.annualCTC) : null,
+                ctc: employee.salary?.annualCTC ? (parseFloat(employee.salary.annualCTC) / 12) : (employee.salary?.monthlyCTC ? parseFloat(employee.salary.monthlyCTC) : null),
                 salaryBreakup: employee.salary || {},
                 bankDetails: {
                     accountNumber: bankDetails.accountNumber || '',
