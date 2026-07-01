@@ -136,6 +136,7 @@ const buildEmployeePayload = (user, profile = null) => {
     return {
         employeeId: user?.employeeCode || String(user?._id || ''),
         userId: String(user?._id || ''),
+        monthlyCTC: compensation.ctc ?? null,
         employeeCode: user?.employeeCode || '',
         firstName: user?.firstName || personal.firstName || '',
         middleName: personal.middleName || '',
