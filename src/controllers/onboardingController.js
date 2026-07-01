@@ -2364,6 +2364,112 @@ exports.downloadTemplate = async (req, res) => {
     }
 };
 
+const generateSalaryTableXML = (master, payroll, formatCurrency) => {
+    const makeRow = (name, monthlyVal, annualVal, isHeader = false, isSectionHeader = false, isTotal = false) => {
+        const fill = isHeader ? '4B5563' : (isSectionHeader ? 'E5E7EB' : (isTotal ? 'F3F4F6' : 'FFFFFF'));
+        const textColor = isHeader ? 'FFFFFF' : '000000';
+        const isBold = isHeader || isSectionHeader || isTotal;
+        const boldTag = isBold ? '<w:b/>' : '';
+        const sizeTag = isSectionHeader ? '<w:sz w:val="20"/>' : '';
+
+        return `<w:tr><w:trPr>${isHeader ? '<w:tblHeader/>' : ''}<w:cantSplit/></w:trPr><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="5000" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="left"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${name}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="2500" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${monthlyVal}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="2500" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${annualVal}</w:t></w:r></w:p></w:tc></w:tr>`;
+    };
+
+    let rows = [];
+    rows.push(makeRow('Salary Component / Details', 'Monthly (INR)', 'Annual (INR)', true));
+
+    rows.push(makeRow('A. Gross Earnings', '—', '—', false, true));
+    const basicMonthly = master.basicMaster || 0;
+    if (basicMonthly > 0) rows.push(makeRow('Basic Salary', formatCurrency(basicMonthly), formatCurrency(basicMonthly * 12)));
+
+    const hraMonthly = master.hraMaster || 0;
+    if (hraMonthly > 0) rows.push(makeRow('House Rent Allowance (HRA)', formatCurrency(hraMonthly), formatCurrency(hraMonthly * 12)));
+
+    if (master.earningsMap) {
+        Object.entries(master.earningsMap).forEach(([id, val]) => {
+            if (id !== 'basic' && id !== 'hra' && val > 0) {
+                const displayName = id.charAt(0).toUpperCase() + id.slice(1).replace(/([A-Z])/g, ' $1');
+                rows.push(makeRow(displayName, formatCurrency(val), formatCurrency(val * 12)));
+            }
+        });
+    }
+
+    const specialMonthly = master.specialAllowance || 0;
+    if (specialMonthly > 0) rows.push(makeRow('Special Allowance', formatCurrency(specialMonthly), formatCurrency(specialMonthly * 12)));
+
+    let hasContributions = false;
+    const contRows = [];
+    if (master.pfEmployer > 0) {
+        contRows.push(makeRow('Employer PF Contribution', formatCurrency(master.pfEmployer), formatCurrency(master.pfEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.esiEmployer > 0) {
+        contRows.push(makeRow('Employer ESI Contribution', formatCurrency(master.esiEmployer), formatCurrency(master.esiEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.gratuity > 0) {
+        contRows.push(makeRow('Gratuity Accrual / Provision', formatCurrency(master.gratuity), formatCurrency(master.gratuity * 12)));
+        hasContributions = true;
+    }
+    if (master.lwfEmployer > 0) {
+        contRows.push(makeRow('Employer LWF Share', formatCurrency(master.lwfEmployer), formatCurrency(master.lwfEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.insurance > 0) {
+        contRows.push(makeRow('Corporate Health Insurance', formatCurrency(master.insurance), formatCurrency(master.insurance * 12)));
+        hasContributions = true;
+    }
+    if (master.employerNPS > 0) {
+        contRows.push(makeRow('Employer NPS Share', formatCurrency(master.employerNPS), formatCurrency(master.employerNPS * 12)));
+        hasContributions = true;
+    }
+
+    if (hasContributions) {
+        rows.push(makeRow('B. Employer Contributions', '—', '—', false, true));
+        rows.push(...contRows);
+    }
+
+    let hasDeductions = false;
+    const dedRows = [];
+    if (payroll && payroll.deductions) {
+        if (payroll.deductions.pfEmployee > 0) {
+            dedRows.push(makeRow('Employee PF Contribution', formatCurrency(payroll.deductions.pfEmployee), formatCurrency(payroll.deductions.pfEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.esiEmployee > 0) {
+            dedRows.push(makeRow('Employee ESI Share', formatCurrency(payroll.deductions.esiEmployee), formatCurrency(payroll.deductions.esiEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.lwfEmployee > 0) {
+            dedRows.push(makeRow('Employee LWF Share', formatCurrency(payroll.deductions.lwfEmployee), formatCurrency(payroll.deductions.lwfEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.professionalTax > 0) {
+            dedRows.push(makeRow('Professional Tax (PT)', formatCurrency(payroll.deductions.professionalTax), formatCurrency(payroll.deductions.professionalTax * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.tds > 0) {
+            dedRows.push(makeRow('Income Tax (TDS)', formatCurrency(payroll.deductions.tds), formatCurrency(payroll.deductions.tds * 12)));
+            hasDeductions = true;
+        }
+    }
+
+    if (hasDeductions) {
+        rows.push(makeRow('C. Standard Employee Deductions', '—', '—', false, true));
+        rows.push(...dedRows);
+    }
+
+    rows.push(makeRow('D. Overall Salary Summary', '—', '—', false, true));
+    const grossVal = master.grossSalary || master.totalEarnings || 0;
+    rows.push(makeRow('Monthly Gross Earnings', formatCurrency(grossVal), formatCurrency(grossVal * 12), false, false, true));
+    const ctcVal = master.monthlyCTC || 0;
+    rows.push(makeRow('Total Cost to Company (CTC)', formatCurrency(ctcVal), formatCurrency(ctcVal * 12), false, false, true));
+    const takeHomeVal = master.netTakeHome || 0;
+    rows.push(makeRow('Estimated Net Take-Home (Monthly)', formatCurrency(takeHomeVal), '—', false, false, true));
+
+    return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="10000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="E5E7EB"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="E5E7EB"/></w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr>${rows.join('')}</w:tbl>`;
+};
+
 const getSalaryBreakups = async (employee) => {
     const breakups = {};
     if (!employee.salary || !employee.salary.annualCTC) return breakups;
@@ -2552,6 +2658,7 @@ const getSalaryBreakups = async (employee) => {
                 breakups['hra_annual'] = formatCurrency(master.hraMaster * 12);
                 breakups['special_allowance'] = formatCurrency(master.specialAllowance);
                 breakups['special_allowance_annual'] = formatCurrency(master.specialAllowance * 12);
+                breakups['salary_table'] = generateSalaryTableXML(master, payroll, formatCurrency);
             }
         }
     } catch (err) {
