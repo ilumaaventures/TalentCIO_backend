@@ -196,6 +196,28 @@ const syncPermissions = async () => {
             }
         }
 
+        const payrollCalculatorPerm = await Permission.findOne({ key: 'payroll.calculator.view' }).select('_id');
+        if (payrollCalculatorPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['HR Admin', 'HR Manager'],
+                [payrollCalculatorPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated HR roles with payroll.calculator.view permission.');
+            }
+        }
+
+        const payrollConfigPerm = await Permission.findOne({ key: 'payroll.config.manage' }).select('_id');
+        if (payrollConfigPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['HR Admin'],
+                [payrollConfigPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated HR Admin role with payroll.config.manage permission.');
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);
