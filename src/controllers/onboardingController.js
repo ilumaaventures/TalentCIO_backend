@@ -25,7 +25,7 @@ const {
     validateTemplateSyntax
 } = require('../utils/templateResolver');
 const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
-const { buildMasterSalaryStructure } = require('../utils/payrollMath');
+const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('../utils/payrollMath');
 
 
 // ==========================================
@@ -2667,10 +2667,49 @@ const getSalaryBreakups = async (employee) => {
     return breakups;
 };
 
+const preprocessDocxXml = (xmlString) => {
+    return xmlString.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
+        if (paragraphHtml.includes('{@')) {
+            let hasNonWhitespaceText = false;
+            let rawTagCount = 0;
+            
+            const tMatches = [...paragraphHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+            tMatches.forEach(match => {
+                const textContent = match[1];
+                if (textContent.includes('{@')) {
+                    rawTagCount++;
+                } else if (textContent.trim() !== '') {
+                    hasNonWhitespaceText = true;
+                }
+            });
+            
+            if (rawTagCount > 0 && !hasNonWhitespaceText) {
+                const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
+                if (rawTagMatch) {
+                    const tag = rawTagMatch[1];
+                    const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
+                    const pPr = pPrMatch ? pPrMatch[0] : '';
+                    return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+                }
+            }
+        }
+        return paragraphHtml;
+    });
+};
+
 // --- Shared Helper for Populating Documents ---
 const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaultPath = null) => {
     const content = await getTemplateContent(templateUrl, defaultPath);
     const zip = new PizZip(content);
+
+    try {
+        let docXml = zip.file('word/document.xml').asText();
+        docXml = preprocessDocxXml(docXml);
+        zip.file('word/document.xml', docXml);
+    } catch (e) {
+        console.error('Error pre-processing document.xml:', e.message);
+    }
+
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
         linebreaks: true,
@@ -2683,33 +2722,45 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
 
     const salaryBreakups = await getSalaryBreakups(employee);
 
-    doc.render({
-        offer_date: formatDate(employee.offerDate || new Date()),
-        employee_full_name: fullName,
-        employee_first_name: employee.firstName,
-        employee_last_name: employee.lastName,
-        employee_id: employee.tempEmployeeId,
-        designation: employee.designation || '—',
-        department: employee.department || '—',
-        joining_date: formatDate(employee.joiningDate),
-        work_location: employee.workLocation || '—',
-        probation_period: employee.probationPeriod || '6 months',
-        probationPeriod: employee.probationPeriod || '6 months',
-        annual_ctc: formatCurrency(employee.salary?.annualCTC),
-        annual_salary: formatCurrency(employee.salary?.annualCTC),
-        basic_salary: formatCurrency(employee.salary?.basic),
-        hra: formatCurrency(employee.salary?.hra),
-        special_allowance: formatCurrency(employee.salary?.specialAllowance),
-        monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-        monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-        employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-        employee_city: permAddr.city || '—',
-        hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-        hr_designation: hrUser.designation || 'HR Manager',
-        declaration_date: formatDate(new Date()),
-        employee_signature_name: fullName,
-        ...salaryBreakups
-    });
+    try {
+        doc.render({
+            offer_date: formatDate(employee.offerDate || new Date()),
+            employee_full_name: fullName,
+            employee_first_name: employee.firstName,
+            employee_last_name: employee.lastName,
+            employee_id: employee.tempEmployeeId,
+            designation: employee.designation || '—',
+            department: employee.department || '—',
+            joining_date: formatDate(employee.joiningDate),
+            work_location: employee.workLocation || '—',
+            probation_period: employee.probationPeriod || '6 months',
+            probationPeriod: employee.probationPeriod || '6 months',
+            annual_ctc: formatCurrency(employee.salary?.annualCTC),
+            annual_salary: formatCurrency(employee.salary?.annualCTC),
+            basic_salary: formatCurrency(employee.salary?.basic),
+            hra: formatCurrency(employee.salary?.hra),
+            special_allowance: formatCurrency(employee.salary?.specialAllowance),
+            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
+            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
+            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
+            employee_city: permAddr.city || '—',
+            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
+            hr_designation: hrUser.designation || 'HR Manager',
+            declaration_date: formatDate(new Date()),
+            employee_signature_name: fullName,
+            ...salaryBreakups
+        });
+    } catch (err) {
+        console.error('Docxtemplater rendering error details:');
+        if (err.properties && err.properties.errors) {
+            err.properties.errors.forEach(subErr => {
+                console.error(`- Sub-error: ${subErr.message}`, JSON.stringify(subErr.properties, null, 2));
+            });
+        } else {
+            console.error(err);
+        }
+        throw err;
+    }
 
     return doc.getZip().generate({ type: 'nodebuffer' });
 };
@@ -3063,39 +3114,7 @@ exports.downloadTemplateById = async (req, res) => {
         const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
-        const content = await getTemplateContent(template.url);
-        const zip = new PizZip(content);
-        const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true, nullGetter: () => '—' });
-
-        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName}`.trim();
-        const hrUser = employee.createdBy || {};
-        const permAddr = employee.personalDetails?.permanentAddress || employee.personalDetails?.currentAddress || {};
-
-        doc.render({
-            offer_date: formatDate(employee.offerDate || new Date()),
-            employee_full_name: fullName,
-            employee_first_name: employee.firstName,
-            employee_last_name: employee.lastName,
-            employee_id: employee.tempEmployeeId,
-            designation: employee.designation || '—',
-            department: employee.department || '—',
-            joining_date: formatDate(employee.joiningDate),
-            work_location: employee.workLocation || '—',
-            probation_period: employee.probationPeriod || '6 months',
-            probationPeriod: employee.probationPeriod || '6 months',
-            annual_ctc: formatCurrency(employee.salary?.annualCTC),
-            annual_salary: formatCurrency(employee.salary?.annualCTC),
-            basic_salary: formatCurrency(employee.salary?.basic),
-            hra: formatCurrency(employee.salary?.hra),
-            special_allowance: formatCurrency(employee.salary?.specialAllowance),
-            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-            hr_designation: hrUser.designation || 'HR Manager'
-        });
-
-        const buffer = doc.getZip().generate({ type: 'nodebuffer' });
+        const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Disposition', `attachment; filename=${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
