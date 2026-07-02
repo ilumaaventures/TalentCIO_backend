@@ -2670,27 +2670,34 @@ const getSalaryBreakups = async (employee) => {
 const preprocessDocxXml = (xmlString) => {
     return xmlString.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
         if (paragraphHtml.includes('{@')) {
-            let hasNonWhitespaceText = false;
-            let rawTagCount = 0;
-            
-            const tMatches = [...paragraphHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
-            tMatches.forEach(match => {
-                const textContent = match[1];
-                if (textContent.includes('{@')) {
-                    rawTagCount++;
-                } else if (textContent.trim() !== '') {
-                    hasNonWhitespaceText = true;
-                }
-            });
-            
-            if (rawTagCount > 0 && !hasNonWhitespaceText) {
-                const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
-                if (rawTagMatch) {
-                    const tag = rawTagMatch[1];
-                    const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
-                    const pPr = pPrMatch ? pPrMatch[0] : '';
+            const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
+            if (rawTagMatch) {
+                const tag = rawTagMatch[1];
+                
+                // Extract paragraph properties
+                const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
+                const pPr = pPrMatch ? pPrMatch[0] : '';
+                
+                // Clean the current paragraph by removing the raw tag
+                let cleanedHtml = paragraphHtml.replace(tag, '');
+                
+                // Check if the cleaned paragraph only has whitespace runs
+                // If it's empty of actual text, we can just replace the whole paragraph to avoid empty lines
+                let hasActualText = false;
+                const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+                tMatches.forEach(match => {
+                    if (match[1].trim() !== '') {
+                        hasActualText = true;
+                    }
+                });
+                
+                if (!hasActualText) {
+                    // Just return a single paragraph with only the raw tag
                     return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
                 }
+                
+                // Otherwise, split: first paragraph is the label/preceding text, second is the raw tag
+                return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
             }
         }
         return paragraphHtml;
@@ -2708,6 +2715,85 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
         zip.file('word/document.xml', docXml);
     } catch (e) {
         console.error('Error pre-processing document.xml:', e.message);
+    }
+
+    // Handle candidate digital signature injection in the docx
+    let employeeSignatureXml = '';
+    const eSignName = employee.offerDeclaration?.eSignName;
+    const eSignType = employee.offerDeclaration?.eSignType;
+    const eSignValue = employee.offerDeclaration?.eSignValue;
+
+    if (employee.offerDeclaration?.isComplete && eSignName) {
+        if (eSignType === 'drawn' && eSignValue && eSignValue.startsWith('data:image/png;base64,')) {
+            try {
+                const base64Data = eSignValue.split(';base64,').pop();
+                zip.file('word/media/candidate_signature.png', Buffer.from(base64Data, 'base64'));
+
+                // Ensure PNG extension is registered in Content_Types
+                try {
+                    let contentTypesXml = zip.file('[Content_Types].xml').asText();
+                    if (!contentTypesXml.includes('Extension="png"')) {
+                        const pngType = `<Default Extension="png" ContentType="image/png"/>`;
+                        contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
+                        zip.file('[Content_Types].xml', contentTypesXml);
+                    }
+                } catch (ctErr) {
+                    console.error('Error updating Content_Types.xml:', ctErr.message);
+                }
+
+                let relsXml = zip.file('word/_rels/document.xml.rels').asText();
+                if (!relsXml.includes('Target="media/candidate_signature.png"')) {
+                    const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
+                    relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
+                    zip.file('word/_rels/document.xml.rels', relsXml);
+                }
+
+                const drawingXml = `
+                    <w:drawing>
+                        <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
+                            <wp:extent cx="1371600" cy="457200"/>
+                            <wp:docPr id="999" name="Candidate Signature"/>
+                            <wp:cNvGraphicFramePr>
+                                <a:graphicFrameLocks noChangeAspect="1"/>
+                            </wp:cNvGraphicFramePr>
+                            <a:graphic>
+                                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                    <pic:pic>
+                                        <pic:nvPicPr>
+                                            <pic:cNvPr id="999" name="candidate_signature.png"/>
+                                            <pic:cNvPicPr/>
+                                        </pic:nvPicPr>
+                                        <pic:blipFill>
+                                            <a:blip r:embed="rIdSignature"/>
+                                            <a:stretch>
+                                                <a:fillRect/>
+                                            </a:stretch>
+                                        </pic:blipFill>
+                                        <pic:spPr>
+                                            <a:xfrm>
+                                                <a:off x="0" y="0"/>
+                                                <a:ext cx="1371600" cy="457200"/>
+                                            </a:xfrm>
+                                            <a:prstGeom prst="rect">
+                                                <a:avLst/>
+                                            </a:prstGeom>
+                                        </pic:spPr>
+                                    </pic:pic>
+                                </a:graphicData>
+                            </a:graphic>
+                        </wp:inline>
+                    </w:drawing>
+                `.trim().replace(/\s+/g, ' ');
+                employeeSignatureXml = `<w:p><w:r>${drawingXml}</w:r></w:p>`;
+            } catch (err) {
+                console.error('Error injecting drawn signature to docx:', err.message);
+                employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+            }
+        } else {
+            employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+        }
+    } else {
+        employeeSignatureXml = `<w:p><w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t>(Pending Signature)</w:t></w:r></w:p>`;
     }
 
     const doc = new Docxtemplater(zip, {
@@ -2748,6 +2834,9 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
             hr_designation: hrUser.designation || 'HR Manager',
             declaration_date: formatDate(new Date()),
             employee_signature_name: fullName,
+            employee_signature: employeeSignatureXml,
+            employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
+            employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
             ...salaryBreakups
         });
     } catch (err) {
