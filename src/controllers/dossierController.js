@@ -481,6 +481,26 @@ const filterProfileFields = (profile, viewer, isSelf) => {
         }
     }
 
+    // Convert Mongoose Map to plain object for JSON serialization
+    if (profileObj.compensation && profileObj.compensation.salaryBreakup) {
+        if (profileObj.compensation.salaryBreakup instanceof Map) {
+            profileObj.compensation.salaryBreakup = Object.fromEntries(profileObj.compensation.salaryBreakup);
+        } else if (typeof profileObj.compensation.salaryBreakup.get === 'function') {
+            profileObj.compensation.salaryBreakup = Object.fromEntries(profileObj.compensation.salaryBreakup);
+        } else if (profile.compensation && profile.compensation.salaryBreakup instanceof Map) {
+            profileObj.compensation.salaryBreakup = Object.fromEntries(profile.compensation.salaryBreakup);
+        }
+    }
+
+    if (profileObj.pendingUpdates && profileObj.pendingUpdates.compensation && profileObj.pendingUpdates.compensation.salaryBreakup) {
+        const pb = profileObj.pendingUpdates.compensation.salaryBreakup;
+        if (pb instanceof Map) {
+            profileObj.pendingUpdates.compensation.salaryBreakup = Object.fromEntries(pb);
+        } else if (typeof pb.get === 'function') {
+            profileObj.pendingUpdates.compensation.salaryBreakup = Object.fromEntries(pb);
+        }
+    }
+
     return profileObj;
 };
 
@@ -2092,11 +2112,14 @@ exports.approveHRIS = async (req, res) => {
             if (pending.family) profile.family = { ...(profile.family?.toObject?.() || {}), ...pending.family };
             if (pending.employment) profile.employment = { ...(profile.employment?.toObject?.() || {}), ...pending.employment };
             if (pending.compensation) {
+                const existingBreakup = profile.compensation?.salaryBreakup instanceof Map
+                    ? Object.fromEntries(profile.compensation.salaryBreakup)
+                    : (profile.compensation?.salaryBreakup || {});
                 profile.compensation = {
                     ...(profile.compensation?.toObject?.() || {}),
                     ...pending.compensation,
                     bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(pending.compensation?.bankDetails || {}) },
-                    salaryBreakup: { ...(profile.compensation?.salaryBreakup || {}), ...(pending.compensation?.salaryBreakup || {}) }
+                    salaryBreakup: { ...existingBreakup, ...(pending.compensation?.salaryBreakup || {}) }
                 };
             }
             if (pending.education) profile.education = pending.education;
