@@ -174,7 +174,8 @@ const buildEmployeePayload = (user, profile = null) => {
             basicPercent: getNum('basicPercent', null),
             hraPercent: getNum('hraPercent', null),
             useSalaryComponents: getBool('useSalaryComponents', true),
-            ptState: getStr('ptState', '')
+            ptState: getStr('ptState', ''),
+            salaryBreakup: salaryBreakup instanceof Map ? Object.fromEntries(salaryBreakup) : (salaryBreakup || {})
         },
         bankDetails: {
             accountNumber: bankDetails.accountNumber || '',
