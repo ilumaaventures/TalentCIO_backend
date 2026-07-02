@@ -458,7 +458,7 @@ const filterProfileFields = (profile, viewer, isSelf) => {
         );
     };
 
-    const canViewDossier = isAdmin || viewerHasPermission('dossier.view') || viewerHasPermission('dossier.view.sensitive');
+    const canViewDossier = isAdmin || viewerHasPermission('dossier.view') || viewerHasPermission('dossier.view.sensitive') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
 
     if (!canViewDossier && !isSelf) {
         // Redact sensitive info for users without explicit dossier view permission
@@ -466,6 +466,19 @@ const filterProfileFields = (profile, viewer, isSelf) => {
         delete profileObj.identity;
         delete profileObj.family; delete profileObj.contact; delete profileObj.documents; delete profileObj.hris; delete profileObj.skills;
         delete profileObj.pendingUpdates;
+    } else {
+        // Even if authorized to view dossier (or self), protect the compensation details specifically
+        if (isSelf) {
+            const canViewSelfSalary = isAdmin || viewerHasPermission('payroll.salary.view.self') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+            if (!canViewSelfSalary) {
+                delete profileObj.compensation;
+            }
+        } else {
+            const canViewOtherSalary = isAdmin || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+            if (!canViewOtherSalary) {
+                delete profileObj.compensation;
+            }
+        }
     }
 
     return profileObj;
@@ -572,6 +585,8 @@ exports.getDossier = async (req, res) => {
             const canView = checkIsAdmin(req.user)
                 || hasPermission(req.user, "dossier.view")
                 || hasPermission(req.user, "dossier.view.sensitive")
+                || hasPermission(req.user, "payroll.salary.view")
+                || hasPermission(req.user, "payroll.salary.manage")
                 || hasPermission(req.user, "dossier.export");
             if (!canView) {
                 return res.status(403).json({ message: 'Not authorized to view this dossier' });
@@ -868,7 +883,7 @@ exports.submitHRIS = async (req, res) => {
         }
 
         // Sensitive sections modifications check
-        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive');
+        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive') || hasPermission(req.user, 'payroll.salary.manage');
         if (!canEditSensitive) {
             const profileObj = profile.toObject();
 
@@ -1054,7 +1069,10 @@ exports.updateSection = async (req, res) => {
         const viewerId = req.user._id.toString();
         const isSelf = userId === viewerId;
         const isAdmin = checkIsAdmin(req.user);
-        const canEdit = isSelf || isAdmin || hasPermission(req.user, 'dossier.edit');
+        let canEdit = isSelf || isAdmin || hasPermission(req.user, 'dossier.edit');
+        if (section === 'compensation' && hasPermission(req.user, 'payroll.salary.manage')) {
+            canEdit = true;
+        }
 
         // Permission Check
         if (!canEdit) {
@@ -1062,7 +1080,7 @@ exports.updateSection = async (req, res) => {
         }
 
         // Check for specific permission to edit sensitive sections
-        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive');
+        const canEditSensitive = isAdmin || hasPermission(req.user, 'dossier.edit.sensitive') || hasPermission(req.user, 'payroll.salary.manage');
 
         if (!isAdmin && !canEditSensitive) {
             if (section === 'employment') {
@@ -1212,6 +1230,7 @@ exports.updateSection = async (req, res) => {
                         profile[section][key] = value;
                     }
                 });
+                profile.markModified(section);
             }
         } else {
             // Stage updates in pendingUpdates for employees (or self-updates by Admins)
@@ -2076,7 +2095,8 @@ exports.approveHRIS = async (req, res) => {
                 profile.compensation = {
                     ...(profile.compensation?.toObject?.() || {}),
                     ...pending.compensation,
-                    bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(pending.compensation?.bankDetails || {}) }
+                    bankDetails: { ...(profile.compensation?.bankDetails || {}), ...(pending.compensation?.bankDetails || {}) },
+                    salaryBreakup: { ...(profile.compensation?.salaryBreakup || {}), ...(pending.compensation?.salaryBreakup || {}) }
                 };
             }
             if (pending.education) profile.education = pending.education;

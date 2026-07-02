@@ -25,6 +25,8 @@ const {
     validateTemplateSyntax
 } = require('../utils/templateResolver');
 const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
+const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('../utils/payrollMath');
+
 
 // ==========================================
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
@@ -328,7 +330,7 @@ exports.addEmployee = async (req, res) => {
         if (calculatedSalary && (calculatedSalary.annualCTC || calculatedSalary.hourlyRate)) {
             try {
                 const PayrollConfig = require('../models/PayrollConfig');
-                const config = await PayrollConfig.findOne({ companyId: req.companyId });
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
                 if (config) {
                     const payType = calculatedSalary.payType || 'salaried';
                     let annualCTC = 0;
@@ -370,10 +372,15 @@ exports.addEmployee = async (req, res) => {
                             gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
                             includePfInCTC: !!calculatedSalary.includePfInCTC,
                             includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                            basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
+                            hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                            useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                            ptState: calculatedSalary.ptState || '',
+                            flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
                             insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                             employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
                             deductions: {
-                                professionalTax: calculatedSalary.ptEnabled !== false ? (parseFloat(calculatedSalary.professionalTax) || 200) : 0,
+                                professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                             }
                         };
                         
@@ -1145,117 +1152,125 @@ exports.updateEmployee = async (req, res) => {
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
         // Update fields
-        if (firstName) employee.firstName = firstName;
-        if (lastName) employee.lastName = lastName;
-        if (email) employee.email = email;
-        if (phone) employee.phone = phone;
-        if (designation) employee.designation = designation;
-        if (department) employee.department = department;
-        if (joiningDate) employee.joiningDate = joiningDate;
-        if (offerDate) employee.offerDate = offerDate;
+        if (firstName !== undefined) employee.firstName = firstName;
+        if (lastName !== undefined) employee.lastName = lastName;
+        if (email !== undefined) employee.email = email;
+        if (phone !== undefined) employee.phone = phone;
+        if (designation !== undefined) employee.designation = designation;
+        if (department !== undefined) employee.department = department;
+        if (joiningDate !== undefined) employee.joiningDate = joiningDate || undefined;
+        if (offerDate !== undefined) employee.offerDate = offerDate || undefined;
         if (documentDeadline !== undefined) {
             employee.documentDeadline = documentDeadline ? new Date(documentDeadline) : undefined;
             employee.credentialsExpireAt = documentDeadline ? new Date(documentDeadline) : undefined;
         }
-        if (workLocation) employee.workLocation = workLocation;
-        if (address) employee.address = address;
+        if (workLocation !== undefined) employee.workLocation = workLocation;
+        if (address !== undefined) employee.address = address;
         if (probationPeriod !== undefined) employee.probationPeriod = probationPeriod || '';
         if (salary) {
             let calculatedSalary = { ...salary };
-            if (calculatedSalary.annualCTC || calculatedSalary.hourlyRate) {
-                try {
-                    const PayrollConfig = require('../models/PayrollConfig');
-                    const config = await PayrollConfig.findOne({ companyId: req.companyId });
-                    if (config) {
-                        const payType = calculatedSalary.payType || 'salaried';
-                        let annualCTC = 0;
-                        let monthlyCTC = 0;
+            try {
+                const PayrollConfig = require('../models/PayrollConfig');
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
+                
+                const payType = calculatedSalary.payType || 'salaried';
+                let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
+                let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
 
-                        if (payType === 'hourly') {
-                            const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
-                            const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
-                            monthlyCTC = hourlyRate * hoursWorked;
-                            annualCTC = monthlyCTC * 12;
+                if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
+                    monthlyCTC = Math.round(annualCTC / 12);
+                } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {
+                    annualCTC = monthlyCTC * 12;
+                }
 
-                            calculatedSalary.annualCTC = String(annualCTC);
-                            calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                            calculatedSalary.basic = String(Math.round(monthlyCTC));
-                            calculatedSalary.hra = '0';
-                            calculatedSalary.specialAllowance = '0';
-                            calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                        } else if (payType === 'flat') {
-                            monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
-                            annualCTC = monthlyCTC * 12;
+                if (payType === 'hourly') {
+                    const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
+                    const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
+                    monthlyCTC = hourlyRate * hoursWorked;
+                    annualCTC = monthlyCTC * 12;
 
-                            calculatedSalary.annualCTC = String(annualCTC);
-                            calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                            calculatedSalary.basic = String(Math.round(monthlyCTC));
-                            calculatedSalary.hra = '0';
-                            calculatedSalary.specialAllowance = '0';
-                            calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                        } else {
-                            annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
-                            monthlyCTC = annualCTC / 12;
-                            
-                            const source = {
-                                monthlyCTC,
-                                payType,
-                                pfEnabled: calculatedSalary.pfEnabled !== undefined ? !!calculatedSalary.pfEnabled : true,
-                                esiEnabled: calculatedSalary.esiEnabled !== undefined ? !!calculatedSalary.esiEnabled : true,
-                                ptEnabled: calculatedSalary.ptEnabled !== undefined ? !!calculatedSalary.ptEnabled : true,
-                                lwfEnabled: calculatedSalary.lwfEnabled !== undefined ? !!calculatedSalary.lwfEnabled : true,
-                                gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
-                                includePfInCTC: !!calculatedSalary.includePfInCTC,
-                                includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
-                                insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
-                                employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
-                                deductions: {
-                                    professionalTax: calculatedSalary.ptEnabled !== false ? (parseFloat(calculatedSalary.professionalTax) || 200) : 0,
-                                }
-                            };
-                            
-                            if (config.salaryComponents) {
-                                config.salaryComponents.forEach(c => {
-                                    if (c.linkedTo === 'fixed') {
-                                        const customVal = calculatedSalary[c.id];
-                                        source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
-                                    }
-                                });
+                    calculatedSalary.annualCTC = String(annualCTC);
+                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                    calculatedSalary.basic = String(Math.round(monthlyCTC));
+                    calculatedSalary.hra = '0';
+                    calculatedSalary.specialAllowance = '0';
+                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
+                } else if (payType === 'flat') {
+                    monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
+                    annualCTC = monthlyCTC * 12;
+
+                    calculatedSalary.annualCTC = String(annualCTC);
+                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                    calculatedSalary.basic = String(Math.round(monthlyCTC));
+                    calculatedSalary.hra = '0';
+                    calculatedSalary.specialAllowance = '0';
+                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
+                } else {
+                    const source = {
+                        monthlyCTC,
+                        payType,
+                        pfEnabled: calculatedSalary.pfEnabled !== false,
+                        esiEnabled: calculatedSalary.esiEnabled !== false,
+                        ptEnabled: calculatedSalary.ptEnabled !== false,
+                        lwfEnabled: calculatedSalary.lwfEnabled !== false,
+                        gratuityEnabled: calculatedSalary.gratuityEnabled !== false,
+                        includePfInCTC: !!calculatedSalary.includePfInCTC,
+                        includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                        basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
+                        hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                        useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                        ptState: calculatedSalary.ptState || '',
+                        flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
+                        insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
+                        employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
+                        deductions: {
+                            professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
+                        }
+                    };
+                    
+                    if (config.salaryComponents) {
+                        config.salaryComponents.forEach(c => {
+                            if (c.linkedTo === 'fixed') {
+                                const customVal = calculatedSalary[c.id];
+                                source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                             }
-                            
-                            const master = buildMasterSalaryStructure(source, config);
-                            if (master) {
-                                calculatedSalary.annualCTC = String(annualCTC);
-                                calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                                calculatedSalary.basic = String(master.basicMaster);
-                                calculatedSalary.hra = String(master.hraMaster);
-                                calculatedSalary.specialAllowance = String(master.specialAllowance);
-                                calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
-                                
-                                calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
-                                calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
-                                calculatedSalary.gratuity = String(master.gratuity || 0);
-                                calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
-                                calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
-                                calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
-                                calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
-                                calculatedSalary.professionalTax = String(master.professionalTax || 0);
-                                calculatedSalary.tds = String(master.tds || 0);
-                                calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                                
-                                if (master.earningsMap) {
-                                    Object.entries(master.earningsMap).forEach(([id, val]) => {
-                                        calculatedSalary[id] = String(val);
-                                    });
-                                }
-                            }
+                        });
+                    }
+                    
+                    const master = buildMasterSalaryStructure(source, config);
+                    if (master) {
+                        calculatedSalary.annualCTC = String(annualCTC);
+                        calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
+                        calculatedSalary.basic = String(master.basicMaster);
+                        calculatedSalary.hra = String(master.hraMaster);
+                        calculatedSalary.specialAllowance = String(master.specialAllowance);
+                        calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
+                        
+                        calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
+                        calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
+                        calculatedSalary.gratuity = String(master.gratuity || 0);
+                        calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
+                        calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
+                        calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
+                        calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
+                        calculatedSalary.professionalTax = String(master.professionalTax || 0);
+                        calculatedSalary.tds = String(master.tds || 0);
+                        calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
+                        
+                        if (master.earningsMap) {
+                            Object.entries(master.earningsMap).forEach(([id, val]) => {
+                                calculatedSalary[id] = String(val);
+                            });
                         }
                     }
-                } catch (err) {
-                    console.error('Error calculating candidate salary on backend update:', err);
                 }
+            } catch (err) {
+                console.error('Error calculating candidate salary on backend update:', err);
             }
-            employee.salary = { ...employee.salary.toObject(), ...calculatedSalary };
+            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function') 
+                ? employee.salary.toObject() 
+                : (employee.salary || {});
+            employee.salary = { ...currentSalary, ...calculatedSalary };
         }
         if (selectionDraft) {
             const normalizeLabels = (labels) => [...new Set((Array.isArray(labels) ? labels : [])
@@ -1283,6 +1298,7 @@ exports.updateEmployee = async (req, res) => {
             details: `Details updated by ${req.user.firstName || 'Admin'}`
         });
 
+        employee.markModified('salary');
         await employee.save();
         res.status(200).json({ message: 'Employee updated successfully', employee });
     } catch (error) {
@@ -2348,6 +2364,112 @@ exports.downloadTemplate = async (req, res) => {
     }
 };
 
+const generateSalaryTableXML = (master, payroll, formatCurrency) => {
+    const makeRow = (name, monthlyVal, annualVal, isHeader = false, isSectionHeader = false, isTotal = false) => {
+        const fill = isHeader ? '4B5563' : (isSectionHeader ? 'E5E7EB' : (isTotal ? 'F3F4F6' : 'FFFFFF'));
+        const textColor = isHeader ? 'FFFFFF' : '000000';
+        const isBold = isHeader || isSectionHeader || isTotal;
+        const boldTag = isBold ? '<w:b/>' : '';
+        const sizeTag = isSectionHeader ? '<w:sz w:val="20"/>' : '';
+
+        return `<w:tr><w:trPr>${isHeader ? '<w:tblHeader/>' : ''}<w:cantSplit/></w:trPr><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="5000" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="left"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${name}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="2500" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${monthlyVal}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:shd w:fill="${fill}"/><w:tcW w:w="2500" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>${boldTag}${sizeTag}<w:color w:val="${textColor}"/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${annualVal}</w:t></w:r></w:p></w:tc></w:tr>`;
+    };
+
+    let rows = [];
+    rows.push(makeRow('Salary Component / Details', 'Monthly (INR)', 'Annual (INR)', true));
+
+    rows.push(makeRow('A. Gross Earnings', '—', '—', false, true));
+    const basicMonthly = master.basicMaster || 0;
+    if (basicMonthly > 0) rows.push(makeRow('Basic Salary', formatCurrency(basicMonthly), formatCurrency(basicMonthly * 12)));
+
+    const hraMonthly = master.hraMaster || 0;
+    if (hraMonthly > 0) rows.push(makeRow('House Rent Allowance (HRA)', formatCurrency(hraMonthly), formatCurrency(hraMonthly * 12)));
+
+    if (master.earningsMap) {
+        Object.entries(master.earningsMap).forEach(([id, val]) => {
+            if (id !== 'basic' && id !== 'hra' && val > 0) {
+                const displayName = id.charAt(0).toUpperCase() + id.slice(1).replace(/([A-Z])/g, ' $1');
+                rows.push(makeRow(displayName, formatCurrency(val), formatCurrency(val * 12)));
+            }
+        });
+    }
+
+    const specialMonthly = master.specialAllowance || 0;
+    if (specialMonthly > 0) rows.push(makeRow('Special Allowance', formatCurrency(specialMonthly), formatCurrency(specialMonthly * 12)));
+
+    let hasContributions = false;
+    const contRows = [];
+    if (master.pfEmployer > 0) {
+        contRows.push(makeRow('Employer PF Contribution', formatCurrency(master.pfEmployer), formatCurrency(master.pfEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.esiEmployer > 0) {
+        contRows.push(makeRow('Employer ESI Contribution', formatCurrency(master.esiEmployer), formatCurrency(master.esiEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.gratuity > 0) {
+        contRows.push(makeRow('Gratuity Accrual / Provision', formatCurrency(master.gratuity), formatCurrency(master.gratuity * 12)));
+        hasContributions = true;
+    }
+    if (master.lwfEmployer > 0) {
+        contRows.push(makeRow('Employer LWF Share', formatCurrency(master.lwfEmployer), formatCurrency(master.lwfEmployer * 12)));
+        hasContributions = true;
+    }
+    if (master.insurance > 0) {
+        contRows.push(makeRow('Corporate Health Insurance', formatCurrency(master.insurance), formatCurrency(master.insurance * 12)));
+        hasContributions = true;
+    }
+    if (master.employerNPS > 0) {
+        contRows.push(makeRow('Employer NPS Share', formatCurrency(master.employerNPS), formatCurrency(master.employerNPS * 12)));
+        hasContributions = true;
+    }
+
+    if (hasContributions) {
+        rows.push(makeRow('B. Employer Contributions', '—', '—', false, true));
+        rows.push(...contRows);
+    }
+
+    let hasDeductions = false;
+    const dedRows = [];
+    if (payroll && payroll.deductions) {
+        if (payroll.deductions.pfEmployee > 0) {
+            dedRows.push(makeRow('Employee PF Contribution', formatCurrency(payroll.deductions.pfEmployee), formatCurrency(payroll.deductions.pfEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.esiEmployee > 0) {
+            dedRows.push(makeRow('Employee ESI Share', formatCurrency(payroll.deductions.esiEmployee), formatCurrency(payroll.deductions.esiEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.lwfEmployee > 0) {
+            dedRows.push(makeRow('Employee LWF Share', formatCurrency(payroll.deductions.lwfEmployee), formatCurrency(payroll.deductions.lwfEmployee * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.professionalTax > 0) {
+            dedRows.push(makeRow('Professional Tax (PT)', formatCurrency(payroll.deductions.professionalTax), formatCurrency(payroll.deductions.professionalTax * 12)));
+            hasDeductions = true;
+        }
+        if (payroll.deductions.tds > 0) {
+            dedRows.push(makeRow('Income Tax (TDS)', formatCurrency(payroll.deductions.tds), formatCurrency(payroll.deductions.tds * 12)));
+            hasDeductions = true;
+        }
+    }
+
+    if (hasDeductions) {
+        rows.push(makeRow('C. Standard Employee Deductions', '—', '—', false, true));
+        rows.push(...dedRows);
+    }
+
+    rows.push(makeRow('D. Overall Salary Summary', '—', '—', false, true));
+    const grossVal = master.grossSalary || master.totalEarnings || 0;
+    rows.push(makeRow('Monthly Gross Earnings', formatCurrency(grossVal), formatCurrency(grossVal * 12), false, false, true));
+    const ctcVal = master.monthlyCTC || 0;
+    rows.push(makeRow('Total Cost to Company (CTC)', formatCurrency(ctcVal), formatCurrency(ctcVal * 12), false, false, true));
+    const takeHomeVal = master.netTakeHome || 0;
+    rows.push(makeRow('Estimated Net Take-Home (Monthly)', formatCurrency(takeHomeVal), '—', false, false, true));
+
+    return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="10000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CCCCCC"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="E5E7EB"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="E5E7EB"/></w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr>${rows.join('')}</w:tbl>`;
+};
+
 const getSalaryBreakups = async (employee) => {
     const breakups = {};
     if (!employee.salary || !employee.salary.annualCTC) return breakups;
@@ -2361,13 +2483,30 @@ const getSalaryBreakups = async (employee) => {
             
             const source = {
                 monthlyCTC,
-                payType: 'salaried',
+                payType: employee.salary?.payType || 'salaried',
+                pfEnabled: employee.salary?.pfEnabled !== undefined ? !!employee.salary.pfEnabled : true,
+                esiEnabled: employee.salary?.esiEnabled !== undefined ? !!employee.salary.esiEnabled : true,
+                ptEnabled: employee.salary?.ptEnabled !== undefined ? !!employee.salary.ptEnabled : true,
+                lwfEnabled: employee.salary?.lwfEnabled !== undefined ? !!employee.salary.lwfEnabled : true,
+                gratuityEnabled: employee.salary?.gratuityEnabled !== undefined ? !!employee.salary.gratuityEnabled : true,
+                includePfInCTC: !!employee.salary?.includePfInCTC,
+                includeGratuityInCTC: employee.salary?.includeGratuityInCTC !== undefined ? !!employee.salary.includeGratuityInCTC : true,
+                basicPercent: employee.salary?.basicPercent !== undefined && employee.salary.basicPercent !== null ? Number(employee.salary.basicPercent) : null,
+                hraPercent: employee.salary?.hraPercent !== undefined && employee.salary.hraPercent !== null ? Number(employee.salary.hraPercent) : null,
+                useSalaryComponents: employee.salary?.useSalaryComponents !== undefined ? !!employee.salary.useSalaryComponents : true,
+                ptState: employee.salary?.ptState || '',
+                insuranceAmount: parseFloat(employee.salary?.insuranceAmount) || 0,
+                employerNPS: parseFloat(employee.salary?.employerNPS) || 0,
+                deductions: {
+                    professionalTax: employee.salary?.ptState === 'custom' ? (parseFloat(employee.salary?.professionalTax) || 0) : 0,
+                }
             };
             
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
-                        source[c.id] = c.linkValue || 0;
+                        const customVal = employee.salary?.[c.id];
+                        source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                     }
                 });
             }
@@ -2519,6 +2658,7 @@ const getSalaryBreakups = async (employee) => {
                 breakups['hra_annual'] = formatCurrency(master.hraMaster * 12);
                 breakups['special_allowance'] = formatCurrency(master.specialAllowance);
                 breakups['special_allowance_annual'] = formatCurrency(master.specialAllowance * 12);
+                breakups['salary_table'] = generateSalaryTableXML(master, payroll, formatCurrency);
             }
         }
     } catch (err) {
@@ -2527,10 +2667,135 @@ const getSalaryBreakups = async (employee) => {
     return breakups;
 };
 
+const preprocessDocxXml = (xmlString) => {
+    return xmlString.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
+        if (paragraphHtml.includes('{@')) {
+            const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
+            if (rawTagMatch) {
+                const tag = rawTagMatch[1];
+                
+                // Extract paragraph properties
+                const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
+                const pPr = pPrMatch ? pPrMatch[0] : '';
+                
+                // Clean the current paragraph by removing the raw tag
+                let cleanedHtml = paragraphHtml.replace(tag, '');
+                
+                // Check if the cleaned paragraph only has whitespace runs
+                // If it's empty of actual text, we can just replace the whole paragraph to avoid empty lines
+                let hasActualText = false;
+                const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+                tMatches.forEach(match => {
+                    if (match[1].trim() !== '') {
+                        hasActualText = true;
+                    }
+                });
+                
+                if (!hasActualText) {
+                    // Just return a single paragraph with only the raw tag
+                    return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+                }
+                
+                // Otherwise, split: first paragraph is the label/preceding text, second is the raw tag
+                return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+            }
+        }
+        return paragraphHtml;
+    });
+};
+
 // --- Shared Helper for Populating Documents ---
 const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaultPath = null) => {
     const content = await getTemplateContent(templateUrl, defaultPath);
     const zip = new PizZip(content);
+
+    try {
+        let docXml = zip.file('word/document.xml').asText();
+        docXml = preprocessDocxXml(docXml);
+        zip.file('word/document.xml', docXml);
+    } catch (e) {
+        console.error('Error pre-processing document.xml:', e.message);
+    }
+
+    // Handle candidate digital signature injection in the docx
+    let employeeSignatureXml = '';
+    const eSignName = employee.offerDeclaration?.eSignName;
+    const eSignType = employee.offerDeclaration?.eSignType;
+    const eSignValue = employee.offerDeclaration?.eSignValue;
+
+    if (employee.offerDeclaration?.isComplete && eSignName) {
+        if (eSignType === 'drawn' && eSignValue && eSignValue.startsWith('data:image/png;base64,')) {
+            try {
+                const base64Data = eSignValue.split(';base64,').pop();
+                zip.file('word/media/candidate_signature.png', Buffer.from(base64Data, 'base64'));
+
+                // Ensure PNG extension is registered in Content_Types
+                try {
+                    let contentTypesXml = zip.file('[Content_Types].xml').asText();
+                    if (!contentTypesXml.includes('Extension="png"')) {
+                        const pngType = `<Default Extension="png" ContentType="image/png"/>`;
+                        contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
+                        zip.file('[Content_Types].xml', contentTypesXml);
+                    }
+                } catch (ctErr) {
+                    console.error('Error updating Content_Types.xml:', ctErr.message);
+                }
+
+                let relsXml = zip.file('word/_rels/document.xml.rels').asText();
+                if (!relsXml.includes('Target="media/candidate_signature.png"')) {
+                    const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
+                    relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
+                    zip.file('word/_rels/document.xml.rels', relsXml);
+                }
+
+                const drawingXml = `
+                    <w:drawing>
+                        <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
+                            <wp:extent cx="1371600" cy="457200"/>
+                            <wp:docPr id="999" name="Candidate Signature"/>
+                            <wp:cNvGraphicFramePr>
+                                <a:graphicFrameLocks noChangeAspect="1"/>
+                            </wp:cNvGraphicFramePr>
+                            <a:graphic>
+                                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                    <pic:pic>
+                                        <pic:nvPicPr>
+                                            <pic:cNvPr id="999" name="candidate_signature.png"/>
+                                            <pic:cNvPicPr/>
+                                        </pic:nvPicPr>
+                                        <pic:blipFill>
+                                            <a:blip r:embed="rIdSignature"/>
+                                            <a:stretch>
+                                                <a:fillRect/>
+                                            </a:stretch>
+                                        </pic:blipFill>
+                                        <pic:spPr>
+                                            <a:xfrm>
+                                                <a:off x="0" y="0"/>
+                                                <a:ext cx="1371600" cy="457200"/>
+                                            </a:xfrm>
+                                            <a:prstGeom prst="rect">
+                                                <a:avLst/>
+                                            </a:prstGeom>
+                                        </pic:spPr>
+                                    </pic:pic>
+                                </a:graphicData>
+                            </a:graphic>
+                        </wp:inline>
+                    </w:drawing>
+                `.trim().replace(/\s+/g, ' ');
+                employeeSignatureXml = `<w:p><w:r>${drawingXml}</w:r></w:p>`;
+            } catch (err) {
+                console.error('Error injecting drawn signature to docx:', err.message);
+                employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+            }
+        } else {
+            employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+        }
+    } else {
+        employeeSignatureXml = `<w:p><w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t>(Pending Signature)</w:t></w:r></w:p>`;
+    }
+
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
         linebreaks: true,
@@ -2543,33 +2808,48 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
 
     const salaryBreakups = await getSalaryBreakups(employee);
 
-    doc.render({
-        offer_date: formatDate(employee.offerDate || new Date()),
-        employee_full_name: fullName,
-        employee_first_name: employee.firstName,
-        employee_last_name: employee.lastName,
-        employee_id: employee.tempEmployeeId,
-        designation: employee.designation || '—',
-        department: employee.department || '—',
-        joining_date: formatDate(employee.joiningDate),
-        work_location: employee.workLocation || '—',
-        probation_period: employee.probationPeriod || '6 months',
-        probationPeriod: employee.probationPeriod || '6 months',
-        annual_ctc: formatCurrency(employee.salary?.annualCTC),
-        annual_salary: formatCurrency(employee.salary?.annualCTC),
-        basic_salary: formatCurrency(employee.salary?.basic),
-        hra: formatCurrency(employee.salary?.hra),
-        special_allowance: formatCurrency(employee.salary?.specialAllowance),
-        monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-        monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-        employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-        employee_city: permAddr.city || '—',
-        hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-        hr_designation: hrUser.designation || 'HR Manager',
-        declaration_date: formatDate(new Date()),
-        employee_signature_name: fullName,
-        ...salaryBreakups
-    });
+    try {
+        doc.render({
+            offer_date: formatDate(employee.offerDate || new Date()),
+            employee_full_name: fullName,
+            employee_first_name: employee.firstName,
+            employee_last_name: employee.lastName,
+            employee_id: employee.tempEmployeeId,
+            designation: employee.designation || '—',
+            department: employee.department || '—',
+            joining_date: formatDate(employee.joiningDate),
+            work_location: employee.workLocation || '—',
+            probation_period: employee.probationPeriod || '6 months',
+            probationPeriod: employee.probationPeriod || '6 months',
+            annual_ctc: formatCurrency(employee.salary?.annualCTC),
+            annual_salary: formatCurrency(employee.salary?.annualCTC),
+            basic_salary: formatCurrency(employee.salary?.basic),
+            hra: formatCurrency(employee.salary?.hra),
+            special_allowance: formatCurrency(employee.salary?.specialAllowance),
+            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
+            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
+            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
+            employee_city: permAddr.city || '—',
+            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
+            hr_designation: hrUser.designation || 'HR Manager',
+            declaration_date: formatDate(new Date()),
+            employee_signature_name: fullName,
+            employee_signature: employeeSignatureXml,
+            employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
+            employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
+            ...salaryBreakups
+        });
+    } catch (err) {
+        console.error('Docxtemplater rendering error details:');
+        if (err.properties && err.properties.errors) {
+            err.properties.errors.forEach(subErr => {
+                console.error(`- Sub-error: ${subErr.message}`, JSON.stringify(subErr.properties, null, 2));
+            });
+        } else {
+            console.error(err);
+        }
+        throw err;
+    }
 
     return doc.getZip().generate({ type: 'nodebuffer' });
 };
@@ -2817,8 +3097,19 @@ exports.acceptOfferLetter = async (req, res) => {
             }
         });
 
+        const { eSignName, eSignType, eSignValue } = req.body;
+        if (!eSignName) {
+            return res.status(400).json({ message: 'Signature name is required.' });
+        }
+
         // 2. Ensure hasReadOfferLetter is true unconditionally upon offer acceptance
         employee.offerDeclaration.hasReadOfferLetter = true;
+        employee.offerDeclaration.eSignName = eSignName;
+        employee.offerDeclaration.eSignType = eSignType || 'typed';
+        employee.offerDeclaration.eSignValue = eSignValue || '';
+        employee.offerDeclaration.eSignDate = new Date();
+        employee.offerDeclaration.eSignIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+        employee.offerDeclaration.isComplete = true;
 
         // 3. Mark matching document status to Approved
         employee.documents.forEach(doc => {
@@ -2835,7 +3126,7 @@ exports.acceptOfferLetter = async (req, res) => {
 
         employee.auditLog.push({
             action: 'OFFER_ACCEPTED',
-            details: 'Employee accepted the offer and acknowledged all requested documents/policies.'
+            details: `Employee accepted the offer and digitally signed (${eSignType || 'typed'}) as "${eSignName}". IP: ${employee.offerDeclaration.eSignIp}`
         });
 
         await employee.save();
@@ -2843,7 +3134,7 @@ exports.acceptOfferLetter = async (req, res) => {
         // Sync TA phase3Decision → 'Offer Accepted'
         await syncTADecision(employee, 'Offer Accepted');
 
-        res.status(200).json({ message: 'Offer accepted successfully!', offerStatus: employee.offerStatus, status: employee.status });
+        res.status(200).json({ message: 'Offer accepted and signed successfully!', offerStatus: employee.offerStatus, status: employee.status });
     } catch (error) {
         console.error('Error accepting offer letter:', error);
         res.status(500).json({ message: 'Failed to accept offer letter', error: error.message });
@@ -2923,39 +3214,7 @@ exports.downloadTemplateById = async (req, res) => {
         const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
-        const content = await getTemplateContent(template.url);
-        const zip = new PizZip(content);
-        const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true, nullGetter: () => '—' });
-
-        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName}`.trim();
-        const hrUser = employee.createdBy || {};
-        const permAddr = employee.personalDetails?.permanentAddress || employee.personalDetails?.currentAddress || {};
-
-        doc.render({
-            offer_date: formatDate(employee.offerDate || new Date()),
-            employee_full_name: fullName,
-            employee_first_name: employee.firstName,
-            employee_last_name: employee.lastName,
-            employee_id: employee.tempEmployeeId,
-            designation: employee.designation || '—',
-            department: employee.department || '—',
-            joining_date: formatDate(employee.joiningDate),
-            work_location: employee.workLocation || '—',
-            probation_period: employee.probationPeriod || '6 months',
-            probationPeriod: employee.probationPeriod || '6 months',
-            annual_ctc: formatCurrency(employee.salary?.annualCTC),
-            annual_salary: formatCurrency(employee.salary?.annualCTC),
-            basic_salary: formatCurrency(employee.salary?.basic),
-            hra: formatCurrency(employee.salary?.hra),
-            special_allowance: formatCurrency(employee.salary?.specialAllowance),
-            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-            hr_designation: hrUser.designation || 'HR Manager'
-        });
-
-        const buffer = doc.getZip().generate({ type: 'nodebuffer' });
+        const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Disposition', `attachment; filename=${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -3165,7 +3424,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 employmentType: 'Full Time'
             },
             compensation: {
-                ctc: employee.salary?.annualCTC ? parseFloat(employee.salary.annualCTC) : null,
+                ctc: employee.salary?.annualCTC ? (parseFloat(employee.salary.annualCTC) / 12) : (employee.salary?.monthlyCTC ? parseFloat(employee.salary.monthlyCTC) : null),
                 salaryBreakup: employee.salary || {},
                 bankDetails: {
                     accountNumber: bankDetails.accountNumber || '',

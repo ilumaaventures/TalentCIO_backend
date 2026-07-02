@@ -44,7 +44,8 @@ const PAYROLL_PROFILE_SELECT = [
     'compensation.bankDetails.bankName',
     'compensation.bankDetails.accountHolderName',
     'compensation.bankDetails.branchAddress',
-    'compensation.uanNumber'
+    'compensation.uanNumber',
+    'compensation.salaryBreakup'
 ].join(' ');
 const PAYROLL_PROFILE_HIDDEN_SELECT = '+identity.aadhaarNumber +identity.panNumber +compensation.ctc +compensation.bankDetails.accountNumber';
 
@@ -97,6 +98,17 @@ const formatDateValue = (value) => {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+const getSalaryField = (salaryBreakup, key, defaultValue) => {
+    if (!salaryBreakup) return defaultValue;
+    let val;
+    if (typeof salaryBreakup.get === 'function') {
+        val = salaryBreakup.get(key);
+    } else {
+        val = salaryBreakup[key];
+    }
+    return val !== undefined ? val : defaultValue;
+};
+
 const buildEmployeePayload = (user, profile = null) => {
     const personal = profile?.personal || {};
     const contact = profile?.contact || {};
@@ -107,9 +119,24 @@ const buildEmployeePayload = (user, profile = null) => {
     const fullName = personal.fullName
         || [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
 
+    const salaryBreakup = compensation.salaryBreakup;
+    const getBool = (key, def) => {
+        const val = getSalaryField(salaryBreakup, key, def);
+        return val === true || val === 'true';
+    };
+    const getNum = (key, def) => {
+        const val = getSalaryField(salaryBreakup, key, def);
+        return val !== null && val !== undefined && val !== '' ? Number(val) : def;
+    };
+    const getStr = (key, def) => {
+        const val = getSalaryField(salaryBreakup, key, def);
+        return val !== null && val !== undefined ? String(val) : def;
+    };
+
     return {
         employeeId: user?.employeeCode || String(user?._id || ''),
         userId: String(user?._id || ''),
+        monthlyCTC: compensation.ctc ?? null,
         employeeCode: user?.employeeCode || '',
         firstName: user?.firstName || personal.firstName || '',
         middleName: personal.middleName || '',
@@ -136,7 +163,19 @@ const buildEmployeePayload = (user, profile = null) => {
             aadhaarNumber: identity.aadhaarNumber || ''
         },
         compensation: {
-            ctc: compensation.ctc ?? null
+            ctc: compensation.ctc ?? null,
+            pfEnabled: getBool('pfEnabled', true),
+            esiEnabled: getBool('esiEnabled', true),
+            ptEnabled: getBool('ptEnabled', true),
+            lwfEnabled: getBool('lwfEnabled', true),
+            gratuityEnabled: getBool('gratuityEnabled', true),
+            includePfInCTC: getBool('includePfInCTC', false),
+            includeGratuityInCTC: getBool('includeGratuityInCTC', true),
+            basicPercent: getNum('basicPercent', null),
+            hraPercent: getNum('hraPercent', null),
+            useSalaryComponents: getBool('useSalaryComponents', true),
+            ptState: getStr('ptState', ''),
+            salaryBreakup: salaryBreakup instanceof Map ? Object.fromEntries(salaryBreakup) : (salaryBreakup || {})
         },
         bankDetails: {
             accountNumber: bankDetails.accountNumber || '',
