@@ -284,7 +284,7 @@ const createUser = async (req, res) => {
                 calculatedSalary.basic = String(master.basicMaster);
                 calculatedSalary.hra = String(master.hraMaster);
                 calculatedSalary.specialAllowance = String(master.specialAllowance);
-                calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
+                calculatedSalary.monthlyGross = String(master.totalEarnings);
                 
                 calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                 calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
@@ -513,7 +513,7 @@ const updateUser = async (req, res) => {
                 calculatedSalary.basic = String(master.basicMaster);
                 calculatedSalary.hra = String(master.hraMaster);
                 calculatedSalary.specialAllowance = String(master.specialAllowance);
-                calculatedSalary.monthlyGross = String(master.grossSalary || master.totalEarnings);
+                calculatedSalary.monthlyGross = String(master.totalEarnings);
                 
                 calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                 calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
