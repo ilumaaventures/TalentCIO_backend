@@ -109,7 +109,8 @@ const getAttendanceSummary = async (req, res) => {
                 {
                     $group: {
                         _id: '$user',
-                        workingDays: {
+                        // presentDays: sum of PRESENT (1) + HALF_DAY (0.5) days
+                        presentDays: {
                             $sum: {
                                 $switch: {
                                     branches: [
@@ -141,7 +142,7 @@ const getAttendanceSummary = async (req, res) => {
                 .select('date')
                 .lean(),
             User.find({ companyId: req.companyId }, null, { includeDeleted: true })
-                .select('_id employeeCode isActive')
+                .select('_id employeeCode isActive joiningDate')
                 .lean()
         ]);
 
@@ -151,12 +152,39 @@ const getAttendanceSummary = async (req, res) => {
         const leaveConfigMap = new Map(
             leaveConfigs.map((config) => [config.leaveType, config])
         );
+
+        /**
+         * Compute the total schedulable working days in the month for an employee.
+         * Accounts for:
+         *   - Weekly off days (Saturday/Sunday by default)
+         *   - Company holidays in the month
+         *   - Employee joining date (days before joining are NOT applicable)
+         */
+        const computeWorkingDays = (joiningDate) => {
+            const effectiveStart = joiningDate && new Date(joiningDate) > start
+                ? new Date(joiningDate)
+                : start;
+            let count = 0;
+            const cursor = new Date(effectiveStart);
+            while (cursor < end) {
+                const dayName = format(cursor, 'EEEE');
+                const isWeeklyOff = weeklyOffs.includes(dayName);
+                const isHoliday = holidayDateSet.has(cursor.toDateString());
+                if (!isWeeklyOff && !isHoliday) {
+                    count++;
+                }
+                cursor.setDate(cursor.getDate() + 1);
+            }
+            return count;
+        };
+
         const summaryMap = new Map();
 
+        // Seed the map with confirmed present days (from Attendance records)
         attendanceSummary.forEach((entry) => {
             summaryMap.set(String(entry._id), {
                 employeeId: '',
-                workingDays: Number(entry.workingDays || 0),
+                presentDays: Number(entry.presentDays || 0),
                 unpaidLeaves: 0,
                 paidLeaves: 0
             });
@@ -193,7 +221,7 @@ const getAttendanceSummary = async (req, res) => {
             const userKey = String(leave.user);
             const summary = summaryMap.get(userKey) || {
                 employeeId: '',
-                workingDays: 0,
+                presentDays: 0,
                 unpaidLeaves: 0,
                 paidLeaves: 0
             };
@@ -211,14 +239,30 @@ const getAttendanceSummary = async (req, res) => {
             .filter((user) => user.isActive || summaryMap.has(String(user._id)))
             .map((user) => {
                 const summary = summaryMap.get(String(user._id)) || {
-                    workingDays: 0,
+                    presentDays: 0,
                     unpaidLeaves: 0,
                     paidLeaves: 0
                 };
 
+                // Total schedulable working days for this employee this month.
+                // Days before the joining date are NOT applicable and excluded.
+                const workingDays = computeWorkingDays(user.joiningDate);
+
+                // Absent days = workingDays that are neither present nor on approved leave
+                const presentAndLeave = Math.min(
+                    (summary.presentDays || 0) + (summary.paidLeaves || 0) + (summary.unpaidLeaves || 0),
+                    workingDays
+                );
+                const absentDays = Math.max(workingDays - presentAndLeave, 0);
+
                 return {
                     employeeId: user.employeeCode || String(user._id),
-                    workingDays: Number(summary.workingDays || 0),
+                    // workingDays: total schedulable days (denominator for payroll proration)
+                    workingDays,
+                    // presentDays: actual days marked PRESENT / HALF_DAY
+                    presentDays: Number(summary.presentDays || 0),
+                    // absentDays: working days with no presence, leave, or attendance record
+                    absentDays,
                     unpaidLeaves: Number(summary.unpaidLeaves || 0),
                     paidLeaves: Number(summary.paidLeaves || 0)
                 };
