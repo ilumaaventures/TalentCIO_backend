@@ -446,19 +446,26 @@ const updateUser = async (req, res) => {
                 annualCTC = monthlyCTC * 12;
             }
 
+            // parseBoolVal handles both boolean false AND string "false" from clients/Maps
+            const parseBoolVal = (val, def) => {
+                if (val === false || val === 'false') return false;
+                if (val === true  || val === 'true')  return true;
+                return def;
+            };
+
             const source = {
                 monthlyCTC,
                 payType: calculatedSalary.payType || 'salaried',
-                pfEnabled: calculatedSalary.pfEnabled !== false,
-                esiEnabled: calculatedSalary.esiEnabled !== false,
-                ptEnabled: calculatedSalary.ptEnabled !== false,
-                lwfEnabled: calculatedSalary.lwfEnabled !== false,
-                gratuityEnabled: calculatedSalary.gratuityEnabled !== false,
-                includePfInCTC: !!calculatedSalary.includePfInCTC,
-                includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
+                pfEnabled: parseBoolVal(calculatedSalary.pfEnabled, true),
+                esiEnabled: parseBoolVal(calculatedSalary.esiEnabled, true),
+                ptEnabled: parseBoolVal(calculatedSalary.ptEnabled, true),
+                lwfEnabled: parseBoolVal(calculatedSalary.lwfEnabled, true),
+                gratuityEnabled: parseBoolVal(calculatedSalary.gratuityEnabled, true),
+                includePfInCTC: parseBoolVal(calculatedSalary.includePfInCTC, false),
+                includeGratuityInCTC: parseBoolVal(calculatedSalary.includeGratuityInCTC, true),
                 basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
                 hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
-                useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
+                useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? parseBoolVal(calculatedSalary.useSalaryComponents, true) : true,
                 ptState: calculatedSalary.ptState || '',
                 insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                 employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
@@ -466,6 +473,17 @@ const updateUser = async (req, res) => {
                     professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                 }
             };
+
+            // Write parsed boolean flags back to calculatedSalary so they are stored
+            // as native booleans in the Map — never as strings.
+            calculatedSalary.pfEnabled = source.pfEnabled;
+            calculatedSalary.esiEnabled = source.esiEnabled;
+            calculatedSalary.ptEnabled = source.ptEnabled;
+            calculatedSalary.lwfEnabled = source.lwfEnabled;
+            calculatedSalary.gratuityEnabled = source.gratuityEnabled;
+            calculatedSalary.includePfInCTC = source.includePfInCTC;
+            calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
+            calculatedSalary.useSalaryComponents = source.useSalaryComponents;
             
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
@@ -527,14 +545,19 @@ const updateUser = async (req, res) => {
                 });
             }
 
-            profile.compensation = {
-                ...(profile.compensation || {}),
-                ctc: calculatedSalary.annualCTC ? parseFloat(calculatedSalary.annualCTC) / 12 : null,
-                salaryBreakup: {
-                    ...(profile.compensation?.salaryBreakup || {}),
-                    ...calculatedSalary
-                }
-            };
+            // Use targeted set() calls with dot-notation paths so we ONLY update
+            // ctc and salaryBreakup — never touch bankDetails or other fields,
+            // which avoids the "Cast to Object failed for undefined" error on bankDetails.
+            const newCTC = calculatedSalary.annualCTC ? parseFloat(calculatedSalary.annualCTC) / 12 : null;
+            profile.set('compensation.ctc', newCTC);
+            profile.set('compensation.payType', calculatedSalary.payType || 'salaried');
+
+            // Build a clean plain-object breakup (no Mongoose internal $ keys).
+            const existingBreakup = profile.compensation?.salaryBreakup instanceof Map
+                ? Object.fromEntries(profile.compensation.salaryBreakup)
+                : {};
+            const newBreakup = { ...existingBreakup, ...calculatedSalary };
+            profile.set('compensation.salaryBreakup', newBreakup);
 
             await profile.save();
 
