@@ -265,7 +265,13 @@ const createUser = async (req, res) => {
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
-                        const customVal = calculatedSalary[c.id];
+                        let customVal = calculatedSalary[c.id];
+                        if (customVal === undefined && c.id === 'flexi') {
+                            customVal = calculatedSalary['flexiAmount'];
+                        }
+                        if (customVal === undefined && c.id === 'medical') {
+                            customVal = calculatedSalary['medicalAllowance'];
+                        }
                         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                     }
                 });
@@ -488,7 +494,13 @@ const updateUser = async (req, res) => {
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
-                        const customVal = calculatedSalary[c.id];
+                        let customVal = calculatedSalary[c.id];
+                        if (customVal === undefined && c.id === 'flexi') {
+                            customVal = calculatedSalary['flexiAmount'];
+                        }
+                        if (customVal === undefined && c.id === 'medical') {
+                            customVal = calculatedSalary['medicalAllowance'];
+                        }
                         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                     }
                 });

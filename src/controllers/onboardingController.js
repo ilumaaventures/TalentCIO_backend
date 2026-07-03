@@ -387,7 +387,13 @@ exports.addEmployee = async (req, res) => {
                         if (config.salaryComponents) {
                             config.salaryComponents.forEach(c => {
                                 if (c.linkedTo === 'fixed') {
-                                    const customVal = calculatedSalary[c.id];
+                                    let customVal = calculatedSalary[c.id];
+                                    if (customVal === undefined && c.id === 'flexi') {
+                                        customVal = calculatedSalary['flexiAmount'];
+                                    }
+                                    if (customVal === undefined && c.id === 'medical') {
+                                        customVal = calculatedSalary['medicalAllowance'];
+                                    }
                                     source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                                 }
                             });
@@ -1231,7 +1237,13 @@ exports.updateEmployee = async (req, res) => {
                     if (config.salaryComponents) {
                         config.salaryComponents.forEach(c => {
                             if (c.linkedTo === 'fixed') {
-                                const customVal = calculatedSalary[c.id];
+                                let customVal = calculatedSalary[c.id];
+                                if (customVal === undefined && c.id === 'flexi') {
+                                    customVal = calculatedSalary['flexiAmount'];
+                                }
+                                if (customVal === undefined && c.id === 'medical') {
+                                    customVal = calculatedSalary['medicalAllowance'];
+                                }
                                 source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                             }
                         });
@@ -2505,7 +2517,13 @@ const getSalaryBreakups = async (employee) => {
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
-                        const customVal = employee.salary?.[c.id];
+                        let customVal = employee.salary?.[c.id];
+                        if (customVal === undefined && c.id === 'flexi') {
+                            customVal = employee.salary?.['flexiAmount'];
+                        }
+                        if (customVal === undefined && c.id === 'medical') {
+                            customVal = employee.salary?.['medicalAllowance'];
+                        }
                         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
                     }
                 });
