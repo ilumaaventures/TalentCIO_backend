@@ -672,6 +672,12 @@ exports.getDiscussionsBootstrap = async (req, res) => {
         const skip = (page - 1) * limit;
 
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
+        if (req.query.status) {
+            accessMatch.status = req.query.status;
+        }
+        if (req.query.project) {
+            accessMatch.project = req.query.project === 'null' ? null : new MongooseObjectId(String(req.query.project));
+        }
         const totalPromise = Discussion.countDocuments(accessMatch);
         const discussionsPromise = Discussion.aggregate([
             { $match: accessMatch },

@@ -85,6 +85,12 @@ exports.getDiscussions = async (req, res) => {
         const skip = (page - 1) * limit;
 
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
+        if (req.query.status) {
+            accessMatch.status = req.query.status;
+        }
+        if (req.query.project) {
+            accessMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+        }
         const total = await Discussion.countDocuments(accessMatch);
 
         let discussions = await Discussion.aggregate([
