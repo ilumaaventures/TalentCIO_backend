@@ -277,7 +277,21 @@ const getAttendanceSummary = async (req, res) => {
     }
 };
 
+const PayrollConfig = require('../models/PayrollConfig');
+
+const getPayrollConfig = async (req, res) => {
+    try {
+        const config = await PayrollConfig.findOne({ companyId: req.companyId }).lean();
+        const responsePayload = buildEncryptedResponseIfNeeded(config || {}, req.payrollIntegration);
+        res.json(responsePayload);
+    } catch (error) {
+        console.error('[PayrollIntegration] config sync error:', error);
+        res.status(500).json({ message: 'Failed to fetch payroll configuration for sync.' });
+    }
+};
+
 module.exports = {
     getEmployees,
-    getAttendanceSummary
+    getAttendanceSummary,
+    getPayrollConfig
 };
