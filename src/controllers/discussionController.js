@@ -19,12 +19,14 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
 exports.createDiscussion = async (req, res) => {
     try {
         const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project } = req.body;
-        const selectedSupervisorId = supervisor || participantUserId;
+        const selectedSupervisorIds = Array.isArray(supervisor)
+            ? supervisor
+            : (supervisor || participantUserId ? [supervisor || participantUserId] : []);
         const normalizedVisibleTo = Array.isArray(visibleToUserIds)
             ? visibleToUserIds
             : (visibleToUserIds ? [visibleToUserIds] : []);
 
-        if (!selectedSupervisorId) {
+        if (!selectedSupervisorIds.length) {
             return res.status(400).json({ message: 'Supervisor is required' });
         }
 
@@ -38,14 +40,14 @@ exports.createDiscussion = async (req, res) => {
             status: status || 'inprogress',
             dueDate,
             createdBy: req.user._id,
-            supervisor: selectedSupervisorId,
+            supervisor: selectedSupervisorIds,
             visibleToUsers: normalizedVisibleTo,
-            participants: buildDiscussionParticipants(req.user._id, selectedSupervisorId, normalizedVisibleTo),
+            participants: buildDiscussionParticipants(req.user._id, selectedSupervisorIds, normalizedVisibleTo),
             project: (project && mongoose.isValidObjectId(project)) ? project : null
         });
         await newDiscussion.save();
 
-        const recipients = buildDiscussionParticipants(selectedSupervisorId, normalizedVisibleTo)
+        const recipients = buildDiscussionParticipants(selectedSupervisorIds, normalizedVisibleTo)
             .filter((userId) => String(userId) !== String(req.user._id));
 
         if (recipients.length) {
@@ -77,9 +79,9 @@ exports.createDiscussion = async (req, res) => {
 
 exports.getDiscussions = async (req, res) => {
     try {
-        setPrivateCache(res, 30);
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = parseInt(req.query.limit, 10) || 30;
         const skip = (page - 1) * limit;
 
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
@@ -156,22 +158,37 @@ exports.updateDiscussion = async (req, res) => {
             }
         }
 
-        const updateData = { title, discussion, status, dueDate };
+        const updateData = { discussion };
+        if (title !== undefined) {
+            updateData.title = title;
+        }
+        if (dueDate !== undefined) {
+            updateData.dueDate = dueDate;
+        }
+        if (status !== undefined) {
+            updateData.status = status;
+        }
         if (project !== undefined) {
             updateData.project = (project && mongoose.isValidObjectId(project)) ? project : null;
         }
-        const selectedSupervisorId = supervisor || participantUserId || existingDiscussion.supervisor;
+        const selectedSupervisorIds = Array.isArray(supervisor)
+            ? supervisor
+            : (supervisor || participantUserId ? [supervisor || participantUserId] : existingDiscussion.supervisor);
         const normalizedVisibleTo = Array.isArray(visibleToUserIds)
             ? visibleToUserIds
             : (visibleToUserIds ? [visibleToUserIds] : existingDiscussion.visibleToUsers || []);
 
         if (supervisor || participantUserId) {
-            updateData.supervisor = selectedSupervisorId;
+            updateData.supervisor = selectedSupervisorIds;
         }
         if (visibleToUserIds !== undefined) {
             updateData.visibleToUsers = normalizedVisibleTo;
         }
-        updateData.participants = buildDiscussionParticipants(existingDiscussion.createdBy, updateData.supervisor || selectedSupervisorId, updateData.visibleToUsers || normalizedVisibleTo);
+        updateData.participants = buildDiscussionParticipants(
+            existingDiscussion.createdBy,
+            updateData.supervisor || selectedSupervisorIds,
+            updateData.visibleToUsers || normalizedVisibleTo
+        );
 
         const updatedDiscussion = await Discussion.findOneAndUpdate(
             { _id: id, companyId: req.companyId },

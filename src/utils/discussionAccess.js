@@ -20,6 +20,12 @@ const toObjectId = (value) => (
 
 const idsMatch = (left, right) => String(left || '') === String(right || '');
 
+const isSupervisor = (discussion, userId) => {
+    if (!discussion?.supervisor) return false;
+    const supervisors = Array.isArray(discussion.supervisor) ? discussion.supervisor : [discussion.supervisor];
+    return supervisors.some((s) => idsMatch(s?._id || s, userId));
+};
+
 const buildAccessibleDiscussionMatch = (companyId, user) => {
     const match = {
         companyId: toObjectId(companyId)
@@ -47,7 +53,7 @@ const canAccessDiscussion = (discussion, user) => {
 
     return (
         idsMatch(discussion.createdBy?._id || discussion.createdBy, user._id) ||
-        idsMatch(discussion.supervisor?._id || discussion.supervisor, user._id) ||
+        isSupervisor(discussion, user._id) ||
         (Array.isArray(discussion.visibleToUsers) && discussion.visibleToUsers.some((visibleUser) => idsMatch(visibleUser?._id || visibleUser, user._id))) ||
         (Array.isArray(discussion.participants) && discussion.participants.some((participant) => idsMatch(participant?._id || participant, user._id)))
     );
@@ -56,7 +62,7 @@ const canAccessDiscussion = (discussion, user) => {
 const canEditDiscussion = (discussion, user) => (
     isDiscussionAdmin(user) ||
     idsMatch(discussion?.createdBy?._id || discussion?.createdBy, user?._id) ||
-    idsMatch(discussion?.supervisor?._id || discussion?.supervisor, user?._id)
+    isSupervisor(discussion, user?._id)
 );
 
 const canDeleteDiscussion = (discussion, user) => (
@@ -66,7 +72,7 @@ const canDeleteDiscussion = (discussion, user) => (
 
 const canChangeRestrictedDiscussionStatus = (discussion, user) => (
     isDiscussionAdmin(user) ||
-    idsMatch(discussion?.supervisor?._id || discussion?.supervisor, user?._id)
+    isSupervisor(discussion, user?._id)
 );
 
 const buildDiscussionParticipants = (...candidateIds) => {

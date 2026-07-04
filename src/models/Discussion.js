@@ -24,11 +24,11 @@ const discussionSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    supervisor: {
+    supervisor: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
-    },
+    }],
     visibleToUsers: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
