@@ -81,7 +81,7 @@ exports.getDiscussions = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit, 10) || 30;
+        const limit = parseInt(req.query.limit, 10) || 100;
         const skip = (page - 1) * limit;
 
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
