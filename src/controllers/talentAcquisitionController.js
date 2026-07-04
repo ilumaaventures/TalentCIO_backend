@@ -166,6 +166,17 @@ const serializeHiringRequestResponse = (request, user) => (
     serializeHiringRequestForViewer(normalizeHiringRequestResponse(request), user)
 );
 
+const serializeHiringRequestResponseWithCount = async (request, user, companyId) => {
+    const serialized = serializeHiringRequestResponse(request, user);
+    if (serialized && serialized._id) {
+        serialized.publicApplicationsCount = await PublicApplication.countDocuments({
+            hiringRequestId: serialized._id,
+            companyId
+        });
+    }
+    return serialized;
+};
+
 const getCurrentApprovalStepApproverIds = (request) => {
     const currentLevelIndex = Number(request?.currentApprovalLevel || 1) - 1;
     const currentStep = Array.isArray(request?.approvalChain) ? request.approvalChain[currentLevelIndex] : null;
@@ -835,7 +846,8 @@ exports.getHiringRequestById = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        res.status(200).json(serializeHiringRequestResponse(request, req.user));
+        const serialized = await serializeHiringRequestResponseWithCount(request, req.user, req.companyId);
+        res.status(200).json(serialized);
     } catch (error) {
         console.error('Error fetching hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -1020,7 +1032,8 @@ exports.updateHiringRequest = async (req, res) => {
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
 
-        res.status(200).json(serializeHiringRequestResponse(updatedRequest || request.toObject(), req.user));
+        const serialized = await serializeHiringRequestResponseWithCount(updatedRequest || request.toObject(), req.user, req.companyId);
+        res.status(200).json(serialized);
     } catch (error) {
         console.error('Error updating hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -1221,7 +1234,8 @@ exports.approveHiringRequest = async (req, res) => {
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
 
-        res.status(200).json(serializeHiringRequestResponse(updatedRequest || request.toObject(), req.user));
+        const serialized = await serializeHiringRequestResponseWithCount(updatedRequest || request.toObject(), req.user, req.companyId);
+        res.status(200).json(serialized);
 
     } catch (error) {
         console.error('Error approving hiring request:', error);
@@ -1318,7 +1332,8 @@ exports.rejectHiringRequest = async (req, res) => {
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, request._id).lean();
 
-        res.status(200).json(serializeHiringRequestResponse(updatedRequest || request.toObject(), req.user));
+        const serialized = await serializeHiringRequestResponseWithCount(updatedRequest || request.toObject(), req.user, req.companyId);
+        res.status(200).json(serialized);
     } catch (error) {
         console.error('Error rejecting hiring request:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
@@ -1421,7 +1436,8 @@ exports.closeHiringRequest = async (req, res) => {
 
         const updatedRequest = await buildHiringRequestDetailsQuery(req.companyId, existingRequest._id).lean();
 
-        res.status(200).json(serializeHiringRequestResponse(updatedRequest || existingRequest.toObject(), req.user));
+        const serialized = await serializeHiringRequestResponseWithCount(updatedRequest || existingRequest.toObject(), req.user, req.companyId);
+        res.status(200).json(serialized);
 
     } catch (error) {
         console.error(error);
@@ -1541,8 +1557,9 @@ exports.toggleJobVisibility = async (req, res) => {
             messageParts.push(`Resource Gateway ${req.body.isResourceGatewayPublic ? 'enabled' : 'disabled'}`);
         }
 
+        const serialized = await serializeHiringRequestResponseWithCount(updatedRequest || request.toObject(), req.user, req.companyId);
         res.status(200).json({
-            job: serializeHiringRequestResponse(updatedRequest || request.toObject(), req.user),
+            job: serialized,
             capabilities: {
                 resourceGatewayEnabledForCompany
             },
