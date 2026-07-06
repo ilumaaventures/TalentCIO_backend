@@ -1986,7 +1986,11 @@ exports.getClientAnalytics = async (req, res) => {
                 c.phase3Decision === 'No Show' ||
                 c.phase3Decision === 'Offer Declined' ||
                 c.status === 'Not Interested' ||
-                c.status === 'Not Picking'
+                c.status === 'Not Picking' ||
+                c.status === 'Not Relevant' ||
+                c.status === 'High expectation' ||
+                c.status === 'Long Notice period' ||
+                c.status === 'Location Not suitable'
             ) {
                 pipelineStages['Rejected / Drop-off']++;
                 return;
@@ -2294,7 +2298,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
 
             // Interested Stage: Anyone who entered the process and isn't explicitly disqualified/not interested
-            if (!['Not Interested', 'Not Relevant', 'Not Picking'].includes(c.status)) {
+            if (!['Not Interested', 'Not Relevant', 'Not Picking', 'High expectation', 'Long Notice period', 'Location Not suitable'].includes(c.status)) {
                 funnel.interested++;
             }
 
