@@ -260,20 +260,88 @@ onboardingEmployeeSchema.methods.matchPassword = async function (enteredPassword
     return await bcrypt.compare(enteredPassword, this.tempPassword);
 };
 
+const seedOnboardingEmployeeSequenceCounter = async (companyId, year) => {
+    const SequenceCounter = require('./SequenceCounter');
+    const existingCounter = await SequenceCounter.findOne({
+        companyId,
+        key: 'onboarding_emp',
+        year
+    }).lean();
+
+    if (existingCounter) {
+        return existingCounter;
+    }
+
+    const prefix = `EMP-${year}-`;
+    const latestEmp = await mongoose.model('OnboardingEmployee').findOne({
+        companyId,
+        tempEmployeeId: { $regex: `^${prefix}` }
+    })
+        .sort({ tempEmployeeId: -1 })
+        .select('tempEmployeeId')
+        .lean();
+
+    let lastSequence = 0;
+    if (latestEmp && latestEmp.tempEmployeeId) {
+        const suffix = latestEmp.tempEmployeeId.slice(prefix.length);
+        lastSequence = parseInt(suffix, 10) || 0;
+    }
+
+    try {
+        return await SequenceCounter.create({
+            companyId,
+            key: 'onboarding_emp',
+            year,
+            seq: lastSequence
+        });
+    } catch (error) {
+        if (error?.code !== 11000) {
+            throw error;
+        }
+
+        return SequenceCounter.findOne({
+            companyId,
+            key: 'onboarding_emp',
+            year
+        }).lean();
+    }
+};
+
 // Generate Temp Employee ID — atomic via SequenceCounter to prevent race conditions
 onboardingEmployeeSchema.statics.generateTempId = async function (companyId) {
     const SequenceCounter = require('./SequenceCounter');
     const year = new Date().getFullYear();
 
-    // findOneAndUpdate with $inc is atomic in MongoDB — no race condition possible
-    const counter = await SequenceCounter.findOneAndUpdate(
-        { companyId, key: 'onboarding_emp', year },
-        { $inc: { seq: 1 } },
-        { upsert: true, new: true }
-    );
+    await seedOnboardingEmployeeSequenceCounter(companyId, year);
 
-    return `EMP-${year}-${String(counter.seq).padStart(4, '0')}`;
+    let tempEmployeeId = '';
+    let isUnique = false;
+    let attempts = 0;
+    const maxAttempts = 100;
+
+    while (!isUnique && attempts < maxAttempts) {
+        attempts++;
+        const counter = await SequenceCounter.findOneAndUpdate(
+            { companyId, key: 'onboarding_emp', year },
+            { $inc: { seq: 1 } },
+            { new: true }
+        );
+
+        tempEmployeeId = `EMP-${year}-${String(counter.seq).padStart(4, '0')}`;
+        
+        const existing = await this.findOne({ companyId, tempEmployeeId });
+        if (!existing) {
+            isUnique = true;
+        }
+    }
+
+    if (!isUnique) {
+        throw new Error('Failed to generate a unique temporary Employee ID after maximum attempts.');
+    }
+
+    return tempEmployeeId;
 };
+
 
 
 module.exports = mongoose.model('OnboardingEmployee', onboardingEmployeeSchema);
