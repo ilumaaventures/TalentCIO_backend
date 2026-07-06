@@ -903,6 +903,100 @@ exports.checkDuplicateCandidate = async (req, res) => {
     }
 };
 
+const handleCandidateShortlist = async (candidate, req) => {
+    const companyId = req.companyId;
+    const userId = req.user._id;
+
+    // 1. Auto Interested:
+    if (candidate.status !== 'Interested') {
+        candidate.status = 'Interested';
+        candidate.statusHistory.push({
+            status: 'Interested',
+            changedBy: userId,
+            changedAt: new Date(),
+            remark: `Auto-updated to Interested on ${candidate.decision}`
+        });
+    }
+
+    // 2. Schedule interview
+    const phase1Rounds = (candidate.interviewRounds || []).filter(round => Number(round.phase || 1) === 1);
+    
+    if (phase1Rounds.length === 0) {
+        // Find hiring request to see if it has an interview workflow
+        const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId }).populate('interviewWorkflowId');
+        
+        let roundsToAdd = [];
+        if (hiringRequest && hiringRequest.interviewWorkflowId && hiringRequest.interviewWorkflowId.rounds && hiringRequest.interviewWorkflowId.rounds.length > 0) {
+            roundsToAdd = hiringRequest.interviewWorkflowId.rounds.map(r => ({
+                levelName: r.levelName,
+                assignedTo: r.user ? [r.user] : [],
+                status: 'Scheduled',
+                phase: 1
+            }));
+        } else {
+            roundsToAdd = [{
+                levelName: 'L1 - Technical',
+                assignedTo: [],
+                status: 'Scheduled',
+                phase: 1
+            }];
+        }
+        
+        if (!candidate.interviewRounds) {
+            candidate.interviewRounds = [];
+        }
+        candidate.interviewRounds.push(...roundsToAdd);
+        return { hasNewRounds: true, roundsToAdd };
+    }
+    return { hasNewRounds: false };
+};
+
+const sendAutoScheduleNotifications = async (candidate, roundsToAdd, req) => {
+    const app = req.app;
+    const io = app ? app.get('io') : null;
+    if (!io) return;
+
+    const origin = req.headers ? req.headers.origin : undefined;
+    
+    const notifications = [];
+    candidate.interviewRounds.forEach(savedRound => {
+        const matchedInput = roundsToAdd.find(r => r.levelName === savedRound.levelName && Number(savedRound.phase || 1) === 1);
+        if (matchedInput && savedRound.assignedTo && savedRound.assignedTo.length > 0) {
+            const roundPhase = Number(savedRound.phase || 1);
+            savedRound.assignedTo.forEach(userId => {
+                notifications.push({
+                    user: userId,
+                    companyId: req.companyId,
+                    preferenceKey: 'interview_assigned',
+                    title: 'New Interview Assigned',
+                    message: `You have been assigned to evaluate ${candidate.candidateName} for the ${savedRound.levelName} round.`,
+                    type: 'Interview',
+                    link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view?phase=${roundPhase}`,
+                    origin: origin,
+                    metadata: {
+                        candidateId: candidate._id,
+                        roundId: savedRound._id,
+                        hiringRequestId: candidate.hiringRequestId._id || candidate.hiringRequestId,
+                        phase: roundPhase
+                    }
+                });
+            });
+        }
+    });
+
+    if (notifications.length > 0) {
+        await NotificationService.createManyNotifications(io, notifications);
+
+        notifications.forEach(notif => {
+            NotificationService.emitToUser(io, notif.user, 'interview_update', {
+                candidateId: candidate._id,
+                candidateName: candidate.candidateName,
+                roundId: notif.metadata.roundId
+            });
+        });
+    }
+};
+
 // Create new candidate
 exports.createCandidate = async (req, res) => {
     try {
@@ -1267,7 +1361,16 @@ exports.createCandidate = async (req, res) => {
                 });
             }
 
+            let shortlistResult = null;
+            if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(candidate.decision)) {
+                shortlistResult = await handleCandidateShortlist(candidate, req);
+            }
+
             await candidate.save();
+
+            if (shortlistResult && shortlistResult.hasNewRounds) {
+                await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+            }
 
             const populatedUpdate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
                 .populate('uploadedBy', 'firstName lastName email')
@@ -1343,7 +1446,16 @@ exports.createCandidate = async (req, res) => {
             }
         }
 
+        let shortlistResult = null;
+        if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(candidate.decision)) {
+            shortlistResult = await handleCandidateShortlist(candidate, req);
+        }
+
         await candidate.save();
+
+        if (shortlistResult && shortlistResult.hasNewRounds) {
+            await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+        }
 
         const populatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
@@ -1942,7 +2054,17 @@ exports.updateCandidateDecision = async (req, res) => {
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);
         }
+
+        let shortlistResult = null;
+        if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(decision)) {
+            shortlistResult = await handleCandidateShortlist(candidate, req);
+        }
+
         await candidate.save();
+
+        if (shortlistResult && shortlistResult.hasNewRounds) {
+            await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+        }
 
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
