@@ -1,6 +1,7 @@
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const Company = require('../models/Company');
 const Candidate = require('../models/Candidate');
+const { setSessionCookie, clearSessionCookie } = require('../utils/sessionCookies');
 const EmailTemplate = require('../models/EmailTemplate');
 const HREmailLog = require('../models/HREmailLog');
 const { sendEmailForCompany } = require('../services/companyEmailService');
@@ -1674,8 +1675,12 @@ exports.employeeLogin = async (req, res) => {
 
         await employee.save();
 
+        setSessionCookie(res, req, token, {
+            cookieName: 'onboarding_session',
+            maxAgeMs: 15 * 60 * 1000 // 15 mins
+        });
+
         res.status(200).json({
-            token,
             isPasswordChanged: employee.isPasswordChanged,
             employee: {
                 _id: employee._id,
@@ -1683,8 +1688,7 @@ exports.employeeLogin = async (req, res) => {
                 firstName: employee.firstName,
                 lastName: employee.lastName,
                 status: employee.status,
-                documentDeadline: employee.documentDeadline,
-                joiningDate: employee.joiningDate
+                documentDeadline: employee.documentDeadline
             }
         });
     } catch (error) {
@@ -1701,7 +1705,11 @@ exports.refreshToken = async (req, res) => {
             process.env.JWT_SECRET,
             { expiresIn: '15m' }
         );
-        res.status(200).json({ token });
+        setSessionCookie(res, req, token, {
+            cookieName: 'onboarding_session',
+            maxAgeMs: 15 * 60 * 1000
+        });
+        res.status(200).json({ message: 'Session refreshed' });
     } catch (error) {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
@@ -1731,7 +1739,12 @@ exports.changePassword = async (req, res) => {
             { expiresIn: '15m' }
         );
 
-        res.status(200).json({ message: 'Password changed successfully', token });
+        setSessionCookie(res, req, token, {
+            cookieName: 'onboarding_session',
+            maxAgeMs: 15 * 60 * 1000
+        });
+
+        res.status(200).json({ message: 'Password changed successfully' });
     } catch (error) {
         console.error('Error changing password:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1742,7 +1755,7 @@ exports.changePassword = async (req, res) => {
 exports.getMyOnboarding = async (req, res) => {
     try {
         const employee = await OnboardingEmployee.findById(req.onboardingEmployee._id)
-            .select('-tempPassword -auditLog');
+            .select('-tempPassword -auditLog -salary -joiningDate -offerDate -workLocation -address -letterGenerated -offerStatus');
 
         if (!employee) return res.status(404).json({ message: 'Not found' });
 
@@ -1750,13 +1763,63 @@ exports.getMyOnboarding = async (req, res) => {
 
         // Fetch company settings for templates and policies
         const company = await Company.findById(employee.companyId).select('settings.onboarding');
-        const policies = company?.settings?.onboarding?.policies || [];
-        const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        let policies = company?.settings?.onboarding?.policies || [];
+        let dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+
+        const employeeObj = employee.toObject();
+
+        // Remove HR-internal config from candidate payload
+        delete employeeObj.selectionDraft;
+
+        const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
+        const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
+
+        // If selective onboarding is configured, filter the sections and documents accordingly
+        if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
+            // Filter sections
+            if (activeSectionLabels.length > 0) {
+                if (!activeSectionLabels.includes('Personal Details')) {
+                    delete employeeObj.personalDetails;
+                }
+                if (!activeSectionLabels.includes('Emergency Contact')) {
+                    delete employeeObj.emergencyContact;
+                }
+                if (!activeSectionLabels.includes('Bank Details')) {
+                    delete employeeObj.bankDetails;
+                }
+
+                // Keep offerDeclaration if specifically requested or if any offer templates/letters are requested
+                const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
+                    activeDocumentLabels.includes('Offer Letter') ||
+                    dynamicTemplates.some(t => activeDocumentLabels.includes(t.name));
+
+                if (!showOfferDeclaration) {
+                    delete employeeObj.offerDeclaration;
+                }
+            }
+
+            // Filter documents, company policies and dynamic templates
+            if (activeDocumentLabels.length > 0) {
+                if (employeeObj.documents) {
+                    employeeObj.documents = employeeObj.documents.filter(doc => activeDocumentLabels.includes(doc.label));
+                }
+                policies = policies.filter(p => activeDocumentLabels.includes(p.name));
+                dynamicTemplates = dynamicTemplates.filter(t => activeDocumentLabels.includes(t.name));
+            }
+        }
+
+        // Strip raw Cloudinary template paths/URLs before returning templates
+        const cleanedTemplates = dynamicTemplates.map(t => {
+            const tObj = typeof t.toObject === 'function' ? t.toObject() : { ...t };
+            delete tObj.url;
+            delete tObj.publicId;
+            return tObj;
+        });
 
         res.status(200).json({
-            ...employee.toObject(),
+            ...employeeObj,
             companyPolicies: policies,
-            dynamicTemplates: dynamicTemplates
+            dynamicTemplates: cleanedTemplates
         });
     } catch (error) {
         console.error('Error fetching profile:', error);
@@ -3278,6 +3341,7 @@ exports.logout = async (req, res) => {
         });
 
         await employee.save();
+        clearSessionCookie(res, req, 'onboarding_session');
         res.status(200).json({ message: 'Logged out successfully' });
     } catch (error) {
         console.error('Error logging out onboarding employee:', error);
