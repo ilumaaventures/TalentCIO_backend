@@ -13,15 +13,15 @@ router.use('/settings', requireModule('onboarding'));
 const onboardingController = require('../controllers/onboardingController');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const jwt = require('jsonwebtoken');
+const { getTokenFromRequest } = require('../utils/sessionCookies');
 const { getOnboardingBootstrap } = require('../controllers/pageBootstrapController');
 // Onboarding Token Auth Middleware
 // ==========================================
 const protectOnboarding = async (req, res, next) => {
-    let token;
+    let token = getTokenFromRequest(req, 'onboarding_session');
 
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    if (token) {
         try {
-            token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
             if (decoded.type !== 'onboarding') {
