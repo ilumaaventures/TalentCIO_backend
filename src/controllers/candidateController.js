@@ -29,6 +29,9 @@ const LEGACY_STATUS_VALUES = new Set([
     'Not Relevant',
     'Not Picking',
     'In Interview',
+    'High expectation',
+    'Long Notice period',
+    'Location Not suitable',
     ''
 ]);
 
@@ -3694,6 +3697,9 @@ exports.getCandidateCardFilters = async (req, res) => {
                 notPicking: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Picking').length,
                 notRelevant: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Relevant').length,
                 notInterested: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Not Interested').length,
+                highExpectation: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'High expectation').length,
+                longNoticePeriod: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Long Notice period').length,
+                locationNotSuitable: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Location Not suitable').length,
                 interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
                 shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
                 rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
