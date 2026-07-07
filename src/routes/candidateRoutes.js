@@ -36,6 +36,7 @@ router.post('/sources', protect, authorizeAny(candidateCreatePermissions), candi
 router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.delete', 'ta.candidate.edit']), candidateController.deleteCandidateSource);
 
 // CRUD operations
+router.get('/global/public-applications/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchPublicApplications);
 router.get('/global/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchCandidates);
 router.post('/', protect, candidateController.createCandidate);
 router.get('/:hiringRequestId/card-filters', protect, candidateController.getCandidateCardFilters);
