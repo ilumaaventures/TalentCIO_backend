@@ -3396,6 +3396,26 @@ const normalizeEmploymentWorkLocation = (value = '') => {
     return EMPLOYMENT_WORK_LOCATION_OPTIONS.has(trimmedValue) ? trimmedValue : 'Office';
 };
 
+const uploadBufferToCloudinary = async (buffer, folder, filename) => {
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            {
+                folder,
+                resource_type: 'raw',
+                public_id: filename
+            },
+            (error, uploaded) => {
+                if (error) {
+                    console.error('Cloudinary upload error:', error);
+                    return reject(error);
+                }
+                resolve(uploaded);
+            }
+        );
+        stream.end(buffer);
+    });
+};
+
 exports.transferToActiveEmployee = async (req, res) => {
     try {
         const { roleId, employeeCode, password } = req.body || {};
@@ -3494,6 +3514,60 @@ exports.transferToActiveEmployee = async (req, res) => {
                 uploadDate: new Date(),
                 verificationStatus: 'Pending'
             });
+        }
+
+        // --- Generate and Transfer Dynamic Templates to Dossier ---
+        const acceptedTemplates = employee.offerDeclaration?.acceptedTemplates || [];
+        for (const acceptedT of acceptedTemplates) {
+            const template = company.settings?.onboarding?.dynamicTemplates?.find(t => t._id.toString() === acceptedT.templateId.toString());
+            if (template && template.url) {
+                try {
+                    const templateBuffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+                    const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+                    const uploadedTemplate = await uploadBufferToCloudinary(
+                        templateBuffer,
+                        `talentcio/${employee.companyId}/dossier/${newUser._id}`,
+                        `${safeName}_${Date.now()}.docx`
+                    );
+                    
+                    dossierDocuments.push({
+                        category: 'Other',
+                        title: template.name,
+                        fileName: `${safeName}.docx`,
+                        url: uploadedTemplate.secure_url,
+                        uploadDate: acceptedT.acceptedAt || new Date(),
+                        verificationStatus: 'Verified'
+                    });
+                } catch (err) {
+                    console.error(`Failed to transfer dynamic template ${template.name}:`, err.message);
+                }
+            }
+        }
+
+        // Transfer standard Offer Letter if signed
+        if (employee.offerStatus === 'Accepted') {
+            const offerLetterTemplateUrl = employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl;
+            if (offerLetterTemplateUrl) {
+                try {
+                    const offerLetterBuffer = await getPopulatedDocumentBuffer(employee, company, offerLetterTemplateUrl);
+                    const uploadedOffer = await uploadBufferToCloudinary(
+                        offerLetterBuffer,
+                        `talentcio/${employee.companyId}/dossier/${newUser._id}`,
+                        `Offer_Letter_${Date.now()}.docx`
+                    );
+                    
+                    dossierDocuments.push({
+                        category: 'Offer Letter',
+                        title: 'Offer Letter',
+                        fileName: 'Offer_Letter.docx',
+                        url: uploadedOffer.secure_url,
+                        uploadDate: employee.offerDeclaration?.eSignDate || new Date(),
+                        verificationStatus: 'Verified'
+                    });
+                } catch (err) {
+                    console.error('Failed to transfer Offer Letter:', err.message);
+                }
+            }
         }
 
         const profile = new EmployeeProfile({
