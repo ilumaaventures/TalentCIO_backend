@@ -239,6 +239,10 @@ const normalizePhase2InterviewStatus = (rawStatus) => {
         return 'Shortlisted';
     }
 
+    if (normalized === 'did not turn up') {
+        return 'Did not Turn up';
+    }
+
     return null;
 };
 
@@ -516,7 +520,7 @@ const getLegacyRoundsForPhase = (candidate = {}, phase = 1) => (
 
 const getPhase2InterviewStatusValue = (candidate = {}) => {
     const normalized = String(candidate?.phase2InterviewStatus || '').trim();
-    if (['Scheduled', 'Rejected', 'Shortlisted'].includes(normalized)) {
+    if (['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up'].includes(normalized)) {
         return normalized;
     }
 
@@ -550,7 +554,9 @@ const getLegacyDisplayInterviewRoundsForPhase = (candidate = {}, phase = 1) => {
             ? 'Failed'
             : phase2InterviewStatus === 'Shortlisted'
                 ? 'Passed'
-                : 'Scheduled',
+                : phase2InterviewStatus === 'Did not Turn up'
+                    ? 'Skipped'
+                    : 'Scheduled',
         feedback: candidate?.phase2InterviewerFeedback || '',
         rating: null,
         skillRatings: []
@@ -1056,7 +1062,7 @@ exports.createCandidate = async (req, res) => {
         const allowOwnedDuplicateUpdate = Boolean(req.body.allowOwnedDuplicateUpdate);
 
         if (phase2InterviewStatus !== undefined && normalizedPhase2InterviewStatus === null) {
-            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, Shortlisted, or Did not Turn up' });
         }
 
         // Verify hiring request exists
@@ -1833,7 +1839,7 @@ exports.updateCandidate = async (req, res) => {
         if (updateData.phase2InterviewStatus !== undefined) {
             updateData.phase2InterviewStatus = normalizePhase2InterviewStatus(updateData.phase2InterviewStatus);
             if (updateData.phase2InterviewStatus === null) {
-                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, Shortlisted, or Did not Turn up' });
             }
         } else if (updateData.phase2Decision !== undefined) {
             const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(updateData.phase2Decision);
@@ -2682,10 +2688,10 @@ exports.getCandidatesByPulledBy = async (req, res) => {
 exports.evaluateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 when provided
+        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed', 'Failed' or 'Skipped'; rating: 1-10 when provided
 
-        if (!['Passed', 'Failed'].includes(status)) {
-            return res.status(400).json({ message: 'Status must be Passed or Failed' });
+        if (!['Passed', 'Failed', 'Skipped'].includes(status)) {
+            return res.status(400).json({ message: 'Status must be Passed, Failed or Skipped' });
         }
 
         if (!feedback) {
