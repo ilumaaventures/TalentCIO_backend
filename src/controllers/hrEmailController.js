@@ -100,6 +100,7 @@ const buildTemplateData = ({ user, profile, company }) => ({
     companyName: company?.name || '',
     location: profile?.employment?.branch || user?.workLocation || '',
     currentYear: String(new Date().getFullYear()),
+    currentDate: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }),
     managerName: '',
     managerEmail: ''
 });

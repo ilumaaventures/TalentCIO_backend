@@ -221,7 +221,8 @@ const buildPreOnboardingTemplateData = ({
     sharedFilesBlock = '',
     deadlineBlock = '',
     portalButton = '',
-    currentYear = String(new Date().getFullYear())
+    currentYear = String(new Date().getFullYear()),
+    currentDate = new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
 }) => ({
     candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
     firstName: employee.firstName || '',
@@ -264,7 +265,8 @@ const buildPreOnboardingTemplateData = ({
     sharedFilesBlock,
     deadlineBlock,
     portalButton,
-    currentYear
+    currentYear,
+    currentDate
 });
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
@@ -2918,6 +2920,7 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
             employee_signature: employeeSignatureXml,
             employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
             employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
+            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }),
             ...salaryBreakups
         });
     } catch (err) {
@@ -3106,7 +3109,8 @@ exports.getMyOfferLetter = async (req, res) => {
             hr_designation: hrUser.designation || 'HR Manager',
             declaration_date: formatDate(employee.offerDate || new Date()),
             employee_signature_name: fullName,
-            employee_id: employee.tempEmployeeId
+            employee_id: employee.tempEmployeeId,
+            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
         });
 
         const buffer = doc.getZip().generate({ type: 'nodebuffer' });

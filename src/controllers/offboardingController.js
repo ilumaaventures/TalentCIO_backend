@@ -730,7 +730,8 @@ exports.sendOffboardingEmail = async (req, res) => {
             lastWorkingDay: formatShortDateValue(record?.lastWorkingDay),
             exitType: record?.exitType || '',
             companyName: req.company?.name || '',
-            currentYear: new Date().getFullYear().toString()
+            currentYear: new Date().getFullYear().toString(),
+            currentDate: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
         };
 
         let template = null;
