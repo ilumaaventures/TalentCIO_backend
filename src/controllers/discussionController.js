@@ -177,12 +177,37 @@ exports.updateDiscussion = async (req, res) => {
         if (project !== undefined) {
             updateData.project = (project && mongoose.isValidObjectId(project)) ? project : null;
         }
-        const selectedSupervisorIds = Array.isArray(supervisor)
-            ? supervisor
-            : (supervisor || participantUserId ? [supervisor || participantUserId] : existingDiscussion.supervisor);
-        const normalizedVisibleTo = Array.isArray(visibleToUserIds)
-            ? visibleToUserIds
-            : (visibleToUserIds ? [visibleToUserIds] : existingDiscussion.visibleToUsers || []);
+        // Sanitize: strip empty objects or invalid values — only keep valid 24-char hex ObjectId strings
+        const sanitizeIds = (arr) => {
+            if (!Array.isArray(arr)) {
+                if (arr && typeof arr === 'string' && mongoose.isValidObjectId(arr.trim())) return [arr.trim()];
+                return [];
+            }
+            return arr
+                .map((v) => {
+                    if (!v) return null;
+                    if (typeof v === 'string' && mongoose.isValidObjectId(v.trim())) return v.trim();
+                    if (typeof v === 'object') {
+                        const id = String(v._id || v.id || '');
+                        if (mongoose.isValidObjectId(id)) return id;
+                    }
+                    return null;
+                })
+                .filter(Boolean);
+        };
+
+        const selectedSupervisorIds = sanitizeIds(
+            Array.isArray(supervisor) ? supervisor
+                : (supervisor || participantUserId ? [supervisor || participantUserId] : existingDiscussion.supervisor)
+        );
+        const normalizedVisibleTo = sanitizeIds(
+            Array.isArray(visibleToUserIds) ? visibleToUserIds
+                : (visibleToUserIds ? [visibleToUserIds] : existingDiscussion.visibleToUsers || [])
+        );
+
+        if (selectedSupervisorIds.length === 0 && supervisor !== undefined) {
+            return res.status(400).json({ message: 'At least one valid supervisor is required' });
+        }
 
         if (supervisor || participantUserId) {
             updateData.supervisor = selectedSupervisorIds;
