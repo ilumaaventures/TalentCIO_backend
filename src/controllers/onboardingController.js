@@ -553,14 +553,39 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             });
         }
 
-        // If employee already submitted, re-open for editing on new sections
-        if (employee.status === 'Submitted' || employee.status === 'Reviewed') {
+        // If employee already submitted/reviewed/accepted, re-open for editing on new sections
+        if (employee.status === 'Submitted' || employee.status === 'Reviewed' || employee.status === 'Accepted') {
             employee.status = 'In Progress';
             employee.submittedAt = null;
             employee.auditLog.push({
                 action: 'REOPENED',
                 details: `Re-opened by HR for additional sections/documents`
             });
+        }
+
+        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
+        const includesDynamicTemplate = (documents || []).includes('Offer Letter') ||
+            (sections || []).includes('Offer Declaration') ||
+            companyDynamicTemplates.some(t => (documents || []).includes(t.name));
+
+        if (includesDynamicTemplate) {
+            if (employee.offerDeclaration) {
+                employee.offerDeclaration.isComplete = false;
+                if ((documents || []).includes('Offer Letter')) {
+                    employee.offerDeclaration.hasReadOfferLetter = false;
+                }
+                if (employee.offerDeclaration.acceptedTemplates) {
+                    employee.offerDeclaration.acceptedTemplates = employee.offerDeclaration.acceptedTemplates.filter(
+                        t => !documents.includes(t.name)
+                    );
+                }
+                if (employee.offerDeclaration.acceptedPolicies) {
+                    employee.offerDeclaration.acceptedPolicies = employee.offerDeclaration.acceptedPolicies.filter(
+                        p => !documents.includes(p.name)
+                    );
+                }
+            }
         }
 
         employee.selectionDraft = {
@@ -2065,7 +2090,12 @@ exports.submitOnboarding = async (req, res) => {
         if (!isSelective || reqSectionLabels.includes('Bank Details')) {
             if (!employee.bankDetails?.isComplete) errors.push('Bank Details incomplete');
         }
-        if (!isSelective || reqSectionLabels.includes('Offer Declaration')) {
+        
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const hasDynamicTemplate = reqDocLabels.includes('Offer Letter') || dynamicTemplates.some(t => reqDocLabels.includes(t.name));
+
+        if (!isSelective || reqSectionLabels.includes('Offer Declaration') || hasDynamicTemplate) {
             if (!employee.offerDeclaration?.isComplete) errors.push('Offer Declaration incomplete');
         }
 
