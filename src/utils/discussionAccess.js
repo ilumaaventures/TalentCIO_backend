@@ -14,9 +14,19 @@ const isDiscussionAdmin = (user) => {
     });
 };
 
-const toObjectId = (value) => (
-    value instanceof mongoose.Types.ObjectId ? value : new mongoose.Types.ObjectId(String(value))
-);
+const toObjectId = (value) => {
+    if (!value) return null;
+    if (value instanceof mongoose.Types.ObjectId) return value;
+    if (typeof value === 'object') {
+        const idVal = value._id || value.id;
+        if (idVal) return toObjectId(idVal);
+    }
+    const strVal = String(value).trim();
+    if (mongoose.isValidObjectId(strVal)) {
+        return new mongoose.Types.ObjectId(strVal);
+    }
+    return null;
+};
 
 const idsMatch = (left, right) => String(left || '') === String(right || '');
 
@@ -80,13 +90,14 @@ const buildDiscussionParticipants = (...candidateIds) => {
     return candidateIds
         .flatMap((value) => Array.isArray(value) ? value : [value])
         .filter(Boolean)
-        .map((value) => String(value))
+        .map((value) => toObjectId(value))
         .filter((value) => {
-            if (seen.has(value)) return false;
-            seen.add(value);
+            if (!value) return false;
+            const strId = String(value);
+            if (seen.has(strId)) return false;
+            seen.add(strId);
             return true;
-        })
-        .map((value) => toObjectId(value));
+        });
 };
 
 const attachDiscussionPermissions = (discussion, user) => {

@@ -935,13 +935,13 @@ const handleCandidateShortlist = async (candidate, req) => {
         if (hiringRequest && hiringRequest.interviewWorkflowId && hiringRequest.interviewWorkflowId.rounds && hiringRequest.interviewWorkflowId.rounds.length > 0) {
             roundsToAdd = hiringRequest.interviewWorkflowId.rounds.map(r => ({
                 levelName: r.levelName,
-                assignedTo: r.user ? [r.user] : [],
+                assignedTo: [], // Evaluator is always unassigned on shortlist; assigned manually later
                 status: 'Scheduled',
                 phase: 1
             }));
         } else {
             roundsToAdd = [{
-                levelName: 'L1 - Technical',
+                levelName: 'Round 1',
                 assignedTo: [],
                 status: 'Scheduled',
                 phase: 1
