@@ -307,7 +307,7 @@ const candidateSchema = new mongoose.Schema({
 
     phase2InterviewStatus: {
         type: String,
-        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'None', ''],
+        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'None', ''],
         default: 'None'
     },
 

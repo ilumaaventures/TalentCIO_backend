@@ -239,6 +239,10 @@ const normalizePhase2InterviewStatus = (rawStatus) => {
         return 'Shortlisted';
     }
 
+    if (normalized === 'did not turn up') {
+        return 'Did not Turn up';
+    }
+
     return null;
 };
 
@@ -516,7 +520,7 @@ const getLegacyRoundsForPhase = (candidate = {}, phase = 1) => (
 
 const getPhase2InterviewStatusValue = (candidate = {}) => {
     const normalized = String(candidate?.phase2InterviewStatus || '').trim();
-    if (['Scheduled', 'Rejected', 'Shortlisted'].includes(normalized)) {
+    if (['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up'].includes(normalized)) {
         return normalized;
     }
 
@@ -550,7 +554,9 @@ const getLegacyDisplayInterviewRoundsForPhase = (candidate = {}, phase = 1) => {
             ? 'Failed'
             : phase2InterviewStatus === 'Shortlisted'
                 ? 'Passed'
-                : 'Scheduled',
+                : phase2InterviewStatus === 'Did not Turn up'
+                    ? 'Skipped'
+                    : 'Scheduled',
         feedback: candidate?.phase2InterviewerFeedback || '',
         rating: null,
         skillRatings: []
@@ -903,6 +909,100 @@ exports.checkDuplicateCandidate = async (req, res) => {
     }
 };
 
+const handleCandidateShortlist = async (candidate, req) => {
+    const companyId = req.companyId;
+    const userId = req.user._id;
+
+    // 1. Auto Interested:
+    if (candidate.status !== 'Interested') {
+        candidate.status = 'Interested';
+        candidate.statusHistory.push({
+            status: 'Interested',
+            changedBy: userId,
+            changedAt: new Date(),
+            remark: `Auto-updated to Interested on ${candidate.decision}`
+        });
+    }
+
+    // 2. Schedule interview
+    const phase1Rounds = (candidate.interviewRounds || []).filter(round => Number(round.phase || 1) === 1);
+    
+    if (phase1Rounds.length === 0) {
+        // Find hiring request to see if it has an interview workflow
+        const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId }).populate('interviewWorkflowId');
+        
+        let roundsToAdd = [];
+        if (hiringRequest && hiringRequest.interviewWorkflowId && hiringRequest.interviewWorkflowId.rounds && hiringRequest.interviewWorkflowId.rounds.length > 0) {
+            roundsToAdd = hiringRequest.interviewWorkflowId.rounds.map(r => ({
+                levelName: r.levelName,
+                assignedTo: r.user ? [r.user] : [],
+                status: 'Scheduled',
+                phase: 1
+            }));
+        } else {
+            roundsToAdd = [{
+                levelName: 'L1 - Technical',
+                assignedTo: [],
+                status: 'Scheduled',
+                phase: 1
+            }];
+        }
+        
+        if (!candidate.interviewRounds) {
+            candidate.interviewRounds = [];
+        }
+        candidate.interviewRounds.push(...roundsToAdd);
+        return { hasNewRounds: true, roundsToAdd };
+    }
+    return { hasNewRounds: false };
+};
+
+const sendAutoScheduleNotifications = async (candidate, roundsToAdd, req) => {
+    const app = req.app;
+    const io = app ? app.get('io') : null;
+    if (!io) return;
+
+    const origin = req.headers ? req.headers.origin : undefined;
+    
+    const notifications = [];
+    candidate.interviewRounds.forEach(savedRound => {
+        const matchedInput = roundsToAdd.find(r => r.levelName === savedRound.levelName && Number(savedRound.phase || 1) === 1);
+        if (matchedInput && savedRound.assignedTo && savedRound.assignedTo.length > 0) {
+            const roundPhase = Number(savedRound.phase || 1);
+            savedRound.assignedTo.forEach(userId => {
+                notifications.push({
+                    user: userId,
+                    companyId: req.companyId,
+                    preferenceKey: 'interview_assigned',
+                    title: 'New Interview Assigned',
+                    message: `You have been assigned to evaluate ${candidate.candidateName} for the ${savedRound.levelName} round.`,
+                    type: 'Interview',
+                    link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view?phase=${roundPhase}`,
+                    origin: origin,
+                    metadata: {
+                        candidateId: candidate._id,
+                        roundId: savedRound._id,
+                        hiringRequestId: candidate.hiringRequestId._id || candidate.hiringRequestId,
+                        phase: roundPhase
+                    }
+                });
+            });
+        }
+    });
+
+    if (notifications.length > 0) {
+        await NotificationService.createManyNotifications(io, notifications);
+
+        notifications.forEach(notif => {
+            NotificationService.emitToUser(io, notif.user, 'interview_update', {
+                candidateId: candidate._id,
+                candidateName: candidate.candidateName,
+                roundId: notif.metadata.roundId
+            });
+        });
+    }
+};
+
 // Create new candidate
 exports.createCandidate = async (req, res) => {
     try {
@@ -962,7 +1062,7 @@ exports.createCandidate = async (req, res) => {
         const allowOwnedDuplicateUpdate = Boolean(req.body.allowOwnedDuplicateUpdate);
 
         if (phase2InterviewStatus !== undefined && normalizedPhase2InterviewStatus === null) {
-            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, Shortlisted, or Did not Turn up' });
         }
 
         // Verify hiring request exists
@@ -1267,7 +1367,16 @@ exports.createCandidate = async (req, res) => {
                 });
             }
 
+            let shortlistResult = null;
+            if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(candidate.decision)) {
+                shortlistResult = await handleCandidateShortlist(candidate, req);
+            }
+
             await candidate.save();
+
+            if (shortlistResult && shortlistResult.hasNewRounds) {
+                await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+            }
 
             const populatedUpdate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
                 .populate('uploadedBy', 'firstName lastName email')
@@ -1343,7 +1452,16 @@ exports.createCandidate = async (req, res) => {
             }
         }
 
+        let shortlistResult = null;
+        if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(candidate.decision)) {
+            shortlistResult = await handleCandidateShortlist(candidate, req);
+        }
+
         await candidate.save();
+
+        if (shortlistResult && shortlistResult.hasNewRounds) {
+            await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+        }
 
         const populatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
@@ -1721,7 +1839,7 @@ exports.updateCandidate = async (req, res) => {
         if (updateData.phase2InterviewStatus !== undefined) {
             updateData.phase2InterviewStatus = normalizePhase2InterviewStatus(updateData.phase2InterviewStatus);
             if (updateData.phase2InterviewStatus === null) {
-                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, or Shortlisted' });
+                return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, Shortlisted, or Did not Turn up' });
             }
         } else if (updateData.phase2Decision !== undefined) {
             const implicitPhase2InterviewStatus = getImplicitPhase2InterviewStatus(updateData.phase2Decision);
@@ -1942,7 +2060,17 @@ exports.updateCandidateDecision = async (req, res) => {
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);
         }
+
+        let shortlistResult = null;
+        if (['Shortlisted', 'Rejected', 'Did Not Turn Up'].includes(decision)) {
+            shortlistResult = await handleCandidateShortlist(candidate, req);
+        }
+
         await candidate.save();
+
+        if (shortlistResult && shortlistResult.hasNewRounds) {
+            await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
+        }
 
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('uploadedBy', 'firstName lastName email')
@@ -2560,10 +2688,10 @@ exports.getCandidatesByPulledBy = async (req, res) => {
 exports.evaluateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed' or 'Failed'; rating: 1-10 when provided
+        const { status, feedback, rating, skillRatings } = req.body; // status: 'Passed', 'Failed' or 'Skipped'; rating: 1-10 when provided
 
-        if (!['Passed', 'Failed'].includes(status)) {
-            return res.status(400).json({ message: 'Status must be Passed or Failed' });
+        if (!['Passed', 'Failed', 'Skipped'].includes(status)) {
+            return res.status(400).json({ message: 'Status must be Passed, Failed or Skipped' });
         }
 
         if (!feedback) {
