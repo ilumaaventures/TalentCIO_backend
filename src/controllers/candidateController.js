@@ -933,8 +933,8 @@ const handleCandidateShortlist = async (candidate, req) => {
         
         let roundsToAdd = [];
         if (hiringRequest && hiringRequest.interviewWorkflowId && hiringRequest.interviewWorkflowId.rounds && hiringRequest.interviewWorkflowId.rounds.length > 0) {
-            roundsToAdd = hiringRequest.interviewWorkflowId.rounds.map(r => ({
-                levelName: r.levelName,
+            roundsToAdd = hiringRequest.interviewWorkflowId.rounds.map((r, index) => ({
+                levelName: `Round ${index + 1}`,
                 assignedTo: [], // Evaluator is always unassigned on shortlist; assigned manually later
                 status: 'Scheduled',
                 phase: 1
