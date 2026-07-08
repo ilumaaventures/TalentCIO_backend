@@ -34,6 +34,12 @@ const clientSchema = new mongoose.Schema({
             phone: { type: String, trim: true },
         }
     ],
+    status: {
+        type: String,
+        enum: ['Active', 'Inactive'],
+        default: 'Active',
+        index: true
+    },
 }, { timestamps: true });
 
 clientSchema.index({ companyId: 1, isDeleted: 1 });
