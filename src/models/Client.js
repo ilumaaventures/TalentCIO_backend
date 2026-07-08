@@ -13,6 +13,7 @@ const clientSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    nickname: { type: String, trim: true },
     businessUnit: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'BusinessUnit'
