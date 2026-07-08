@@ -47,6 +47,11 @@ const discussionSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Project',
         default: null
+    },
+    priority: {
+        type: String,
+        enum: ['Urgent', 'High', 'Medium', 'Low'],
+        default: 'Medium'
     }
 }, { timestamps: true });
 

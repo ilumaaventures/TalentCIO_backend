@@ -18,7 +18,7 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
 
 exports.createDiscussion = async (req, res) => {
     try {
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, priority } = req.body;
         const selectedSupervisorIds = Array.isArray(supervisor)
             ? supervisor
             : (supervisor || participantUserId ? [supervisor || participantUserId] : []);
@@ -43,7 +43,8 @@ exports.createDiscussion = async (req, res) => {
             supervisor: selectedSupervisorIds,
             visibleToUsers: normalizedVisibleTo,
             participants: buildDiscussionParticipants(req.user._id, selectedSupervisorIds, normalizedVisibleTo),
-            project: (project && mongoose.isValidObjectId(project)) ? project : null
+            project: (project && mongoose.isValidObjectId(project)) ? project : null,
+            priority: priority || 'Medium'
         });
         await newDiscussion.save();
 
@@ -90,6 +91,19 @@ exports.getDiscussions = async (req, res) => {
         }
         if (req.query.project) {
             accessMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+        }
+        if (req.query.priority) {
+            if (req.query.priority === 'Medium') {
+                accessMatch.$and = accessMatch.$and || [];
+                accessMatch.$and.push({
+                    $or: [
+                        { priority: 'Medium' },
+                        { priority: { $exists: false } }
+                    ]
+                });
+            } else {
+                accessMatch.priority = req.query.priority;
+            }
         }
         const total = await Discussion.countDocuments(accessMatch);
 
@@ -148,7 +162,7 @@ exports.getDiscussionById = async (req, res) => {
 exports.updateDiscussion = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project, priority } = req.body;
 
         const existingDiscussion = await Discussion.findOne({ _id: id, companyId: req.companyId });
         if (!existingDiscussion) return res.status(404).json({ message: 'Discussion not found' });
@@ -177,6 +191,10 @@ exports.updateDiscussion = async (req, res) => {
         if (project !== undefined) {
             updateData.project = (project && mongoose.isValidObjectId(project)) ? project : null;
         }
+        if (priority !== undefined) {
+            updateData.priority = priority;
+        }
+
         // Sanitize: strip empty objects or invalid values — only keep valid 24-char hex ObjectId strings
         const sanitizeIds = (arr) => {
             if (!Array.isArray(arr)) {
