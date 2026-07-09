@@ -275,6 +275,17 @@ exports.sendHREmail = async (req, res) => {
             .filter(Boolean);
         const cloudinaryUrls = parseJsonArray(req.body?.cloudinaryUrls, 'cloudinaryUrls');
         const dossierSave = String(req.body?.dossierSave || 'true').trim().toLowerCase() !== 'false';
+
+        let customEmails = {};
+        if (req.body?.customEmails) {
+            try {
+                customEmails = typeof req.body.customEmails === 'string'
+                    ? JSON.parse(req.body.customEmails)
+                    : req.body.customEmails;
+            } catch (e) {
+                console.error('Failed to parse customEmails:', e);
+            }
+        }
         const dossierCategory = String(req.body?.dossierCategory || '').trim();
         const notes = String(req.body?.notes || '').trim();
         const totalAttachmentCount = requestedFiles.length + cloudinaryUrls.length;
@@ -377,7 +388,7 @@ exports.sendHREmail = async (req, res) => {
                 }
 
                 const profile = user.employeeProfile || null;
-                resolvedEmail = resolveRecipientEmail(user, profile);
+                resolvedEmail = customEmails[recipientUserId] || resolveRecipientEmail(user, profile);
 
                 if (!resolvedEmail) {
                     failed.push({ userId: recipientUserId, email: '', reason: 'No email address found' });
@@ -385,6 +396,10 @@ exports.sendHREmail = async (req, res) => {
                 }
 
                 const templateData = buildTemplateData({ user, profile, company });
+                if (customEmails[recipientUserId]) {
+                    templateData.email = customEmails[recipientUserId];
+                    templateData.workEmail = customEmails[recipientUserId];
+                }
                 const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
                 const resolvedHtml = renderTemplateBody(bodyTemplate, templateData);
                 const emailSent = await sendEmailForCompany({
