@@ -678,6 +678,19 @@ exports.getDiscussionsBootstrap = async (req, res) => {
         if (req.query.project) {
             accessMatch.project = req.query.project === 'null' ? null : new MongooseObjectId(String(req.query.project));
         }
+        if (req.query.priority) {
+            if (req.query.priority === 'Medium') {
+                accessMatch.$and = accessMatch.$and || [];
+                accessMatch.$and.push({
+                    $or: [
+                        { priority: 'Medium' },
+                        { priority: { $exists: false } }
+                    ]
+                });
+            } else {
+                accessMatch.priority = req.query.priority;
+            }
+        }
         const totalPromise = Discussion.countDocuments(accessMatch);
         const discussionsPromise = Discussion.aggregate([
             { $match: accessMatch },

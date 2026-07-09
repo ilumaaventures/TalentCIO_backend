@@ -13,6 +13,7 @@ const clientSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    nickname: { type: String, trim: true },
     businessUnit: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'BusinessUnit'
@@ -34,6 +35,12 @@ const clientSchema = new mongoose.Schema({
             phone: { type: String, trim: true },
         }
     ],
+    status: {
+        type: String,
+        enum: ['Active', 'Inactive'],
+        default: 'Active',
+        index: true
+    },
 }, { timestamps: true });
 
 clientSchema.index({ companyId: 1, isDeleted: 1 });
