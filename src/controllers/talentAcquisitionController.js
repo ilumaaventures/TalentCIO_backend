@@ -2090,20 +2090,9 @@ exports.getGlobalAnalytics = async (req, res) => {
         const hasCandidateOwnerFilter = Boolean(pulledByFilter || uploadedByFilter || calledByFilter);
 
         const accessibleHiringRequestQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
-        const filteredHiringRequestQuery = { ...accessibleHiringRequestQuery };
-
-        if (client) filteredHiringRequestQuery.client = new RegExp(client, 'i');
-        if (department) filteredHiringRequestQuery['roleDetails.department'] = new RegExp(department, 'i');
-        if (position) filteredHiringRequestQuery['roleDetails.title'] = new RegExp(position, 'i');
-
-        const [accessibleHiringRequests, allHiringRequests] = await Promise.all([
-            HiringRequest.find(accessibleHiringRequestQuery)
-                .select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt')
-                .lean(),
-            HiringRequest.find(filteredHiringRequestQuery)
-                .select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt')
-                .lean()
-        ]);
+        const accessibleHiringRequests = await HiringRequest.find(accessibleHiringRequestQuery)
+            .select('_id roleDetails.department roleDetails.title client hiringDetails status createdAt closedAt')
+            .lean();
 
         const requisitionsList = accessibleHiringRequests.map(hr => ({
             _id: hr._id,
@@ -2111,19 +2100,15 @@ exports.getGlobalAnalytics = async (req, res) => {
             status: hr.status,
             createdAt: hr.createdAt,
             closedAt: hr.closedAt,
-            client: hr.client
+            client: hr.client,
+            department: hr.roleDetails?.department
         }));
 
-        const hiringRequests = requisitionId 
-            ? allHiringRequests.filter(hr => hr._id.toString() === requisitionId)
-            : allHiringRequests;
-
-        const hrIds = hiringRequests.map(hr => hr._id);
-        const hiringRequestMap = new Map(hiringRequests.map((hr) => [hr._id.toString(), hr]));
+        const hiringRequestMap = new Map(accessibleHiringRequests.map((hr) => [hr._id.toString(), hr]));
 
         let candidateQuery = {
             companyId: req.companyId,
-            hiringRequestId: { $in: hrIds }
+            hiringRequestId: { $in: accessibleHiringRequests.map(hr => hr._id) }
         };
         if (startDate || endDate) {
             candidateQuery.createdAt = {};
@@ -2140,8 +2125,7 @@ exports.getGlobalAnalytics = async (req, res) => {
         const publicApplications = hasCandidateOwnerFilter || !canViewSharedCandidateData ? [] : await (async () => {
             const publicApplicationQuery = {
                 companyId: req.companyId,
-                hiringRequestId: { $in: hrIds },
-                reviewStatus: { $ne: 'Transferred' }
+                hiringRequestId: { $in: accessibleHiringRequests.map(hr => hr._id) }
             };
 
             if (startDate || endDate) {
@@ -2151,7 +2135,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
 
             return PublicApplication.find(publicApplicationQuery)
-                .select('hiringRequestId createdAt source')
+                .select('hiringRequestId createdAt source reviewStatus')
                 .lean();
         })();
 
@@ -2170,7 +2154,17 @@ exports.getGlobalAnalytics = async (req, res) => {
 
         const normalizeAnalyticsValue = (value) => String(value || '').trim().toLowerCase();
 
-        let filteredCandidates = candidates.filter((candidateDoc) => {
+        // 1. Filter candidates in JS based on query params
+        const filteredCandidates = candidates.filter((candidateDoc) => {
+            const hrIdStr = candidateDoc.hiringRequestId?._id?.toString() || candidateDoc.hiringRequestId?.toString();
+            const hr = hiringRequestMap.get(hrIdStr);
+            if (!hr) return false;
+
+            if (client && hr.client !== client) return false;
+            if (department && hr.roleDetails?.department !== department) return false;
+            if (position && hr.roleDetails?.title !== position) return false;
+            if (requisitionId && hr._id.toString() !== requisitionId) return false;
+
             const pulledByName = normalizeAnalyticsValue(getCandidatePulledByName(candidateDoc));
             const uploadedByName = normalizeAnalyticsValue(getCandidateUploadedByName(candidateDoc));
             const calledByName = normalizeAnalyticsValue(candidateDoc.calledBy);
@@ -2184,17 +2178,55 @@ exports.getGlobalAnalytics = async (req, res) => {
 
         const activeCandidates = filteredCandidates;
 
-        // Identify active hiring requests after filtering candidates
-        // This ensures stats like "Total Requisitions" match the filtered candidate activity
+        // 2. Filter public applications in JS based on query params
+        const filteredPublicApplications = publicApplications.filter(app => {
+            const hr = hiringRequestMap.get(app.hiringRequestId?.toString());
+            if (!hr) return false;
+
+            if (client && hr.client !== client) return false;
+            if (department && hr.roleDetails?.department !== department) return false;
+            if (position && hr.roleDetails?.title !== position) return false;
+            if (requisitionId && hr._id.toString() !== requisitionId) return false;
+            return true;
+        });
+
+        const activePublicApplications = filteredPublicApplications.filter(app => app.reviewStatus !== 'Transferred');
+
+        const publicAppBreakdown = {
+            total: filteredPublicApplications.length,
+            pending: filteredPublicApplications.filter(app => app.reviewStatus === 'Pending Review').length,
+            shortlisted: filteredPublicApplications.filter(app => app.reviewStatus === 'Shortlisted').length,
+            transferred: filteredPublicApplications.filter(app => app.reviewStatus === 'Transferred').length,
+            rejected: filteredPublicApplications.filter(app => app.reviewStatus === 'Rejected').length
+        };
+
+        const publicSourceAnalysis = {};
+        filteredPublicApplications.forEach((app) => {
+            const src = app.source || 'Public Job Board';
+            if (!publicSourceAnalysis[src]) {
+                publicSourceAnalysis[src] = 0;
+            }
+            publicSourceAnalysis[src]++;
+        });
+
+        // 3. Filter hiring requests in JS based on query params and active activity
+        const jsFilteredHiringRequests = accessibleHiringRequests.filter(hr => {
+            if (client && hr.client !== client) return false;
+            if (department && hr.roleDetails?.department !== department) return false;
+            if (position && hr.roleDetails?.title !== position) return false;
+            if (requisitionId && hr._id.toString() !== requisitionId) return false;
+            return true;
+        });
+
         const activeHrIds = [...new Set([
             ...activeCandidates.map(c => c.hiringRequestId?._id?.toString()).filter(Boolean),
-            ...publicApplications.map(app => app.hiringRequestId?.toString()).filter(Boolean)
+            ...activePublicApplications.map(app => app.hiringRequestId?.toString()).filter(Boolean)
         ])];
         const activeHrSet = new Set(activeHrIds);
 
         const filteredHiringRequests = (startDate || endDate || hasCandidateOwnerFilter)
-            ? hiringRequests.filter(hr => activeHrSet.has(hr._id.toString()))
-            : hiringRequests;
+            ? jsFilteredHiringRequests.filter(hr => activeHrSet.has(hr._id.toString()))
+            : jsFilteredHiringRequests;
 
         // Metrics containers
         let totalOpenPositions = 0;
@@ -2380,7 +2412,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
         });
 
-        publicApplications.forEach((application) => {
+        activePublicApplications.forEach((application) => {
             const hrInfo = hiringRequestMap.get(application.hiringRequestId?.toString()) || {};
             const dept = hrInfo.roleDetails?.department || 'General';
             const clientName = hrInfo.client || 'General';
@@ -2415,6 +2447,22 @@ exports.getGlobalAnalytics = async (req, res) => {
             clientAnalysis[clientName].sourced++;
             sourceAnalysis[src].sourced++;
             positionPerf[reqId].sourced++;
+
+            if (!positionPerf[reqId].publicAppsCount) {
+                positionPerf[reqId].publicAppsCount = 0;
+            }
+            positionPerf[reqId].publicAppsCount++;
+
+            // Pipeline and Funnel mapping for active public applications
+            if (application.reviewStatus === 'Shortlisted') {
+                pipeline['Ph 1 Shortlisted']++;
+            } else {
+                pipeline['Sourced']++;
+            }
+
+            if (application.reviewStatus !== 'Rejected') {
+                funnel.interested++;
+            }
         });
 
         // Time to fill (req based)
@@ -2435,24 +2483,26 @@ exports.getGlobalAnalytics = async (req, res) => {
         let displayMetrics = {
             totalReqs: filteredHiringRequests.length,
             totalOpenPositions,
-            totalSourced: activeCandidates.length + publicApplications.length,
+            totalSourced: activeCandidates.length + activePublicApplications.length,
             interviewsScheduled,
             offersReleased,
             totalJoined,
             offerAcceptanceRate: offersReleased > 0 ? ((totalJoined / offersReleased) * 100).toFixed(1) : 0,
-            joiningConversionRate: (activeCandidates.length + publicApplications.length) > 0 ? ((totalJoined / (activeCandidates.length + publicApplications.length)) * 100).toFixed(1) : 0,
+            joiningConversionRate: (activeCandidates.length + activePublicApplications.length) > 0 ? ((totalJoined / (activeCandidates.length + activePublicApplications.length)) * 100).toFixed(1) : 0,
             avgTimeToHire: hiresWithTime > 0 ? Math.round(sumTimeToHireDays / hiresWithTime) : 0,
             avgTimeToFill: closedReqsCount > 0 ? Math.round(totalTimeToFill / closedReqsCount) : 0
         };
 
         if (phase === '1') {
-            const ph1Shortlisted = activeCandidates.filter(c => c.decision === 'Shortlisted').length;
+            const ph1ShortlistedCandidates = activeCandidates.filter(c => c.decision === 'Shortlisted').length;
+            const ph1ShortlistedPublic = activePublicApplications.filter(app => app.reviewStatus === 'Shortlisted').length;
+            const totalPh1Shortlisted = ph1ShortlistedCandidates + ph1ShortlistedPublic;
             displayMetrics = {
                 ...displayMetrics,
-                totalSourced: activeCandidates.length + publicApplications.length,
+                totalSourced: activeCandidates.length + activePublicApplications.length,
                 interviewsScheduled: activeCandidates.filter(c => c.interviewRounds?.some(r => r.phase === 1 && ['Scheduled', 'Passed', 'Failed'].includes(r.status))).length,
-                ph1Shortlisted,
-                conversionRate: (activeCandidates.length + publicApplications.length) > 0 ? ((ph1Shortlisted / (activeCandidates.length + publicApplications.length)) * 100).toFixed(1) : 0
+                ph1Shortlisted: totalPh1Shortlisted,
+                conversionRate: (activeCandidates.length + activePublicApplications.length) > 0 ? ((totalPh1Shortlisted / (activeCandidates.length + activePublicApplications.length)) * 100).toFixed(1) : 0
             };
         } else if (phase === '2') {
             const ph1Selected = activeCandidates.filter(c => c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted')).length;
@@ -2530,26 +2580,147 @@ exports.getGlobalAnalytics = async (req, res) => {
             avgTimeToFill: buildMetricTrend('avgTimeToFill', { lowerIsBetter: true })
         };
 
+        const getMatchingHiringRequests = (filtersToApply) => {
+            return accessibleHiringRequests.filter(hr => {
+                if (filtersToApply.client && hr.client !== filtersToApply.client) return false;
+                if (filtersToApply.department && hr.roleDetails?.department !== filtersToApply.department) return false;
+                if (filtersToApply.position && hr.roleDetails?.title !== filtersToApply.position) return false;
+                if (filtersToApply.requisitionId && hr._id.toString() !== filtersToApply.requisitionId) return false;
+                return true;
+            });
+        };
+
+        const getMatchingCandidates = (filtersToApply, matchingHrIdsSet) => {
+            return candidates.filter(c => {
+                const hrIdStr = c.hiringRequestId?._id?.toString() || c.hiringRequestId?.toString();
+                if (!matchingHrIdsSet.has(hrIdStr)) return false;
+
+                if (filtersToApply.pulledBy) {
+                    const pulledByName = getCandidatePulledByName(c);
+                    if (normalizeAnalyticsValue(pulledByName) !== normalizeAnalyticsValue(filtersToApply.pulledBy)) return false;
+                }
+                if (filtersToApply.uploadedBy) {
+                    const uploadedByName = getCandidateUploadedByName(c);
+                    if (normalizeAnalyticsValue(uploadedByName) !== normalizeAnalyticsValue(filtersToApply.uploadedBy)) return false;
+                }
+                if (filtersToApply.calledBy) {
+                    if (normalizeAnalyticsValue(c.calledBy) !== normalizeAnalyticsValue(filtersToApply.calledBy)) return false;
+                }
+                return true;
+            });
+        };
+
+        const activeFilters = {
+            client: client || '',
+            department: department || '',
+            position: position || '',
+            pulledBy: pulledByFilter || '',
+            uploadedBy: uploadedByFilter || '',
+            calledBy: calledByFilter || '',
+            requisitionId: requisitionId || ''
+        };
+
+        const hasCandidateFilters = Boolean(activeFilters.pulledBy || activeFilters.uploadedBy || activeFilters.calledBy);
+
+        // 1. Clients Option
+        const filtersForClient = { ...activeFilters, client: '' };
+        const hrsForClient = getMatchingHiringRequests(filtersForClient);
+        const hrIdsForClient = new Set(hrsForClient.map(hr => hr._id.toString()));
+        const candidatesForClient = getMatchingCandidates(filtersForClient, hrIdsForClient);
+        const clientsOptions = hasCandidateFilters
+            ? [...new Set(candidatesForClient.map(c => {
+                const hrIdStr = c.hiringRequestId?._id?.toString() || c.hiringRequestId?.toString();
+                return hiringRequestMap.get(hrIdStr)?.client;
+              }).filter(Boolean))].sort()
+            : [...new Set(hrsForClient.map(hr => hr.client).filter(Boolean))].sort();
+
+        // 2. Departments Option
+        const filtersForDept = { ...activeFilters, department: '' };
+        const hrsForDept = getMatchingHiringRequests(filtersForDept);
+        const hrIdsForDept = new Set(hrsForDept.map(hr => hr._id.toString()));
+        const candidatesForDept = getMatchingCandidates(filtersForDept, hrIdsForDept);
+        const deptsOptions = hasCandidateFilters
+            ? [...new Set(candidatesForDept.map(c => {
+                const hrIdStr = c.hiringRequestId?._id?.toString() || c.hiringRequestId?.toString();
+                return hiringRequestMap.get(hrIdStr)?.roleDetails?.department;
+              }).filter(Boolean))].sort()
+            : [...new Set(hrsForDept.map(hr => hr.roleDetails?.department).filter(Boolean))].sort();
+
+        // 3. Positions Option
+        const filtersForPos = { ...activeFilters, position: '' };
+        const hrsForPos = getMatchingHiringRequests(filtersForPos);
+        const hrIdsForPos = new Set(hrsForPos.map(hr => hr._id.toString()));
+        const candidatesForPos = getMatchingCandidates(filtersForPos, hrIdsForPos);
+        const positionsOptions = hasCandidateFilters
+            ? [...new Set(candidatesForPos.map(c => {
+                const hrIdStr = c.hiringRequestId?._id?.toString() || c.hiringRequestId?.toString();
+                return hiringRequestMap.get(hrIdStr)?.roleDetails?.title;
+              }).filter(Boolean))].sort()
+            : [...new Set(hrsForPos.map(hr => hr.roleDetails?.title).filter(Boolean))].sort();
+
+        // 4. Requisitions Option
+        const filtersForReq = { ...activeFilters, requisitionId: '' };
+        const hrsForReq = getMatchingHiringRequests(filtersForReq);
+        const hrIdsForReq = new Set(hrsForReq.map(hr => hr._id.toString()));
+        const candidatesForReq = getMatchingCandidates(filtersForReq, hrIdsForReq);
+        const requisitionsListOptions = hasCandidateFilters
+            ? hrsForReq.filter(hr => candidatesForReq.some(c => (c.hiringRequestId?._id?.toString() || c.hiringRequestId?.toString()) === hr._id.toString()))
+            : hrsForReq;
+        const requisitionsOptions = requisitionsListOptions.map(hr => ({
+            _id: hr._id,
+            title: hr.roleDetails?.title,
+            status: hr.status,
+            createdAt: hr.createdAt,
+            closedAt: hr.closedAt,
+            client: hr.client
+        }));
+
+        // 5. Pulled By Option
+        const filtersForPulled = { ...activeFilters, pulledBy: '' };
+        const hrsForPulled = getMatchingHiringRequests(filtersForPulled);
+        const hrIdsForPulled = new Set(hrsForPulled.map(hr => hr._id.toString()));
+        const candidatesForPulled = getMatchingCandidates(filtersForPulled, hrIdsForPulled);
+        const pulledBysOptions = [...new Set(candidatesForPulled.map(c => getCandidatePulledByName(c)).filter(Boolean))].sort();
+
+        // 6. Uploaded By Option
+        const filtersForUploaded = { ...activeFilters, uploadedBy: '' };
+        const hrsForUploaded = getMatchingHiringRequests(filtersForUploaded);
+        const hrIdsForUploaded = new Set(hrsForUploaded.map(hr => hr._id.toString()));
+        const candidatesForUploaded = getMatchingCandidates(filtersForUploaded, hrIdsForUploaded);
+        const uploadedBysOptions = [...new Set(candidatesForUploaded.map(c => getCandidateUploadedByName(c)).filter(Boolean))].sort();
+
+        // 7. Called By Option
+        const filtersForCalled = { ...activeFilters, calledBy: '' };
+        const hrsForCalled = getMatchingHiringRequests(filtersForCalled);
+        const hrIdsForCalled = new Set(hrsForCalled.map(hr => hr._id.toString()));
+        const candidatesForCalled = getMatchingCandidates(filtersForCalled, hrIdsForCalled);
+        const calledBysOptions = [...new Set(candidatesForCalled.map(c => String(c.calledBy || '').trim()).filter(Boolean))].sort();
+
         const filterOptions = {
-            clients: [...new Set(accessibleHiringRequests.map(hr => hr.client).filter(Boolean))].sort(),
-            departments: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.department).filter(Boolean))].sort(),
-            positions: [...new Set(accessibleHiringRequests.map(hr => hr.roleDetails?.title).filter(Boolean))].sort(),
-            pulledBys: [...new Set(candidates.map(c => getCandidatePulledByName(c)).filter(Boolean))].sort(),
-            uploadedBys: [...new Set(candidates.map(c => getCandidateUploadedByName(c)).filter(Boolean))].sort(),
-            calledBys: [...new Set(candidates.map(c => String(c.calledBy || '').trim()).filter(Boolean))].sort(),
-            requisitions: requisitionsList
+            clients: clientsOptions,
+            departments: deptsOptions,
+            positions: positionsOptions,
+            pulledBys: pulledBysOptions,
+            uploadedBys: uploadedBysOptions,
+            calledBys: calledBysOptions,
+            requisitions: requisitionsOptions
         };
 
         res.status(200).json({
             success: true,
             data: {
                 topMetrics: displayMetrics,
+                publicAppBreakdown,
+                publicSourceAnalysis: Object.keys(publicSourceAnalysis).map(key => ({
+                    name: key,
+                    value: publicSourceAnalysis[key]
+                })),
                 pipelineDistribution: Object.keys(pipeline).map(key => ({
                     name: key,
                     value: pipeline[key]
                 })).filter(d => d.value > 0),
                 recruitmentFunnel: [
-                    { name: 'Sourced', value: activeCandidates.length },
+                    { name: 'Sourced', value: activeCandidates.length + activePublicApplications.length },
                     { name: 'Interested', value: funnel.interested },
                     { name: 'Interview', value: funnel.interview },
                     { name: 'Offer', value: funnel.offer },
