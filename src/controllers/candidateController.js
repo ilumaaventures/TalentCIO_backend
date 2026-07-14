@@ -3418,6 +3418,25 @@ exports.globalSearchCandidates = async (req, res) => {
     try {
         const filterQuery = { isDeleted: { $ne: true } };
 
+        let includeCandidates = true;
+        let includePublicApps = true;
+        let candidateSources = [];
+
+        if (req.query.source) {
+            const sources = parseStringArrayQuery(req.query.source);
+            includePublicApps = sources.some(s => new RegExp('^public application$', 'i').test(s));
+            
+            sources.forEach(s => {
+                if (new RegExp('^public application$', 'i').test(s)) {
+                    candidateSources.push('Public Job Board');
+                    candidateSources.push('Public Application');
+                } else {
+                    candidateSources.push(s);
+                }
+            });
+            includeCandidates = candidateSources.length > 0;
+        }
+
         if (req.query.search) {
             const searchRegex = new RegExp(req.query.search.trim(), 'i');
             filterQuery.$or = [
@@ -3427,13 +3446,6 @@ exports.globalSearchCandidates = async (req, res) => {
                 { currentLocation: searchRegex },
                 { currentCompany: searchRegex }
             ];
-        }
-
-        if (req.query.source) {
-            const sources = parseStringArrayQuery(req.query.source);
-            if (sources.length > 0) {
-                filterQuery.source = { $in: sources.map(s => new RegExp(`^${s.trim()}$`, 'i')) };
-            }
         }
 
         if (req.query.minExperience !== undefined || req.query.maxExperience !== undefined) {
@@ -3552,16 +3564,191 @@ exports.globalSearchCandidates = async (req, res) => {
             });
         }
 
-        const query = await buildAccessibleCandidateQuery(
-            req.companyId,
-            req.user,
-            filterQuery,
-            { capability: TA_CAPABILITIES.VIEW }
-        );
+        // Build Public Application Filter Query
+        const publicAppFilterQuery = { companyId: req.companyId };
 
+        if (req.query.search) {
+            const searchRegex = new RegExp(req.query.search.trim(), 'i');
+            publicAppFilterQuery.$or = [
+                { candidateName: searchRegex },
+                { email: searchRegex },
+                { mobile: searchRegex }
+            ];
+        }
+
+        if (req.query.client) {
+            const clientHiringRequests = await HiringRequest.find({
+                companyId: req.companyId,
+                client: new RegExp(req.query.client.trim(), 'i')
+            }).select('_id').lean();
+            publicAppFilterQuery.hiringRequestId = { $in: clientHiringRequests.map(hr => hr._id) };
+        }
+
+        if (req.query.maxNoticePeriod !== undefined && req.query.maxNoticePeriod !== '') {
+            const noticeVal = Number(req.query.maxNoticePeriod);
+            if (Number.isFinite(noticeVal)) {
+                publicAppFilterQuery.noticePeriod = { $lte: noticeVal };
+            }
+        }
+
+        if (req.query.minCurrentCTC !== undefined || req.query.maxCurrentCTC !== undefined) {
+            publicAppFilterQuery.currentCTC = {};
+            if (req.query.minCurrentCTC !== undefined && req.query.minCurrentCTC !== '') {
+                const minCTC = Number(req.query.minCurrentCTC);
+                if (Number.isFinite(minCTC)) publicAppFilterQuery.currentCTC.$gte = minCTC;
+            }
+            if (req.query.maxCurrentCTC !== undefined && req.query.maxCurrentCTC !== '') {
+                const maxCTC = Number(req.query.maxCurrentCTC);
+                if (Number.isFinite(maxCTC)) publicAppFilterQuery.currentCTC.$lte = maxCTC;
+            }
+            if (Object.keys(publicAppFilterQuery.currentCTC).length === 0) delete publicAppFilterQuery.currentCTC;
+        }
+
+        if (req.query.minExpectedCTC !== undefined || req.query.maxExpectedCTC !== undefined) {
+            publicAppFilterQuery.expectedCTC = {};
+            if (req.query.minExpectedCTC !== undefined && req.query.minExpectedCTC !== '') {
+                const minCTC = Number(req.query.minExpectedCTC);
+                if (Number.isFinite(minCTC)) publicAppFilterQuery.expectedCTC.$gte = minCTC;
+            }
+            if (req.query.maxExpectedCTC !== undefined && req.query.maxExpectedCTC !== '') {
+                const maxCTC = Number(req.query.maxExpectedCTC);
+                if (Number.isFinite(maxCTC)) publicAppFilterQuery.expectedCTC.$lte = maxCTC;
+            }
+            if (Object.keys(publicAppFilterQuery.expectedCTC).length === 0) delete publicAppFilterQuery.expectedCTC;
+        }
+
+        if (req.query.decision) {
+            publicAppFilterQuery.reviewStatus = req.query.decision.trim();
+        }
+
+        // Fetch matched candidate records (only IDs and creation dates)
+        let candidateItems = [];
+        if (includeCandidates) {
+            if (candidateSources.length > 0) {
+                filterQuery.source = { $in: candidateSources.map(s => new RegExp(`^${s.trim()}$`, 'i')) };
+            }
+            const query = await buildAccessibleCandidateQuery(
+                req.companyId,
+                req.user,
+                filterQuery,
+                { capability: TA_CAPABILITIES.VIEW }
+            );
+            const candidates = await Candidate.find(query)
+                .select('_id createdAt')
+                .lean();
+            candidateItems = candidates.map(c => ({
+                _id: c._id,
+                createdAt: c.createdAt,
+                type: 'candidate'
+            }));
+        }
+
+        // Fetch matched public application records
+        let publicAppItems = [];
+        if (includePublicApps) {
+            const apps = await PublicApplication.find(publicAppFilterQuery)
+                .select('_id createdAt profileSnapshot')
+                .lean();
+
+            // Filter experience in memory if requested
+            let filteredApps = apps;
+            if (req.query.minExperience !== undefined && req.query.minExperience !== '' ||
+                req.query.maxExperience !== undefined && req.query.maxExperience !== '') {
+                const minExp = req.query.minExperience !== '' ? Number(req.query.minExperience) : null;
+                const maxExp = req.query.maxExperience !== '' ? Number(req.query.maxExperience) : null;
+                filteredApps = filteredApps.filter(app => {
+                    const expYears = app.profileSnapshot?.totalExperience ?? app.profileSnapshot?.experienceYears ?? null;
+                    if (expYears === null || expYears === undefined) return true; // include if unknown
+                    if (minExp !== null && Number.isFinite(minExp) && expYears < minExp) return false;
+                    if (maxExp !== null && Number.isFinite(maxExp) && expYears > maxExp) return false;
+                    return true;
+                });
+            }
+            publicAppItems = filteredApps.map(app => ({
+                _id: app._id,
+                createdAt: app.createdAt,
+                type: 'publicApp'
+            }));
+        }
+
+        // Merge and sort
+        const mergedItems = [...candidateItems, ...publicAppItems];
+        mergedItems.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        const total = mergedItems.length;
         const page = Math.max(Number(req.query.page) || 1, 1);
         const limit = Math.max(Number(req.query.limit) || 15, 1);
         const skip = (page - 1) * limit;
+
+        const pageItems = mergedItems.slice(skip, skip + limit);
+
+        const pageCandidateIds = pageItems.filter(i => i.type === 'candidate').map(i => i._id);
+        const pagePublicAppIds = pageItems.filter(i => i.type === 'publicApp').map(i => i._id);
+
+        let candidatesFetched = [];
+        if (pageCandidateIds.length > 0) {
+            candidatesFetched = await Candidate.find({ _id: { $in: pageCandidateIds } })
+                .populate({
+                    path: 'hiringRequestId',
+                    select: 'requestId roleDetails client clientConfidential'
+                })
+                .populate('uploadedBy', 'firstName lastName email')
+                .lean();
+        }
+
+        let publicAppsFetched = [];
+        if (pagePublicAppIds.length > 0) {
+            publicAppsFetched = await PublicApplication.find({ _id: { $in: pagePublicAppIds } })
+                .populate('hiringRequestId', 'requestId roleDetails client clientConfidential')
+                .populate('reviewedBy', 'firstName lastName')
+                .lean();
+        }
+
+        // Map and serialize
+        const serializedCandidates = pageItems.map(item => {
+            if (item.type === 'candidate') {
+                const candidate = candidatesFetched.find(c => String(c._id) === String(item._id));
+                if (!candidate) return null;
+                const serialized = serializeCandidateForViewer({
+                    candidate,
+                    user: req.user,
+                    hiringRequest: candidate.hiringRequestId
+                });
+                serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
+                return serialized;
+            } else {
+                const app = publicAppsFetched.find(a => String(a._id) === String(item._id));
+                if (!app) return null;
+                const serialized = {
+                    _id: app._id,
+                    candidateName: app.candidateName,
+                    email: app.email,
+                    mobile: app.mobile,
+                    totalExperience: app.profileSnapshot?.totalExperience ?? app.profileSnapshot?.experienceYears ?? 0,
+                    source: 'Public Application',
+                    mustHaveSkills: (app.profileSnapshot?.skills || []).map(s => ({ skill: s })),
+                    niceToHaveSkills: [],
+                    hiringRequestId: app.hiringRequestId ? {
+                        _id: app.hiringRequestId._id,
+                        requestId: app.hiringRequestId.requestId,
+                        roleDetails: app.hiringRequestId.roleDetails,
+                        client: app.hiringRequestId.client,
+                        clientConfidential: app.hiringRequestId.clientConfidential
+                    } : null,
+                    uploadedBy: app.reviewedBy ? {
+                        _id: app.reviewedBy._id,
+                        firstName: app.reviewedBy.firstName,
+                        lastName: app.reviewedBy.lastName,
+                        email: app.reviewedBy.email
+                    } : null,
+                    createdAt: app.createdAt,
+                    isPublicApplication: true,
+                    resumeUrl: app.resumeUrl
+                };
+                serialized.confidenceRating = calculateCandidateMatchScore(serialized, req.query);
+                return serialized;
+            }
+        }).filter(Boolean);
 
         const hasActiveFilters = !!(
             req.query.search ||
@@ -3580,55 +3767,8 @@ exports.globalSearchCandidates = async (req, res) => {
             req.query.decision
         );
 
-        let total = 0;
-        let serializedCandidates = [];
-
         if (hasActiveFilters) {
-            const allCandidates = await Candidate.find(query)
-                .populate({
-                    path: 'hiringRequestId',
-                    select: 'requestId roleDetails client clientConfidential'
-                })
-                .populate('uploadedBy', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .lean();
-
-            const mappedCandidates = allCandidates.map(candidate => {
-                const serialized = serializeCandidateForViewer({
-                    candidate,
-                    user: req.user,
-                    hiringRequest: candidate.hiringRequestId
-                });
-                serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
-                return serialized;
-            });
-
-            mappedCandidates.sort((a, b) => b.confidenceRating - a.confidenceRating);
-
-            total = mappedCandidates.length;
-            serializedCandidates = mappedCandidates.slice(skip, skip + limit);
-        } else {
-            total = await Candidate.countDocuments(query);
-            const candidates = await Candidate.find(query)
-                .populate({
-                    path: 'hiringRequestId',
-                    select: 'requestId roleDetails client clientConfidential'
-                })
-                .populate('uploadedBy', 'firstName lastName email')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(limit)
-                .lean();
-
-            serializedCandidates = candidates.map(candidate => {
-                const serialized = serializeCandidateForViewer({
-                    candidate,
-                    user: req.user,
-                    hiringRequest: candidate.hiringRequestId
-                });
-                serialized.confidenceRating = calculateCandidateMatchScore(candidate, req.query);
-                return serialized;
-            });
+            serializedCandidates.sort((a, b) => b.confidenceRating - a.confidenceRating);
         }
 
         res.status(200).json({
