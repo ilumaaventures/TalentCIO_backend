@@ -902,7 +902,6 @@ exports.getRoleBootstrap = async (req, res) => {
 
 exports.getOnboardingBootstrap = async (req, res) => {
     try {
-        setPrivateCache(res, 30);
         const tab = req.query.tab === 'settings' ? 'settings' : 'employees';
 
         if (tab === 'settings') {
