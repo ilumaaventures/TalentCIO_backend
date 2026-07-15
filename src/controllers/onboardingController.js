@@ -531,13 +531,32 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         });
         employee.requestedSections = sectionsData;
 
+        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
+        const companyPolicies = companyRecord?.settings?.onboarding?.policies || [];
+
         const docsData = employee.requestedDocuments || [];
         (documents || []).forEach(d => {
-            const found = docsData.find(rd => rd.label === d);
+            const template = companyDynamicTemplates.find(t => t.name === d && t.isDeleted !== true);
+            const policy = companyPolicies.find(p => p.name === d && p.isDeleted !== true);
+
+            const resolvedId = template ? template._id : (policy ? policy._id : null);
+            const resolvedIdStr = resolvedId ? resolvedId.toString() : null;
+
+            // Find existing requested document with the same resolvedId or label
+            const found = docsData.find(rd => 
+                (resolvedIdStr && rd.templateId && rd.templateId.toString() === resolvedIdStr) ||
+                (!resolvedIdStr && rd.label === d)
+            );
+
             if (found) {
                 found.emailSentAt = emailSentAt;
             } else {
-                docsData.push({ label: d, emailSentAt });
+                docsData.push({ 
+                    label: d, 
+                    emailSentAt,
+                    templateId: resolvedId || undefined
+                });
             }
         });
         employee.requestedDocuments = docsData;
@@ -563,8 +582,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             });
         }
 
-        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
-        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
         const includesDynamicTemplate = (documents || []).includes('Offer Letter') ||
             (sections || []).includes('Offer Declaration') ||
             companyDynamicTemplates.some(t => (documents || []).includes(t.name));
@@ -1170,7 +1187,12 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         await normalizeOnboardingExperienceCertificateLabels(employee);
 
-        res.status(200).json(employee.toObject());
+        const employeeObj = employee.toObject();
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        employeeObj.companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        res.status(200).json(employeeObj);
     } catch (error) {
         console.error('Error fetching onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1875,6 +1897,7 @@ exports.getMyOnboarding = async (req, res) => {
 
         const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
         const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
+        const activeTemplateIds = (employee.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         // If selective onboarding is configured, filter the sections and documents accordingly
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
@@ -1893,7 +1916,11 @@ exports.getMyOnboarding = async (req, res) => {
                 // Keep offerDeclaration if specifically requested or if any offer templates/letters are requested
                 const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
                     activeDocumentLabels.includes('Offer Letter') ||
-                    dynamicTemplates.some(t => activeDocumentLabels.includes(t.name));
+                    dynamicTemplates.some(t => {
+                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                        if (hasIdAssigned) return true;
+                        return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                    });
 
                 if (!showOfferDeclaration) {
                     delete employeeObj.offerDeclaration;
@@ -1905,8 +1932,20 @@ exports.getMyOnboarding = async (req, res) => {
                 if (employeeObj.documents) {
                     employeeObj.documents = employeeObj.documents.filter(doc => activeDocumentLabels.includes(doc.label));
                 }
-                policies = policies.filter(p => activeDocumentLabels.includes(p.name));
-                dynamicTemplates = dynamicTemplates.filter(t => activeDocumentLabels.includes(t.name));
+                
+                // Filter policies: support specific templateId mapping or label fallback for legacy entries
+                policies = policies.filter(p => {
+                    const hasIdAssigned = activeTemplateIds.includes(p._id.toString());
+                    if (hasIdAssigned) return true;
+                    return p.isDeleted !== true && activeDocumentLabels.includes(p.name);
+                });
+                
+                // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
+                dynamicTemplates = dynamicTemplates.filter(t => {
+                    const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                    if (hasIdAssigned) return true;
+                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                });
             }
         }
 
@@ -2362,17 +2401,43 @@ exports.deletePolicy = async (req, res) => {
         const policy = company.settings.onboarding.policies.id(policyId);
         if (!policy) return res.status(404).json({ message: 'Policy not found' });
 
-        // Delete from Cloudinary
-        if (policy.publicId) {
-            try {
-                await cloudinary.uploader.destroy(policy.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        // Remove from DB
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.policies': { _id: policyId } }
+        // Check if any candidate has this policy assigned/requested or accepted
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': policyId },
+                { 'offerDeclaration.acceptedPolicies.policyId': policyId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingPolicyBin = require('../models/OnboardingPolicyBin');
+        await OnboardingPolicyBin.deleteMany({ companyId: req.companyId, originalId: policyId });
+        const binItem = new OnboardingPolicyBin({
+            companyId: req.companyId,
+            originalId: policyId,
+            name: policy.name,
+            url: policy.url,
+            publicId: policy.publicId,
+            isRequired: policy.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.policies._id': policyId },
+                { $set: { 'settings.onboarding.policies.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.policies': { _id: policyId } }
+            });
+        }
 
         res.json({ message: 'Policy deleted successfully' });
     } catch (error) {
@@ -3372,16 +3437,43 @@ exports.deleteDynamicTemplate = async (req, res) => {
         const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
-        const { cloudinary } = require('../config/cloudinary');
-        if (template.publicId) {
-            try {
-                await cloudinary.uploader.destroy(template.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+        // Check if any candidate has this template assigned/requested
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': templateId },
+                { 'offerDeclaration.acceptedTemplates.templateId': templateId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingTemplateBin = require('../models/OnboardingTemplateBin');
+        await OnboardingTemplateBin.deleteMany({ companyId: req.companyId, originalId: templateId });
+        const binItem = new OnboardingTemplateBin({
+            companyId: req.companyId,
+            originalId: templateId,
+            name: template.name,
+            url: template.url,
+            publicId: template.publicId,
+            isRequired: template.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.dynamicTemplates._id': templateId },
+                { $set: { 'settings.onboarding.dynamicTemplates.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+            });
+        }
 
         res.json({ message: 'Template deleted successfully' });
     } catch (error) {

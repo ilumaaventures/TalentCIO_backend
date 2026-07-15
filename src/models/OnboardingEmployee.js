@@ -191,7 +191,8 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     }],
     requestedDocuments: [{
         label: { type: String, required: true },
-        emailSentAt: { type: Date }
+        emailSentAt: { type: Date },
+        templateId: { type: mongoose.Schema.Types.ObjectId }
     }],
     selectionDraft: {
         sections: [{ type: String, trim: true }],

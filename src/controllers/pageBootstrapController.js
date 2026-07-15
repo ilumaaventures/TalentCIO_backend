@@ -906,14 +906,19 @@ exports.getOnboardingBootstrap = async (req, res) => {
 
         if (tab === 'settings') {
             const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
-            return res.json({
-                settings: company?.settings?.onboarding || {
-                    offerLetterTemplateUrl: '',
-                    declarationTemplateUrl: '',
-                    policies: [],
-                    dynamicTemplates: []
-                }
-            });
+            const settings = company?.settings?.onboarding || {
+                offerLetterTemplateUrl: '',
+                declarationTemplateUrl: '',
+                policies: [],
+                dynamicTemplates: []
+            };
+            if (settings.dynamicTemplates) {
+                settings.dynamicTemplates = settings.dynamicTemplates.filter(t => t.isDeleted !== true);
+            }
+            if (settings.policies) {
+                settings.policies = settings.policies.filter(p => p.isDeleted !== true);
+            }
+            return res.json({ settings });
         }
 
         const { status, page = 1, limit = 15, search } = req.query;

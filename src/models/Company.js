@@ -137,13 +137,15 @@ const companySchema = new mongoose.Schema({
                 name: { type: String, required: true },
                 url: { type: String, required: true },
                 publicId: { type: String },
-                isRequired: { type: Boolean, default: true }
+                isRequired: { type: Boolean, default: true },
+                isDeleted: { type: Boolean, default: false }
             }],
             policies: [{
                 name: { type: String, required: true },
                 url: { type: String, required: true },
                 publicId: { type: String },
-                isRequired: { type: Boolean, default: false }
+                isRequired: { type: Boolean, default: false },
+                isDeleted: { type: Boolean, default: false }
             }]
         },
         attendance: {
