@@ -364,7 +364,7 @@ exports.addEmployee = async (req, res) => {
                     } else {
                         annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
                         monthlyCTC = annualCTC / 12;
-                        
+
                         const source = {
                             monthlyCTC,
                             payType,
@@ -386,7 +386,7 @@ exports.addEmployee = async (req, res) => {
                                 professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                             }
                         };
-                        
+
                         if (config.salaryComponents) {
                             config.salaryComponents.forEach(c => {
                                 if (c.linkedTo === 'fixed') {
@@ -401,7 +401,7 @@ exports.addEmployee = async (req, res) => {
                                 }
                             });
                         }
-                        
+
                         const master = buildMasterSalaryStructure(source, config);
                         if (master) {
                             calculatedSalary.annualCTC = String(annualCTC);
@@ -410,7 +410,7 @@ exports.addEmployee = async (req, res) => {
                             calculatedSalary.hra = String(master.hraMaster);
                             calculatedSalary.specialAllowance = String(master.specialAllowance);
                             calculatedSalary.monthlyGross = String(master.totalEarnings);
-                            
+
                             calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                             calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
                             calculatedSalary.gratuity = String(master.gratuity || 0);
@@ -421,7 +421,7 @@ exports.addEmployee = async (req, res) => {
                             calculatedSalary.professionalTax = String(master.professionalTax || 0);
                             calculatedSalary.tds = String(master.tds || 0);
                             calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                            
+
                             if (master.earningsMap) {
                                 Object.entries(master.earningsMap).forEach(([id, val]) => {
                                     calculatedSalary[id] = String(val);
@@ -460,7 +460,7 @@ exports.addEmployee = async (req, res) => {
             createdBy: req.user._id,
             requestedSections: [],
             requestedDocuments: [],
-            auditLog: [{ action: 'CREATED', details: `Created by ${req.user.firstName || 'Admin'}` }]
+            auditLog: [{ action: 'CREATED', details: `Created by ${req.user.firstName || 'Admin'}. ID: ${tempEmployeeId}, Password: ${rawPassword}` }]
         });
 
         await employee.save();
@@ -531,13 +531,32 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         });
         employee.requestedSections = sectionsData;
 
+        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
+        const companyPolicies = companyRecord?.settings?.onboarding?.policies || [];
+
         const docsData = employee.requestedDocuments || [];
         (documents || []).forEach(d => {
-            const found = docsData.find(rd => rd.label === d);
+            const template = companyDynamicTemplates.find(t => t.name === d && t.isDeleted !== true);
+            const policy = companyPolicies.find(p => p.name === d && p.isDeleted !== true);
+
+            const resolvedId = template ? template._id : (policy ? policy._id : null);
+            const resolvedIdStr = resolvedId ? resolvedId.toString() : null;
+
+            // Find existing requested document with the same resolvedId or label
+            const found = docsData.find(rd => 
+                (resolvedIdStr && rd.templateId && rd.templateId.toString() === resolvedIdStr) ||
+                (!resolvedIdStr && rd.label === d)
+            );
+
             if (found) {
                 found.emailSentAt = emailSentAt;
             } else {
-                docsData.push({ label: d, emailSentAt });
+                docsData.push({ 
+                    label: d, 
+                    emailSentAt,
+                    templateId: resolvedId || undefined
+                });
             }
         });
         employee.requestedDocuments = docsData;
@@ -563,8 +582,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             });
         }
 
-        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
-        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
         const includesDynamicTemplate = (documents || []).includes('Offer Letter') ||
             (sections || []).includes('Offer Declaration') ||
             companyDynamicTemplates.some(t => (documents || []).includes(t.name));
@@ -1085,7 +1102,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     documents: defaultDocuments,
                     companyId: req.companyId,
                     createdBy: req.user._id,
-                    auditLog: [{ action: 'CREATED', details: 'Bulk created' }]
+                    auditLog: [{ action: 'CREATED', details: `Bulk created. ID: ${tempEmployeeId}, Password: ${rawPassword}` }]
                 });
 
                 await employee.save();
@@ -1170,7 +1187,12 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         await normalizeOnboardingExperienceCertificateLabels(employee);
 
-        res.status(200).json(employee.toObject());
+        const employeeObj = employee.toObject();
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        employeeObj.companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        res.status(200).json(employeeObj);
     } catch (error) {
         console.error('Error fetching onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1206,7 +1228,7 @@ exports.updateEmployee = async (req, res) => {
             try {
                 const PayrollConfig = require('../models/PayrollConfig');
                 const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
-                
+
                 const payType = calculatedSalary.payType || 'salaried';
                 let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
                 let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
@@ -1261,7 +1283,7 @@ exports.updateEmployee = async (req, res) => {
                             professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                         }
                     };
-                    
+
                     if (config.salaryComponents) {
                         config.salaryComponents.forEach(c => {
                             if (c.linkedTo === 'fixed') {
@@ -1276,7 +1298,7 @@ exports.updateEmployee = async (req, res) => {
                             }
                         });
                     }
-                    
+
                     const master = buildMasterSalaryStructure(source, config);
                     if (master) {
                         calculatedSalary.annualCTC = String(annualCTC);
@@ -1285,7 +1307,7 @@ exports.updateEmployee = async (req, res) => {
                         calculatedSalary.hra = String(master.hraMaster);
                         calculatedSalary.specialAllowance = String(master.specialAllowance);
                         calculatedSalary.monthlyGross = String(master.totalEarnings);
-                        
+
                         calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                         calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
                         calculatedSalary.gratuity = String(master.gratuity || 0);
@@ -1296,7 +1318,7 @@ exports.updateEmployee = async (req, res) => {
                         calculatedSalary.professionalTax = String(master.professionalTax || 0);
                         calculatedSalary.tds = String(master.tds || 0);
                         calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                        
+
                         if (master.earningsMap) {
                             Object.entries(master.earningsMap).forEach(([id, val]) => {
                                 calculatedSalary[id] = String(val);
@@ -1307,8 +1329,8 @@ exports.updateEmployee = async (req, res) => {
             } catch (err) {
                 console.error('Error calculating candidate salary on backend update:', err);
             }
-            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function') 
-                ? employee.salary.toObject() 
+            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function')
+                ? employee.salary.toObject()
                 : (employee.salary || {});
             employee.salary = { ...currentSalary, ...calculatedSalary };
         }
@@ -1350,6 +1372,7 @@ exports.updateEmployee = async (req, res) => {
 // --- Regenerate temporary credentials ---
 exports.regenerateCredentials = async (req, res) => {
     try {
+        const { sendEmail, emailAccountId } = req.body;
         const employee = await OnboardingEmployee
             .findOne({ _id: req.params.id, companyId: req.companyId })
             .select('+pendingCredentialPassword');
@@ -1374,18 +1397,92 @@ exports.regenerateCredentials = async (req, res) => {
         // Add audit log
         employee.auditLog.push({
             action: 'CREDENTIALS_REGENERATED',
-            details: `Credentials regenerated by ${req.user.firstName || 'Admin'}`
+            details: `Credentials regenerated${sendEmail ? ' and emailed' : ''} by ${req.user.firstName || 'Admin'}. ID: ${employee.tempEmployeeId}, Password: ${newPassword}`
         });
 
         await employee.save();
 
-        // Email logic removed per requirements; credentials will be sent when 'Send Pre-Onboarding Email' is triggered.
+        if (sendEmail) {
+            const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
+            const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
+            const subject = `Your Updated Pre-Onboarding Credentials - ${companyName}`;
+
+            const emailHtml = `
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; margin:0 auto; border:1px solid #e2e8f0; border-radius:12px; background:#ffffff; font-family: Arial, sans-serif;">
+                  <tr>
+                    <td align="center" style="background:#0f172a; padding:24px; border-radius:12px 12px 0 0;">
+                      <div style="color:#ffffff; font-size:20px; font-weight:700;">Onboarding Portal Access</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px; color: #334155; font-size: 15px; line-height: 1.6;">
+                      <p>Hello ${employee.firstName},</p>
+                      <p>Your temporary credentials for the Pre-Onboarding Portal have been regenerated. You can log in using the details below:</p>
+
+                      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                        <p style="margin: 4px 0;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${employee.tempEmployeeId}</code></p>
+                        <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${newPassword}</code></p>
+                        <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                      </div>
+
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:24px auto;">
+                        <tr>
+                          <td bgcolor="#2563eb" style="border-radius:8px; text-align:center;">
+                            <a href="${portalUrl}" style="display:inline-block; padding:12px 28px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Portal</a>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <p style="font-size: 12px; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 16px; margin-top: 24px;">
+                        ⚠️ You will be prompted to set a new password on your first login. Please do not share these credentials with anyone.
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="background:#f1f5f9; padding:16px; text-align:center; border-top:1px solid #e2e8f0; border-radius:0 0 12px 12px; font-size: 12px; color: #94a3b8;">
+                      &copy; ${new Date().getFullYear()} ${companyName}. All rights reserved.
+                    </td>
+                  </tr>
+                </table>
+            `;
+
+            const branding = await getCompanyEmailBranding(employee.companyId, req.company);
+            const delivery = await resolveNotificationEmailDelivery(
+                employee.companyId,
+                'pre_onboarding_email_sent',
+                emailAccountId
+            );
+
+            if (delivery.shouldSendEmail) {
+                await sendEmailForCompany({
+                    companyId: employee.companyId,
+                    emailAccountId: delivery.emailAccountId,
+                    to: employee.email,
+                    html: emailHtml,
+                    subject: subject,
+                    text: `Hello ${employee.firstName}, your temporary credentials have been regenerated: ID: ${employee.tempEmployeeId}, Password: ${newPassword}. Access URL: ${portalUrl}`,
+                    ...branding
+                });
+
+                await HREmailLog.create({
+                    companyId: employee.companyId,
+                    sentBy: req.user?._id,
+                    candidateId: employee._id,
+                    type: 'onboarding',
+                    subject: subject,
+                    recipientEmail: employee.email,
+                    status: 'Sent',
+                    sentAt: new Date()
+                });
+            }
+        }
 
         res.status(200).json({
             message: 'Credentials regenerated successfully.',
             tempEmployeeId: employee.tempEmployeeId,
             tempPassword: newPassword,
-            expiry
+            expiry,
+            employee
         });
     } catch (error) {
         console.error('Error regenerating credentials:', error);
@@ -1800,6 +1897,7 @@ exports.getMyOnboarding = async (req, res) => {
 
         const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
         const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
+        const activeTemplateIds = (employee.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         // If selective onboarding is configured, filter the sections and documents accordingly
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
@@ -1818,7 +1916,11 @@ exports.getMyOnboarding = async (req, res) => {
                 // Keep offerDeclaration if specifically requested or if any offer templates/letters are requested
                 const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
                     activeDocumentLabels.includes('Offer Letter') ||
-                    dynamicTemplates.some(t => activeDocumentLabels.includes(t.name));
+                    dynamicTemplates.some(t => {
+                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                        if (hasIdAssigned) return true;
+                        return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                    });
 
                 if (!showOfferDeclaration) {
                     delete employeeObj.offerDeclaration;
@@ -1828,10 +1930,25 @@ exports.getMyOnboarding = async (req, res) => {
             // Filter documents, company policies and dynamic templates
             if (activeDocumentLabels.length > 0) {
                 if (employeeObj.documents) {
-                    employeeObj.documents = employeeObj.documents.filter(doc => activeDocumentLabels.includes(doc.label));
+                    employeeObj.documents = employeeObj.documents.filter(doc => 
+                        activeDocumentLabels.includes(doc.label) ||
+                        activeDocumentLabels.some(al => doc.label.startsWith(al))
+                    );
                 }
-                policies = policies.filter(p => activeDocumentLabels.includes(p.name));
-                dynamicTemplates = dynamicTemplates.filter(t => activeDocumentLabels.includes(t.name));
+                
+                // Filter policies: support specific templateId mapping or label fallback for legacy entries
+                policies = policies.filter(p => {
+                    const hasIdAssigned = activeTemplateIds.includes(p._id.toString());
+                    if (hasIdAssigned) return true;
+                    return p.isDeleted !== true && activeDocumentLabels.includes(p.name);
+                });
+                
+                // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
+                dynamicTemplates = dynamicTemplates.filter(t => {
+                    const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                    if (hasIdAssigned) return true;
+                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                });
             }
         }
 
@@ -2090,7 +2207,7 @@ exports.submitOnboarding = async (req, res) => {
         if (!isSelective || reqSectionLabels.includes('Bank Details')) {
             if (!employee.bankDetails?.isComplete) errors.push('Bank Details incomplete');
         }
-        
+
         const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
         const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
         const hasDynamicTemplate = reqDocLabels.includes('Offer Letter') || dynamicTemplates.some(t => reqDocLabels.includes(t.name));
@@ -2287,17 +2404,43 @@ exports.deletePolicy = async (req, res) => {
         const policy = company.settings.onboarding.policies.id(policyId);
         if (!policy) return res.status(404).json({ message: 'Policy not found' });
 
-        // Delete from Cloudinary
-        if (policy.publicId) {
-            try {
-                await cloudinary.uploader.destroy(policy.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        // Remove from DB
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.policies': { _id: policyId } }
+        // Check if any candidate has this policy assigned/requested or accepted
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': policyId },
+                { 'offerDeclaration.acceptedPolicies.policyId': policyId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingPolicyBin = require('../models/OnboardingPolicyBin');
+        await OnboardingPolicyBin.deleteMany({ companyId: req.companyId, originalId: policyId });
+        const binItem = new OnboardingPolicyBin({
+            companyId: req.companyId,
+            originalId: policyId,
+            name: policy.name,
+            url: policy.url,
+            publicId: policy.publicId,
+            isRequired: policy.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.policies._id': policyId },
+                { $set: { 'settings.onboarding.policies.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.policies': { _id: policyId } }
+            });
+        }
 
         res.json({ message: 'Policy deleted successfully' });
     } catch (error) {
@@ -2580,14 +2723,14 @@ const generateSalaryTableXML = (master, payroll, formatCurrency) => {
 const getSalaryBreakups = async (employee) => {
     const breakups = {};
     if (!employee.salary || !employee.salary.annualCTC) return breakups;
-    
+
     try {
         const PayrollConfig = require('../models/PayrollConfig');
         const config = await PayrollConfig.findOne({ companyId: employee.companyId });
         if (config) {
             const annualCTC = parseFloat(String(employee.salary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
             const monthlyCTC = annualCTC / 12;
-            
+
             const source = {
                 monthlyCTC,
                 payType: employee.salary?.payType || 'salaried',
@@ -2608,7 +2751,7 @@ const getSalaryBreakups = async (employee) => {
                     professionalTax: employee.salary?.ptState === 'custom' ? (parseFloat(employee.salary?.professionalTax) || 0) : 0,
                 }
             };
-            
+
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
@@ -2623,13 +2766,13 @@ const getSalaryBreakups = async (employee) => {
                     }
                 });
             }
-            
+
             const master = buildMasterSalaryStructure(source, config);
             if (master) {
                 // 1. Earnings Breakdown List
                 const earningsList = [];
                 const comps = config.salaryComponents && config.salaryComponents.length > 0 ? config.salaryComponents : [];
-                
+
                 const getEarningVal = (cId) => {
                     if (master.earningsMap && master.earningsMap[cId] !== undefined) return master.earningsMap[cId];
                     if (cId === 'basic') return master.basicMaster || 0;
@@ -2701,7 +2844,7 @@ const getSalaryBreakups = async (employee) => {
                     workingDays: config.defaultWorkingDays,
                     paidDays: config.defaultWorkingDays,
                 }, {}, new Date().getMonth() + 1, new Date().getFullYear());
-                
+
                 const deductionsList = [];
                 if (payroll && payroll.deductions) {
                     if (payroll.deductions.pfEmployee > 0) {
@@ -2754,7 +2897,7 @@ const getSalaryBreakups = async (employee) => {
                     Object.entries(master.earningsMap).forEach(([id, val]) => {
                         breakups[id] = formatCurrency(val);
                         breakups[`${id}_annual`] = formatCurrency(val * 12);
-                        
+
                         const cleanId = id.replace(/([A-Z])/g, '_$1').toLowerCase();
                         breakups[cleanId] = formatCurrency(val);
                         breakups[`${cleanId}_annual`] = formatCurrency(val * 12);
@@ -2764,7 +2907,7 @@ const getSalaryBreakups = async (employee) => {
                         }
                     });
                 }
-                
+
                 breakups['basic_salary'] = formatCurrency(master.basicMaster);
                 breakups['basic_salary_annual'] = formatCurrency(master.basicMaster * 12);
                 breakups['hra'] = formatCurrency(master.hraMaster);
@@ -2786,14 +2929,14 @@ const preprocessDocxXml = (xmlString) => {
             const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
             if (rawTagMatch) {
                 const tag = rawTagMatch[1];
-                
+
                 // Extract paragraph properties
                 const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
                 const pPr = pPrMatch ? pPrMatch[0] : '';
-                
+
                 // Clean the current paragraph by removing the raw tag
                 let cleanedHtml = paragraphHtml.replace(tag, '');
-                
+
                 // Check if the cleaned paragraph only has whitespace runs
                 // If it's empty of actual text, we can just replace the whole paragraph to avoid empty lines
                 let hasActualText = false;
@@ -2803,12 +2946,12 @@ const preprocessDocxXml = (xmlString) => {
                         hasActualText = true;
                     }
                 });
-                
+
                 if (!hasActualText) {
                     // Just return a single paragraph with only the raw tag
                     return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
                 }
-                
+
                 // Otherwise, split: first paragraph is the label/preceding text, second is the raw tag
                 return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
             }
@@ -3297,16 +3440,43 @@ exports.deleteDynamicTemplate = async (req, res) => {
         const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
-        const { cloudinary } = require('../config/cloudinary');
-        if (template.publicId) {
-            try {
-                await cloudinary.uploader.destroy(template.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+        // Check if any candidate has this template assigned/requested
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': templateId },
+                { 'offerDeclaration.acceptedTemplates.templateId': templateId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingTemplateBin = require('../models/OnboardingTemplateBin');
+        await OnboardingTemplateBin.deleteMany({ companyId: req.companyId, originalId: templateId });
+        const binItem = new OnboardingTemplateBin({
+            companyId: req.companyId,
+            originalId: templateId,
+            name: template.name,
+            url: template.url,
+            publicId: template.publicId,
+            isRequired: template.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.dynamicTemplates._id': templateId },
+                { $set: { 'settings.onboarding.dynamicTemplates.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+            });
+        }
 
         res.json({ message: 'Template deleted successfully' });
     } catch (error) {
@@ -3496,12 +3666,12 @@ exports.transferToActiveEmployee = async (req, res) => {
                 const normalizedTitle = DOC_TITLE_MAP[doc.type] || doc.label;
 
                 return ({
-                category: DOC_CATEGORY_MAP[doc.type] || 'Other',
-                title: normalizedTitle,
-                fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
-                url: doc.url,
-                uploadDate: doc.uploadedAt || new Date(),
-                verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
+                    category: DOC_CATEGORY_MAP[doc.type] || 'Other',
+                    title: normalizedTitle,
+                    fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
+                    url: doc.url,
+                    uploadDate: doc.uploadedAt || new Date(),
+                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
                 });
             });
 
@@ -3529,7 +3699,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
                         `${safeName}_${Date.now()}.docx`
                     );
-                    
+
                     dossierDocuments.push({
                         category: 'Other',
                         title: template.name,
@@ -3555,7 +3725,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
                         `Offer_Letter_${Date.now()}.docx`
                     );
-                    
+
                     dossierDocuments.push({
                         category: 'Offer Letter',
                         title: 'Offer Letter',

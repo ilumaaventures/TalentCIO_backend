@@ -64,6 +64,56 @@ const restoreEntityTree = async (entity, item, req) => {
         item.isActive = true;
         await item.save();
     }
+
+    if (entityKey === 'onboardingtemplate') {
+        const company = await Company.findById(req.companyId);
+        const exists = company?.settings?.onboarding?.dynamicTemplates?.some(t => t._id.toString() === item.originalId);
+        if (exists) {
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.dynamicTemplates._id': item.originalId },
+                { $set: { 'settings.onboarding.dynamicTemplates.$.isDeleted': false } }
+            );
+        } else {
+            await Company.findByIdAndUpdate(req.companyId, {
+                $push: {
+                    'settings.onboarding.dynamicTemplates': {
+                        _id: item.originalId,
+                        name: item.name,
+                        url: item.url,
+                        publicId: item.publicId,
+                        isRequired: item.isRequired,
+                        isDeleted: false
+                    }
+                }
+            });
+        }
+        await item.deleteOne();
+    }
+
+    if (entityKey === 'onboardingpolicy') {
+        const company = await Company.findById(req.companyId);
+        const exists = company?.settings?.onboarding?.policies?.some(p => p._id.toString() === item.originalId);
+        if (exists) {
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.policies._id': item.originalId },
+                { $set: { 'settings.onboarding.policies.$.isDeleted': false } }
+            );
+        } else {
+            await Company.findByIdAndUpdate(req.companyId, {
+                $push: {
+                    'settings.onboarding.policies': {
+                        _id: item.originalId,
+                        name: item.name,
+                        url: item.url,
+                        publicId: item.publicId,
+                        isRequired: item.isRequired,
+                        isDeleted: false
+                    }
+                }
+            });
+        }
+        await item.deleteOne();
+    }
 };
 
 const buildConflictResponse = (entity, binItem, activeItem) => {
