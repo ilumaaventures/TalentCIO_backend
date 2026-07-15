@@ -1930,7 +1930,10 @@ exports.getMyOnboarding = async (req, res) => {
             // Filter documents, company policies and dynamic templates
             if (activeDocumentLabels.length > 0) {
                 if (employeeObj.documents) {
-                    employeeObj.documents = employeeObj.documents.filter(doc => activeDocumentLabels.includes(doc.label));
+                    employeeObj.documents = employeeObj.documents.filter(doc => 
+                        activeDocumentLabels.includes(doc.label) ||
+                        activeDocumentLabels.some(al => doc.label.startsWith(al))
+                    );
                 }
                 
                 // Filter policies: support specific templateId mapping or label fallback for legacy entries
