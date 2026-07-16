@@ -60,7 +60,7 @@ const generateTempPassword = (length = 10) => {
 
 const formatDate = (date) => {
     if (!date) return '';
-    return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+    return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 };
 
 const formatCurrency = (val) => {
@@ -221,8 +221,8 @@ const buildPreOnboardingTemplateData = ({
     sharedFilesBlock = '',
     deadlineBlock = '',
     portalButton = '',
-    currentYear = String(new Date().getFullYear()),
-    currentDate = new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
+    currentYear = new Date().toLocaleString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' }),
+    currentDate = new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' })
 }) => ({
     candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
     firstName: employee.firstName || '',
@@ -634,7 +634,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${employee.tempEmployeeId}</code></p>
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${rawPassword}</code></p>
                     ${employee.credentialsExpireAt ? `
-                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${new Date(employee.credentialsExpireAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${new Date(employee.credentialsExpireAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</p>
                     ` : ''}
                     <p style="color: #64748b; font-size: 12px; margin-top: 8px;">⚠️ You will be asked to change your password on first login. Please keep these credentials secure.</p>
                 </div>
@@ -693,7 +693,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         }
 
         const deadlineStr = employee.documentDeadline
-            ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+            ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
             : 'Not specified';
 
         let selectedTemplate = null;
@@ -1422,7 +1422,7 @@ exports.regenerateCredentials = async (req, res) => {
                       <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 24px 0;">
                         <p style="margin: 4px 0;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${employee.tempEmployeeId}</code></p>
                         <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${newPassword}</code></p>
-                        <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                        <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}</p>
                       </div>
 
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:24px auto;">
@@ -2024,6 +2024,10 @@ exports.saveSection = async (req, res) => {
             if (missing.length > 0) {
                 return res.status(400).json({ message: `Please fill all mandatory fields: ${missing.join(', ')}` });
             }
+        }
+
+        if (section === 'offerDeclaration' && data.isComplete) {
+            data.eSignDate = new Date();
         }
 
         // Merge the update
@@ -3093,7 +3097,7 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
             employee_signature: employeeSignatureXml,
             employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
             employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
-            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }),
+            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' }),
             ...salaryBreakups
         });
     } catch (err) {
@@ -3283,7 +3287,7 @@ exports.getMyOfferLetter = async (req, res) => {
             declaration_date: formatDate(employee.offerDate || new Date()),
             employee_signature_name: fullName,
             employee_id: employee.tempEmployeeId,
-            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
+            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' })
         });
 
         const buffer = doc.getZip().generate({ type: 'nodebuffer' });
@@ -4025,7 +4029,7 @@ exports.resolveExtensionRequest = async (req, res) => {
         let logDetail = `Extension request ${status}`;
         if (status === 'Approved' && newDeadline) {
             employee.documentDeadline = new Date(newDeadline);
-            logDetail += ` - New deadline: ${new Date(newDeadline).toLocaleDateString()}`;
+            logDetail += ` - New deadline: ${new Date(newDeadline).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
         }
 
         employee.auditLog.push({
