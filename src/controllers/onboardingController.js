@@ -544,7 +544,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             const resolvedIdStr = resolvedId ? resolvedId.toString() : null;
 
             // Find existing requested document with the same resolvedId or label
-            const found = docsData.find(rd => 
+            const found = docsData.find(rd =>
                 (resolvedIdStr && rd.templateId && rd.templateId.toString() === resolvedIdStr) ||
                 (!resolvedIdStr && rd.label === d)
             );
@@ -552,8 +552,8 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             if (found) {
                 found.emailSentAt = emailSentAt;
             } else {
-                docsData.push({ 
-                    label: d, 
+                docsData.push({
+                    label: d,
                     emailSentAt,
                     templateId: resolvedId || undefined
                 });
@@ -1930,19 +1930,19 @@ exports.getMyOnboarding = async (req, res) => {
             // Filter documents, company policies and dynamic templates
             if (activeDocumentLabels.length > 0) {
                 if (employeeObj.documents) {
-                    employeeObj.documents = employeeObj.documents.filter(doc => 
+                    employeeObj.documents = employeeObj.documents.filter(doc =>
                         activeDocumentLabels.includes(doc.label) ||
                         activeDocumentLabels.some(al => doc.label.startsWith(al))
                     );
                 }
-                
+
                 // Filter policies: support specific templateId mapping or label fallback for legacy entries
                 policies = policies.filter(p => {
                     const hasIdAssigned = activeTemplateIds.includes(p._id.toString());
                     if (hasIdAssigned) return true;
                     return p.isDeleted !== true && activeDocumentLabels.includes(p.name);
                 });
-                
+
                 // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
                 dynamicTemplates = dynamicTemplates.filter(t => {
                     const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
@@ -2548,12 +2548,21 @@ const DUMMY_PREVIEW_DATA = {
 exports.getTemplatePreview = async (req, res) => {
     try {
         const { type } = req.params; // 'offerLetter' or 'declaration'
+        const { withData } = req.query;
         const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
 
         const customUrl = type === 'offerLetter' ? company?.settings?.onboarding?.offerLetterTemplateUrl : company?.settings?.onboarding?.declarationTemplateUrl;
         const defaultPath = type === 'offerLetter' ?
             path.join(__dirname, '../../templates/offer_letter_template.docx') :
             path.join(__dirname, '../../templates/declaration_template.docx');
+
+        const content = await getTemplateContent(customUrl, defaultPath);
+        const zip = new PizZip(content);
+        const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            nullGetter: () => '—'
+        });
 
         let previewData = { ...DUMMY_PREVIEW_DATA };
         try {
@@ -2971,6 +2980,156 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
 
     try {
         let docXml = zip.file('word/document.xml').asText();
+
+        const _eSignStyleRaw = employee.offerDeclaration?.eSignStyle || '';
+        let fontName = 'Calibri';
+        if (_eSignStyleRaw.includes('Brush Script MT')) {
+            fontName = 'Brush Script MT';
+        } else if (_eSignStyleRaw.includes('Lucida Handwriting')) {
+            fontName = 'Lucida Handwriting';
+        } else if (_eSignStyleRaw.includes('Segoe Print')) {
+            fontName = 'Segoe Print';
+        } else if (_eSignStyleRaw.includes('Courier New')) {
+            fontName = 'Courier New';
+        }
+
+        // Dynamically register the selected font in the document's font table
+        try {
+            let fontTableXml = zip.file('word/fontTable.xml').asText();
+            if (!fontTableXml.includes(`w:name="${fontName}"`)) {
+                const fontTag = `<w:font w:name="${fontName}"/>`;
+                fontTableXml = fontTableXml.replace('</fonts>', `${fontTag}</fonts>`);
+                zip.file('word/fontTable.xml', fontTableXml);
+            }
+        } catch (ftErr) {
+            console.error('Error updating fontTable.xml:', ftErr.message);
+        }
+
+        // --- Inline signature injection ---
+        // We inject the signature DIRECTLY into the raw XML before docxtemplater sees it.
+        // This keeps "Employee Signature: <signature>" all on the same line, because docxtemplater's
+        // {@tag} replacement always destroys the surrounding paragraph text.
+        if (docXml.includes('{@employee_signature}')) {
+            // Build the inline run XML for the signature (typed or pending)
+            const _eSignNameRaw = employee.offerDeclaration?.eSignName;
+            const _eSignTypeRaw = employee.offerDeclaration?.eSignType;
+            const _eSignValueRaw = employee.offerDeclaration?.eSignValue;
+            let inlineRunXml = '';
+
+            if (employee.offerDeclaration?.isComplete && _eSignNameRaw) {
+                if (_eSignTypeRaw === 'drawn' && _eSignValueRaw && _eSignValueRaw.startsWith('data:image/png;base64,')) {
+                    // For drawn signatures we still inject the name as text inline;
+                    // the image block will be handled separately below by employeeSignatureXml
+                    inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                } else {
+                    inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                }
+            } else {
+                inlineRunXml = `<w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t xml:space="preserve"> (Pending Signature)</w:t></w:r>`;
+            }
+
+            // Word XML often SPLITS text like '{@employee_signature}' across multiple <w:r> runs.
+            // Strategy: parse the paragraph into structured child elements, find the tag across
+            // text runs, replace it surgically, and serialize everything back (preserving w:br, etc.)
+            docXml = docXml.replace(/<w:p( [^>]*)?>[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+                // Broad check to identify paragraphs containing components of the tag even if split
+                if (!paragraphXml.includes('employee_signature') &&
+                    !paragraphXml.includes('employee_signa') &&
+                    !paragraphXml.includes('signature')) return paragraphXml;
+
+                // 1. Parse the paragraph into structured elements
+                const elements = [];
+                const elementRegex = /(<w:pPr>[\s\S]*?<\/w:pPr>|<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>|<[^>]+>)/g;
+                let match;
+                while ((match = elementRegex.exec(paragraphXml)) !== null) {
+                    const rawXml = match[0];
+                    const runTextMatch = rawXml.match(/<w:r(?:\s[^>]*)?>([\s\S]*?)<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>([\s\S]*?)<\/w:r>/);
+                    if (runTextMatch) {
+                        elements.push({
+                            type: 'text_run',
+                            rawXml,
+                            rPr: rawXml.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/)?.[0] || '',
+                            text: runTextMatch[2]
+                        });
+                    } else {
+                        elements.push({
+                            type: 'other',
+                            rawXml
+                        });
+                    }
+                }
+
+                // 2. Reconstruct text from text runs
+                let fullText = '';
+                const textRunIndices = [];
+                const textElements = elements.filter(el => el.type === 'text_run');
+                if (textElements.length === 0) return paragraphXml;
+
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    if (el.type === 'text_run') {
+                        for (let j = 0; j < el.text.length; j++) {
+                            textRunIndices.push({ elIndex: i, charIndex: j });
+                        }
+                        fullText += el.text;
+                    }
+                }
+
+                const tag = '{@employee_signature}';
+                const tagStart = fullText.indexOf(tag);
+                if (tagStart === -1) return paragraphXml;
+
+                const tagEnd = tagStart + tag.length;
+
+                // Identify affected runs
+                const affectedElIndices = new Set();
+                for (let idx = tagStart; idx < tagEnd; idx++) {
+                    affectedElIndices.add(textRunIndices[idx].elIndex);
+                }
+                const affectedElIndicesArr = Array.from(affectedElIndices).sort((a, b) => a - b);
+
+                const firstElIndex = affectedElIndicesArr[0];
+                const firstEl = elements[firstElIndex];
+                const startInRun = textRunIndices[tagStart].charIndex;
+                const prefix = firstEl.text.slice(0, startInRun);
+
+                const lastElIndex = affectedElIndicesArr[affectedElIndicesArr.length - 1];
+                const lastEl = elements[lastElIndex];
+                const endInRun = textRunIndices[tagEnd - 1].charIndex + 1;
+                const suffix = lastEl.text.slice(endInRun);
+
+                // Clear text in all affected runs
+                for (const elIdx of affectedElIndicesArr) {
+                    elements[elIdx].text = '';
+                }
+
+                // Inject prefix, signature and suffix into the first affected run
+                const rPr = firstEl.rPr;
+                let newRawXml = '';
+                if (prefix) {
+                    newRawXml += `<w:r>${rPr}<w:t xml:space="preserve">${prefix}</w:t></w:r>`;
+                }
+                newRawXml += inlineRunXml;
+                if (suffix) {
+                    newRawXml += `<w:r>${rPr}<w:t xml:space="preserve">${suffix}</w:t></w:r>`;
+                }
+                firstEl.rawXml = newRawXml;
+
+                // Clear raw XML for other affected runs
+                for (let i = 1; i < affectedElIndicesArr.length; i++) {
+                    elements[affectedElIndicesArr[i]].rawXml = '';
+                }
+
+                // 3. Serialize back
+                return elements.map(el => {
+                    if (el.type === 'text_run' && el.text !== '') {
+                        return `<w:r>${el.rPr}<w:t xml:space="preserve">${el.text}</w:t></w:r>`;
+                    }
+                    return el.rawXml;
+                }).join('');
+            });
+        }
+
         docXml = preprocessDocxXml(docXml);
         zip.file('word/document.xml', docXml);
     } catch (e) {
@@ -3047,14 +3206,41 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
                 employeeSignatureXml = `<w:p><w:r>${drawingXml}</w:r></w:p>`;
             } catch (err) {
                 console.error('Error injecting drawn signature to docx:', err.message);
-                employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+                const eSignStyle = employee.offerDeclaration?.eSignStyle || '';
+                let fontNameBlock = 'Calibri';
+                if (eSignStyle.includes('Brush Script MT')) {
+                    fontNameBlock = 'Brush Script MT';
+                } else if (eSignStyle.includes('Lucida Handwriting')) {
+                    fontNameBlock = 'Lucida Handwriting';
+                } else if (eSignStyle.includes('Segoe Print')) {
+                    fontNameBlock = 'Segoe Print';
+                } else if (eSignStyle.includes('Courier New')) {
+                    fontNameBlock = 'Courier New';
+                }
+                employeeSignatureXml = `<w:p><w:r><w:rPr><w:rFonts w:ascii="${fontNameBlock}" w:hAnsi="${fontNameBlock}" w:cs="${fontNameBlock}"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
             }
         } else {
-            employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
+            const eSignStyle = employee.offerDeclaration?.eSignStyle || '';
+            let fontNameBlock = 'Calibri';
+            if (eSignStyle.includes('Brush Script MT')) {
+                fontNameBlock = 'Brush Script MT';
+            } else if (eSignStyle.includes('Lucida Handwriting')) {
+                fontNameBlock = 'Lucida Handwriting';
+            } else if (eSignStyle.includes('Segoe Print')) {
+                fontNameBlock = 'Segoe Print';
+            } else if (eSignStyle.includes('Courier New')) {
+                fontNameBlock = 'Courier New';
+            }
+            employeeSignatureXml = `<w:p><w:r><w:rPr><w:rFonts w:ascii="${fontNameBlock}" w:hAnsi="${fontNameBlock}" w:cs="${fontNameBlock}"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
         }
     } else {
         employeeSignatureXml = `<w:p><w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t>(Pending Signature)</w:t></w:r></w:p>`;
     }
+
+    // Plain-text version for inline use next to headings like "Employee Signature: {employee_signature_inline}"
+    const employeeSignatureInline = (employee.offerDeclaration?.isComplete && eSignName)
+        ? eSignName
+        : '(Pending Signature)';
 
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
@@ -3094,7 +3280,9 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
             hr_designation: hrUser.designation || 'HR Manager',
             declaration_date: formatDate(new Date()),
             employee_signature_name: fullName,
-            employee_signature: employeeSignatureXml,
+            // NOTE: employee_signature is injected directly into the raw XML above (inline),
+            // so we do NOT pass it here to avoid docxtemplater replacing the whole paragraph.
+            employee_signature_inline: employeeSignatureInline,
             employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
             employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
             current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' }),
@@ -3249,48 +3437,7 @@ exports.getMyOfferLetter = async (req, res) => {
         const customUrl = company?.settings?.onboarding?.offerLetterTemplateUrl;
         const defaultPath = path.join(__dirname, '../../templates/offer_letter_template.docx');
 
-        const content = await getTemplateContent(customUrl, defaultPath);
-        const zip = new PizZip(content);
-        const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            nullGetter: () => '—'
-        });
-
-        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName}`.trim();
-        const permAddr = employee.personalDetails?.permanentAddress || employee.personalDetails?.currentAddress || {};
-        const hrUser = employee.createdBy || {};
-
-        doc.render({
-            offer_date: formatDate(employee.offerDate || new Date()),
-            employee_full_name: fullName,
-            employee_first_name: employee.firstName,
-            employee_last_name: employee.lastName,
-            employee_permanent_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            employee_city: permAddr.city || '—',
-            designation: employee.designation || '—',
-            department: employee.department || '—',
-            joining_date: formatDate(employee.joiningDate),
-            work_location: employee.workLocation || '—',
-            probation_period: employee.probationPeriod || '6 months',
-            probationPeriod: employee.probationPeriod || '6 months',
-            annual_ctc: formatCurrency(employee.salary?.annualCTC),
-            annual_salary: formatCurrency(employee.salary?.annualCTC),
-            basic_salary: formatCurrency(employee.salary?.basic),
-            hra: formatCurrency(employee.salary?.hra),
-            special_allowance: formatCurrency(employee.salary?.specialAllowance),
-            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-            hr_designation: hrUser.designation || 'HR Manager',
-            declaration_date: formatDate(employee.offerDate || new Date()),
-            employee_signature_name: fullName,
-            employee_id: employee.tempEmployeeId,
-            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' })
-        });
-
-        const buffer = doc.getZip().generate({ type: 'nodebuffer' });
+        const buffer = await getPopulatedDocumentBuffer(employee, company, customUrl, defaultPath);
 
         await OnboardingEmployee.findByIdAndUpdate(employee._id, {
             $push: {

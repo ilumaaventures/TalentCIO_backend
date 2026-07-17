@@ -171,6 +171,7 @@ const onboardingEmployeeSchema = new mongoose.Schema({
         agreesToOriginalVerification: { type: Boolean, default: false },
         eSignName: { type: String, default: '' },
         eSignType: { type: String, enum: ['typed', 'drawn', ''], default: '' },
+        eSignStyle: { type: String, default: '' },
         eSignValue: { type: String, default: '' },
         eSignIp: { type: String, default: '' },
         eSignDate: { type: Date },
