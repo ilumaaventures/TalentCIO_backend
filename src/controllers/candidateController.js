@@ -2961,7 +2961,8 @@ exports.transferToOnboarding = async (req, res) => {
             { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Experience Certificate' },
-            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
+            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
         console.log('📄 Initializing onboarding documents:', defaultDocuments.length);

@@ -152,6 +152,16 @@ const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
     let changed = false;
 
     if (Array.isArray(employee.documents)) {
+        const hasCharacterCertificate = employee.documents.some(doc => doc?.type === 'character_certificate');
+        if (!hasCharacterCertificate) {
+            employee.documents.push({
+                type: 'character_certificate',
+                label: 'Character Certificate',
+                status: 'Pending'
+            });
+            changed = true;
+        }
+
         employee.documents.forEach((doc) => {
             if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
                 doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
@@ -326,7 +336,8 @@ exports.addEmployee = async (req, res) => {
             { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Previous Experience Certificate' },
-            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
+            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
         let calculatedSalary = salary || {};
@@ -1080,7 +1091,8 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
                     { type: 'experience_certificate', label: 'Previous Experience Certificate' },
-                    { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
+                    { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+                    { type: 'character_certificate', label: 'Character Certificate' }
                 ];
 
                 const employee = new OnboardingEmployee({
@@ -2228,8 +2240,8 @@ exports.submitOnboarding = async (req, res) => {
             const isSharedCustomFile = doc.type === 'custom_file';
 
             if (isSelective) {
-                // Modified: Skip validation for 'passport' type even if requested (it is labeled as Optional)
-                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
+                // Modified: Skip validation for 'passport' and 'character_certificate' types even if requested (they are optional)
+                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport' && doc.type !== 'character_certificate') {
                     errors.push(`${doc.label} not uploaded`);
                 }
             } else if (isMandatory) {
@@ -3682,7 +3694,8 @@ const DOC_CATEGORY_MAP = {
     '12th_marksheet': 'Education',
     'graduation': 'Education',
     'relieving_letter': 'Relieving Letter',
-    'experience_certificate': 'Employment'
+    'experience_certificate': 'Employment',
+    'character_certificate': 'Other'
 };
 
 exports.logout = async (req, res) => {
@@ -3707,7 +3720,8 @@ exports.logout = async (req, res) => {
 const DOC_TITLE_MAP = {
     'passport': 'Passport',
     'passport_photo': 'Recent Passport-Size Photograph',
-    'experience_certificate': 'Previous Experience Certificate'
+    'experience_certificate': 'Previous Experience Certificate',
+    'character_certificate': 'Character Certificate'
 };
 
 const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
