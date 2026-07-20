@@ -487,6 +487,8 @@ const serializeAnnouncement = (announcement = {}, viewer = {}, manageAccess = fa
         audienceSummary,
         publishedAt: announcement.publishedAt,
         expiresAt: announcement.expiresAt,
+        recurringInterval: announcement.recurringInterval || 'none',
+        recurringDayOfMonth: announcement.recurringDayOfMonth,
         createdAt: announcement.createdAt,
         updatedAt: announcement.updatedAt,
         createdBy: creatorName ? {
@@ -572,6 +574,9 @@ const buildAnnouncementPayload = (body = {}) => {
     const audienceUserIds = normalizeAudienceUserObjectIds(parseArrayValue(body.audienceUserIds));
     const expiresAtValue = normalizeString(body.expiresAt);
     const expiresAt = expiresAtValue ? new Date(expiresAtValue) : null;
+    const recurringIntervals = ['none', 'monthly', 'quarterly', 'yearly'];
+    const recurringInterval = recurringIntervals.includes(body.recurringInterval) ? body.recurringInterval : 'none';
+    const recurringDayOfMonth = body.recurringDayOfMonth ? parseInt(body.recurringDayOfMonth, 10) : null;
 
     return {
         title,
@@ -585,6 +590,8 @@ const buildAnnouncementPayload = (body = {}) => {
         audienceEmploymentTypes,
         audienceUserIds,
         expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+        recurringInterval,
+        recurringDayOfMonth,
         removeAttachment: parseBoolean(body.removeAttachment)
     };
 };
@@ -612,6 +619,12 @@ const validateAnnouncementPayload = async (payload = {}, companyId) => {
 
     if (payload.expiresAt && payload.expiresAt <= new Date()) {
         return 'Expiry date must be in the future.';
+    }
+
+    if (payload.recurringInterval && payload.recurringInterval !== 'none') {
+        if (!payload.recurringDayOfMonth || Number.isNaN(payload.recurringDayOfMonth) || payload.recurringDayOfMonth < 1 || payload.recurringDayOfMonth > 31) {
+            return 'Recurring day must be a day of the month between 1 and 31.';
+        }
     }
 
     if (payload.audienceType === 'departments' && payload.audienceDepartments.length === 0) {
@@ -1089,6 +1102,8 @@ exports.updateAnnouncement = async (req, res) => {
         existingAnnouncement.audienceEmploymentTypes = payload.audienceEmploymentTypes;
         existingAnnouncement.audienceUserIds = payload.audienceUserIds;
         existingAnnouncement.expiresAt = payload.expiresAt;
+        existingAnnouncement.recurringInterval = payload.recurringInterval;
+        existingAnnouncement.recurringDayOfMonth = payload.recurringDayOfMonth;
         existingAnnouncement.updatedBy = req.user._id;
 
         if (uploadedAttachment) {
@@ -1413,5 +1428,78 @@ exports.getAnnouncementAcknowledgements = async (req, res) => {
     } catch (error) {
         console.error('getAnnouncementAcknowledgements error:', error);
         return res.status(500).json({ message: 'Failed to retrieve acknowledgement stats.' });
+    }
+};
+
+exports.activateRecurringAnnouncements = async (io) => {
+    try {
+        const today = new Date();
+        const currentDay = today.getDate();
+
+        const recurringAnnouncements = await Announcement.find({
+            recurringInterval: { $in: ['monthly', 'quarterly', 'yearly'] },
+            recurringDayOfMonth: currentDay,
+            $or: [
+                { expiresAt: null },
+                { expiresAt: { $gt: today } }
+            ]
+        });
+
+        if (recurringAnnouncements.length === 0) {
+            return;
+        }
+
+        console.log(`[SCHEDULER] Found ${recurringAnnouncements.length} recurring candidates for day ${currentDay}`);
+
+        for (const announcement of recurringAnnouncements) {
+            try {
+                const interval = announcement.recurringInterval;
+                const start = announcement.createdAt || new Date();
+                
+                let shouldActivate = false;
+                if (interval === 'monthly') {
+                    shouldActivate = true;
+                } else if (interval === 'quarterly') {
+                    const monthsDiff = (today.getFullYear() - start.getFullYear()) * 12 + (today.getMonth() - start.getMonth());
+                    if (monthsDiff % 3 === 0) {
+                        shouldActivate = true;
+                    }
+                } else if (interval === 'yearly') {
+                    if (today.getMonth() === start.getMonth()) {
+                        shouldActivate = true;
+                    }
+                }
+
+                if (!shouldActivate) {
+                    continue;
+                }
+
+                console.log(`[SCHEDULER] Activating ${interval} recurring announcement: ${announcement.title}`);
+                announcement.status = 'published';
+                announcement.publishedAt = new Date();
+                announcement.acknowledgements = [];
+                announcement.comments = [];
+                announcement.reactions = [];
+                
+                await announcement.save();
+
+                const populatedAnnouncement = await fetchPopulatedAnnouncementById(announcement._id);
+
+                const mockReq = {
+                    companyId: announcement.companyId,
+                    user: { _id: announcement.createdBy },
+                    app: {
+                        get: (key) => key === 'io' ? io : null
+                    }
+                };
+
+                await notifyPublishedAnnouncement({ req: mockReq, announcement: populatedAnnouncement });
+                console.log(`[SCHEDULER] Activated recurring announcement successfully: ${announcement.title}`);
+            } catch (innerError) {
+                console.error(`[SCHEDULER] Failed to activate recurring announcement ${announcement._id}:`, innerError);
+            }
+        }
+    } catch (error) {
+        console.error('[SCHEDULER] Error during recurring announcements activation:', error);
     }
 };

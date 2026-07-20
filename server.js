@@ -233,6 +233,7 @@ const startEscalationCron = require('./src/services/escalationCron');
 const startAutoCheckoutCron = require('./src/services/attendanceAutoCheckoutCron');
 const cleanupStaleIndexes = require('./src/services/indexCleanup');
 const { startBinAutoPurgeCron } = require('./src/services/binAutoPurgeCron');
+const startAnnouncementScheduler = require('./src/services/announcementScheduler');
 
 const authRoutes = require('./src/routes/authRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
@@ -288,6 +289,7 @@ const initServer = async () => {
     startEscalationCron(io);
     startAutoCheckoutCron();
     startBinAutoPurgeCron();
+    startAnnouncementScheduler(io);
 
     server.listen(PORT, () => {
         console.log(`Server & Socket.IO running on port ${PORT}`);

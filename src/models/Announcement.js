@@ -144,6 +144,17 @@ const announcementSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    recurringInterval: {
+        type: String,
+        enum: ['none', 'monthly', 'quarterly', 'yearly'],
+        default: 'none'
+    },
+    recurringDayOfMonth: {
+        type: Number,
+        min: 1,
+        max: 31,
+        default: null
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
