@@ -3030,9 +3030,72 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
 
             if (employee.offerDeclaration?.isComplete && _eSignNameRaw) {
                 if (_eSignTypeRaw === 'drawn' && _eSignValueRaw && _eSignValueRaw.startsWith('data:image/png;base64,')) {
-                    // For drawn signatures we still inject the name as text inline;
-                    // the image block will be handled separately below by employeeSignatureXml
-                    inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                    // For drawn signatures: embed the actual image inline at the {@ tag location
+                    try {
+                        const _base64Data = _eSignValueRaw.split(';base64,').pop();
+                        zip.file('word/media/candidate_signature.png', Buffer.from(_base64Data, 'base64'));
+
+                        // Ensure PNG extension is registered in Content_Types
+                        try {
+                            let contentTypesXml = zip.file('[Content_Types].xml').asText();
+                            if (!contentTypesXml.includes('Extension="png"')) {
+                                const pngType = `<Default Extension="png" ContentType="image/png"/>`;
+                                contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
+                                zip.file('[Content_Types].xml', contentTypesXml);
+                            }
+                        } catch (ctErr) {
+                            console.error('Error updating Content_Types.xml:', ctErr.message);
+                        }
+
+                        let relsXml = zip.file('word/_rels/document.xml.rels').asText();
+                        if (!relsXml.includes('Target="media/candidate_signature.png"')) {
+                            const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
+                            relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
+                            zip.file('word/_rels/document.xml.rels', relsXml);
+                        }
+
+                        const _drawingXml = `
+                            <w:drawing>
+                                <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
+                                    <wp:extent cx="1371600" cy="457200"/>
+                                    <wp:docPr id="999" name="Candidate Signature"/>
+                                    <wp:cNvGraphicFramePr>
+                                        <a:graphicFrameLocks noChangeAspect="1"/>
+                                    </wp:cNvGraphicFramePr>
+                                    <a:graphic>
+                                        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                            <pic:pic>
+                                                <pic:nvPicPr>
+                                                    <pic:cNvPr id="999" name="candidate_signature.png"/>
+                                                    <pic:cNvPicPr/>
+                                                </pic:nvPicPr>
+                                                <pic:blipFill>
+                                                    <a:blip r:embed="rIdSignature"/>
+                                                    <a:stretch>
+                                                        <a:fillRect/>
+                                                    </a:stretch>
+                                                </pic:blipFill>
+                                                <pic:spPr>
+                                                    <a:xfrm>
+                                                        <a:off x="0" y="0"/>
+                                                        <a:ext cx="1371600" cy="457200"/>
+                                                    </a:xfrm>
+                                                    <a:prstGeom prst="rect">
+                                                        <a:avLst/>
+                                                    </a:prstGeom>
+                                                </pic:spPr>
+                                            </pic:pic>
+                                        </a:graphicData>
+                                    </a:graphic>
+                                </wp:inline>
+                            </w:drawing>
+                        `.trim().replace(/\s+/g, ' ');
+                        inlineRunXml = `<w:r>${_drawingXml}</w:r>`;
+                    } catch (_drawErr) {
+                        console.error('Error building drawn signature for inline injection:', _drawErr.message);
+                        // Fallback to text name if image embedding fails
+                        inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                    }
                 } else {
                     inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
                 }
@@ -3148,106 +3211,10 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
         console.error('Error pre-processing document.xml:', e.message);
     }
 
-    // Handle candidate digital signature injection in the docx
-    let employeeSignatureXml = '';
+    // Signature data for plain-text / typed signatures (drawn is handled inline above via {@ tag})
     const eSignName = employee.offerDeclaration?.eSignName;
     const eSignType = employee.offerDeclaration?.eSignType;
     const eSignValue = employee.offerDeclaration?.eSignValue;
-
-    if (employee.offerDeclaration?.isComplete && eSignName) {
-        if (eSignType === 'drawn' && eSignValue && eSignValue.startsWith('data:image/png;base64,')) {
-            try {
-                const base64Data = eSignValue.split(';base64,').pop();
-                zip.file('word/media/candidate_signature.png', Buffer.from(base64Data, 'base64'));
-
-                // Ensure PNG extension is registered in Content_Types
-                try {
-                    let contentTypesXml = zip.file('[Content_Types].xml').asText();
-                    if (!contentTypesXml.includes('Extension="png"')) {
-                        const pngType = `<Default Extension="png" ContentType="image/png"/>`;
-                        contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
-                        zip.file('[Content_Types].xml', contentTypesXml);
-                    }
-                } catch (ctErr) {
-                    console.error('Error updating Content_Types.xml:', ctErr.message);
-                }
-
-                let relsXml = zip.file('word/_rels/document.xml.rels').asText();
-                if (!relsXml.includes('Target="media/candidate_signature.png"')) {
-                    const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
-                    relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
-                    zip.file('word/_rels/document.xml.rels', relsXml);
-                }
-
-                const drawingXml = `
-                    <w:drawing>
-                        <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
-                            <wp:extent cx="1371600" cy="457200"/>
-                            <wp:docPr id="999" name="Candidate Signature"/>
-                            <wp:cNvGraphicFramePr>
-                                <a:graphicFrameLocks noChangeAspect="1"/>
-                            </wp:cNvGraphicFramePr>
-                            <a:graphic>
-                                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                                    <pic:pic>
-                                        <pic:nvPicPr>
-                                            <pic:cNvPr id="999" name="candidate_signature.png"/>
-                                            <pic:cNvPicPr/>
-                                        </pic:nvPicPr>
-                                        <pic:blipFill>
-                                            <a:blip r:embed="rIdSignature"/>
-                                            <a:stretch>
-                                                <a:fillRect/>
-                                            </a:stretch>
-                                        </pic:blipFill>
-                                        <pic:spPr>
-                                            <a:xfrm>
-                                                <a:off x="0" y="0"/>
-                                                <a:ext cx="1371600" cy="457200"/>
-                                            </a:xfrm>
-                                            <a:prstGeom prst="rect">
-                                                <a:avLst/>
-                                            </a:prstGeom>
-                                        </pic:spPr>
-                                    </pic:pic>
-                                </a:graphicData>
-                            </a:graphic>
-                        </wp:inline>
-                    </w:drawing>
-                `.trim().replace(/\s+/g, ' ');
-                employeeSignatureXml = `<w:p><w:r>${drawingXml}</w:r></w:p>`;
-            } catch (err) {
-                console.error('Error injecting drawn signature to docx:', err.message);
-                const eSignStyle = employee.offerDeclaration?.eSignStyle || '';
-                let fontNameBlock = 'Calibri';
-                if (eSignStyle.includes('Brush Script MT')) {
-                    fontNameBlock = 'Brush Script MT';
-                } else if (eSignStyle.includes('Lucida Handwriting')) {
-                    fontNameBlock = 'Lucida Handwriting';
-                } else if (eSignStyle.includes('Segoe Print')) {
-                    fontNameBlock = 'Segoe Print';
-                } else if (eSignStyle.includes('Courier New')) {
-                    fontNameBlock = 'Courier New';
-                }
-                employeeSignatureXml = `<w:p><w:r><w:rPr><w:rFonts w:ascii="${fontNameBlock}" w:hAnsi="${fontNameBlock}" w:cs="${fontNameBlock}"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
-            }
-        } else {
-            const eSignStyle = employee.offerDeclaration?.eSignStyle || '';
-            let fontNameBlock = 'Calibri';
-            if (eSignStyle.includes('Brush Script MT')) {
-                fontNameBlock = 'Brush Script MT';
-            } else if (eSignStyle.includes('Lucida Handwriting')) {
-                fontNameBlock = 'Lucida Handwriting';
-            } else if (eSignStyle.includes('Segoe Print')) {
-                fontNameBlock = 'Segoe Print';
-            } else if (eSignStyle.includes('Courier New')) {
-                fontNameBlock = 'Courier New';
-            }
-            employeeSignatureXml = `<w:p><w:r><w:rPr><w:rFonts w:ascii="${fontNameBlock}" w:hAnsi="${fontNameBlock}" w:cs="${fontNameBlock}"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
-        }
-    } else {
-        employeeSignatureXml = `<w:p><w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t>(Pending Signature)</w:t></w:r></w:p>`;
-    }
 
     // Plain-text version for inline use next to headings like "Employee Signature: {employee_signature_inline}"
     const employeeSignatureInline = (employee.offerDeclaration?.isComplete && eSignName)
