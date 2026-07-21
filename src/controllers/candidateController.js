@@ -2962,6 +2962,7 @@ exports.transferToOnboarding = async (req, res) => {
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Experience Certificate' },
             { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
             { type: 'character_certificate', label: 'Character Certificate' }
         ];
 

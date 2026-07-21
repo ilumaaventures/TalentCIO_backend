@@ -162,6 +162,17 @@ const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
             changed = true;
         }
 
+        const hasLivePhoto = employee.documents.some(doc => doc?.type === 'live_photo');
+        if (!hasLivePhoto) {
+            employee.documents.push({
+                type: 'live_photo',
+                label: 'Live Photograph',
+                status: 'Pending',
+                requireLivePhoto: true
+            });
+            changed = true;
+        }
+
         employee.documents.forEach((doc) => {
             if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
                 doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
@@ -337,6 +348,7 @@ exports.addEmployee = async (req, res) => {
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Previous Experience Certificate' },
             { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
             { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
@@ -1092,6 +1104,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
                     { type: 'experience_certificate', label: 'Previous Experience Certificate' },
                     { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+                    { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
                     { type: 'character_certificate', label: 'Character Certificate' }
                 ];
 
@@ -1502,8 +1515,40 @@ exports.regenerateCredentials = async (req, res) => {
     }
 };
 
+// --- Toggle Live Photo requirement on a document ---
+exports.toggleDocLivePhoto = async (req, res) => {
+    try {
+        const { id, docId } = req.params;
+        const { requireLivePhoto } = req.body; // boolean
+
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const doc = employee.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Document not found' });
+
+        doc.requireLivePhoto = Boolean(requireLivePhoto);
+
+        employee.auditLog.push({
+            action: 'LIVE_PHOTO_TOGGLE',
+            details: `${doc.label} live photo requirement set to ${doc.requireLivePhoto}`
+        });
+        await employee.save();
+
+        res.status(200).json({
+            message: `Live photo requirement ${doc.requireLivePhoto ? 'enabled' : 'disabled'} for ${doc.label}`,
+            document: doc,
+            employee
+        });
+    } catch (error) {
+        console.error('Error toggling live photo requirement:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
 // --- Flag a document for re-upload ---
 exports.flagDocument = async (req, res) => {
+
     try {
         const { id, docId } = req.params;
         const { reason } = req.body;
@@ -2095,6 +2140,13 @@ exports.uploadDocument = async (req, res) => {
         doc.status = 'Uploaded';
         doc.rejectionReason = '';
         doc.uploadedAt = new Date();
+
+        if (doc.type === 'live_photo') {
+            doc.livePhotoMetadata = {
+                capturedAt: new Date(),
+                address: req.body.address || ''
+            };
+        }
 
         employee.auditLog.push({ action: 'DOCUMENT_UPLOAD', details: `${doc.label} uploaded` });
         if (employee.status === 'Pending') employee.status = 'In Progress';
@@ -3656,6 +3708,7 @@ const DOC_CATEGORY_MAP = {
     'aadhaar_back': 'ID Proof',
     'passport': 'ID Proof',
     'passport_photo': 'ID Proof',
+    'live_photo': 'ID Proof',
     'salary_slip': 'Payslips',
     '10th_marksheet': 'Education',
     '12th_marksheet': 'Education',
@@ -3687,6 +3740,7 @@ exports.logout = async (req, res) => {
 const DOC_TITLE_MAP = {
     'passport': 'Passport',
     'passport_photo': 'Recent Passport-Size Photograph',
+    'live_photo': 'Live Photograph',
     'experience_certificate': 'Previous Experience Certificate',
     'character_certificate': 'Character Certificate'
 };
@@ -3803,7 +3857,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                     fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
                     url: doc.url,
                     uploadDate: doc.uploadedAt || new Date(),
-                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
+                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending',
+                    livePhotoMetadata: doc.livePhotoMetadata
                 });
             });
 
