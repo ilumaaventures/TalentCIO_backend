@@ -2002,9 +2002,18 @@ exports.getMyOnboarding = async (req, res) => {
 
                 // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
                 dynamicTemplates = dynamicTemplates.filter(t => {
-                    const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
-                    if (hasIdAssigned) return true;
-                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                    const reqDoc = (employee.requestedDocuments || []).find(d => 
+                        d.templateId?.toString() === t._id.toString() || d.label === t.name
+                    );
+                    const isAccepted = (employee.offerDeclaration?.acceptedTemplates || []).some(at => at.templateId === t._id.toString());
+
+                    if (t.isDeleted !== true) {
+                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                        if (hasIdAssigned) return true;
+                        return activeDocumentLabels.includes(t.name);
+                    }
+                    // If deleted, only return if it has already been sent or accepted
+                    return (reqDoc && reqDoc.emailSentAt) || isAccepted;
                 });
             }
         }
@@ -3439,9 +3448,10 @@ exports.generateDynamicTemplate = async (req, res) => {
 
         const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
 
+        const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        res.setHeader('Content-Disposition', `inline; filename=${safeName}.docx`);
+        res.setHeader('Content-Disposition', `inline; filename=${candidateName}_${safeName}.docx`);
         res.send(buffer);
     } catch (error) {
         console.error('Error generating dynamic template preview:', error);
@@ -3479,6 +3489,7 @@ exports.getMyOfferLetter = async (req, res) => {
             }
         });
 
+        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName || ''}`.trim();
         const safeName = fullName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Disposition', `attachment; filename=OfferLetter_${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -3682,8 +3693,9 @@ exports.downloadTemplateById = async (req, res) => {
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
         const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+        const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
-        res.setHeader('Content-Disposition', `attachment; filename=${safeName}.docx`);
+        res.setHeader('Content-Disposition', `attachment; filename=${candidateName}_${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.send(buffer);
     } catch (error) {
@@ -3880,17 +3892,19 @@ exports.transferToActiveEmployee = async (req, res) => {
             if (template && template.url) {
                 try {
                     const templateBuffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+                    const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
                     const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+                    const candidateSafeName = `${candidateName}_${safeName}`;
                     const uploadedTemplate = await uploadBufferToCloudinary(
                         templateBuffer,
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
-                        `${safeName}_${Date.now()}.docx`
+                        `${candidateSafeName}_${Date.now()}.docx`
                     );
 
                     dossierDocuments.push({
                         category: 'Other',
-                        title: template.name,
-                        fileName: `${safeName}.docx`,
+                        title: `${template.name} - ${employee.firstName} ${employee.lastName || ''}`.trim(),
+                        fileName: `${candidateSafeName}.docx`,
                         url: uploadedTemplate.secure_url,
                         uploadDate: acceptedT.acceptedAt || new Date(),
                         verificationStatus: 'Verified'
@@ -3907,16 +3921,17 @@ exports.transferToActiveEmployee = async (req, res) => {
             if (offerLetterTemplateUrl) {
                 try {
                     const offerLetterBuffer = await getPopulatedDocumentBuffer(employee, company, offerLetterTemplateUrl);
+                    const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
                     const uploadedOffer = await uploadBufferToCloudinary(
                         offerLetterBuffer,
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
-                        `Offer_Letter_${Date.now()}.docx`
+                        `Offer_Letter_${candidateName}_${Date.now()}.docx`
                     );
 
                     dossierDocuments.push({
                         category: 'Offer Letter',
                         title: 'Offer Letter',
-                        fileName: 'Offer_Letter.docx',
+                        fileName: `Offer_Letter_${candidateName}.docx`,
                         url: uploadedOffer.secure_url,
                         uploadDate: employee.offerDeclaration?.eSignDate || new Date(),
                         verificationStatus: 'Verified'
