@@ -1,4 +1,4 @@
-const { eachDayOfInterval, format } = require('date-fns');
+const { format } = require('date-fns');
 const Attendance = require('../models/Attendance');
 const Holiday = require('../models/Holiday');
 const LeaveRequest = require('../models/LeaveRequest');
@@ -12,14 +12,10 @@ const { parseDateAsIST } = require('../utils/attendancePolicy');
 const { toLocalTimezoneRep } = require('../utils/timesheetPeriod');
 
 const buildEncryptedResponseIfNeeded = (payload, payrollIntegration) => {
-    if (!payrollIntegration?.encryptPayloads) {
-        return payload;
-    }
-
+    if (!payrollIntegration?.encryptPayloads) return payload;
     if (!payrollIntegration.encryptionSecret) {
         throw new Error('Payload encryption is enabled but no encryptionSecret is configured.');
     }
-
     return encryptPayload(payload, payrollIntegration.encryptionSecret);
 };
 
@@ -31,28 +27,22 @@ const countLeaveDaysInRange = ({
     weeklyOffs = ['Saturday', 'Sunday'],
     holidayDateSet = new Set()
 }) => {
-    if (!startDate || !endDate) {
-        return 0;
-    }
+    if (!startDate || !endDate) return 0;
 
     const localStart = toLocalTimezoneRep(startDate);
     const localEnd = toLocalTimezoneRep(endDate);
 
     if (isHalfDay) {
-        const dayName = format(localStart, 'EEEE');
-        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(localStart.toDateString());
+        const isOffDay = weeklyOffs.includes(format(localStart, 'EEEE')) || holidayDateSet.has(localStart.toDateString());
         return isOffDay && !sandwichRule ? 0 : 0.5;
     }
 
-    return eachDayOfInterval({ start: localStart, end: localEnd }).reduce((total, currentDate) => {
-        const dayName = format(currentDate, 'EEEE');
-        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(currentDate.toDateString());
-        if (isOffDay && !sandwichRule) {
-            return total;
-        }
-
-        return total + 1;
-    }, 0);
+    let count = 0;
+    for (let d = new Date(localStart); d <= localEnd; d.setDate(d.getDate() + 1)) {
+        const isOffDay = weeklyOffs.includes(format(d, 'EEEE')) || holidayDateSet.has(d.toDateString());
+        if (!isOffDay || sandwichRule) count++;
+    }
+    return count;
 };
 
 const resolveMonthRange = (month, year) => {
