@@ -33,6 +33,7 @@ const MANDATORY_FIELDS = [
     { section: 'Mandatory Documents', label: 'Aadhaar Card (Back)',    check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === 'aadhaar card (back)' && !d?.isDeleted) },
     { section: 'Mandatory Documents', label: 'Pan Card',               check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === 'pan card' && !d?.isDeleted) },
     { section: 'Mandatory Documents', label: 'Recent Photograph',      check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === 'recent passport-size photograph' && !d?.isDeleted) },
+    { section: 'Mandatory Documents', label: 'Live Photograph',       check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === 'live photograph' && !d?.isDeleted) },
     { section: 'Mandatory Documents', label: '10th Marksheet / Cert',  check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === '10th marksheet / certificate' && !d?.isDeleted) },
     { section: 'Mandatory Documents', label: '12th Marksheet / Cert',  check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === '12th marksheet / certificate' && !d?.isDeleted) },
     { section: 'Mandatory Documents', label: 'Graduation Certificate', check: (p) => p?.documents?.some(d => d?.title?.toLowerCase() === 'graduation marksheet / certificate' && !d?.isDeleted) },

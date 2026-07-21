@@ -96,7 +96,19 @@ const HiringRequestSchema = new mongoose.Schema({
         experienceMin: Number,
         experienceMax: Number,
         location: { type: String },
-        shift: String
+        shift: String,
+        workPlace: {
+            type: String,
+            enum: ['Company Office', 'Client Site']
+        },
+        clientWorkLocation: [String],
+        workMode: {
+            type: String,
+            enum: ['Work from Office', 'Hybrid', 'Remote']
+        },
+        workingDaysPerWeek: {
+            type: Number
+        }
     },
 
     // 4. Hiring Details

@@ -1,0 +1,15 @@
+const mongoose = require('mongoose');
+const softDeletePlugin = require('../utils/softDeletePlugin');
+
+const onboardingTemplateBinSchema = new mongoose.Schema({
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    originalId: { type: String, required: true },
+    name: { type: String, required: true },
+    url: { type: String, required: true },
+    publicId: { type: String },
+    isRequired: { type: Boolean, default: true }
+}, { timestamps: true });
+
+onboardingTemplateBinSchema.plugin(softDeletePlugin);
+
+module.exports = mongoose.model('OnboardingTemplateBin', onboardingTemplateBinSchema);

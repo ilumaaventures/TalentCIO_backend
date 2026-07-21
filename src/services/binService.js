@@ -17,6 +17,8 @@ const InterviewWorkflow = require('../models/InterviewWorkflow');
 const LeaveConfig = require('../models/LeaveConfig');
 const QueryType = require('../models/QueryType');
 const EmailTemplate = require('../models/EmailTemplate');
+const OnboardingTemplateBin = require('../models/OnboardingTemplateBin');
+const OnboardingPolicyBin = require('../models/OnboardingPolicyBin');
 
 const ENTITY_MAP = {
     project: Project,
@@ -36,7 +38,9 @@ const ENTITY_MAP = {
     interviewworkflow: InterviewWorkflow,
     leaveconfig: LeaveConfig,
     querytype: QueryType,
-    emailtemplate: EmailTemplate
+    emailtemplate: EmailTemplate,
+    onboardingtemplate: OnboardingTemplateBin,
+    onboardingpolicy: OnboardingPolicyBin
 };
 
 const buildSoftDeleteUpdate = (userId, deletedAt = new Date()) => ({
@@ -460,6 +464,30 @@ const purgeDeletedDocument = async (entity, item) => {
 
     if (entityKey === 'candidate') {
         await deleteCandidateAssets(item);
+    }
+
+    if (entityKey === 'onboardingtemplate' || entityKey === 'onboardingpolicy') {
+        const OnboardingEmployee = require('../models/OnboardingEmployee');
+        const Company = require('../models/Company');
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: item.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': item.originalId },
+                { 'offerDeclaration.acceptedTemplates.templateId': item.originalId },
+                { 'offerDeclaration.acceptedPolicies.policyId': item.originalId }
+            ]
+        });
+        if (!isUsed) {
+            if (item.publicId) {
+                try {
+                    await cloudinary.uploader.destroy(item.publicId, { resource_type: 'raw' });
+                } catch (e) { /* ignore */ }
+            }
+            const fieldName = entityKey === 'onboardingtemplate' ? 'dynamicTemplates' : 'policies';
+            await Company.findByIdAndUpdate(item.companyId, {
+                $pull: { [`settings.onboarding.${fieldName}`]: { _id: item.originalId } }
+            });
+        }
     }
 
     await item.deleteOne();

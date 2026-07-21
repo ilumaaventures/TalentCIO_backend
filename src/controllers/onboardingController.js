@@ -60,7 +60,7 @@ const generateTempPassword = (length = 10) => {
 
 const formatDate = (date) => {
     if (!date) return '';
-    return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+    return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 };
 
 const formatCurrency = (val) => {
@@ -152,6 +152,27 @@ const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
     let changed = false;
 
     if (Array.isArray(employee.documents)) {
+        const hasCharacterCertificate = employee.documents.some(doc => doc?.type === 'character_certificate');
+        if (!hasCharacterCertificate) {
+            employee.documents.push({
+                type: 'character_certificate',
+                label: 'Character Certificate',
+                status: 'Pending'
+            });
+            changed = true;
+        }
+
+        const hasLivePhoto = employee.documents.some(doc => doc?.type === 'live_photo');
+        if (!hasLivePhoto) {
+            employee.documents.push({
+                type: 'live_photo',
+                label: 'Live Photograph',
+                status: 'Pending',
+                requireLivePhoto: true
+            });
+            changed = true;
+        }
+
         employee.documents.forEach((doc) => {
             if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
                 doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
@@ -221,8 +242,8 @@ const buildPreOnboardingTemplateData = ({
     sharedFilesBlock = '',
     deadlineBlock = '',
     portalButton = '',
-    currentYear = String(new Date().getFullYear()),
-    currentDate = new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
+    currentYear = new Date().toLocaleString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' }),
+    currentDate = new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' })
 }) => ({
     candidateName: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.firstName || '',
     firstName: employee.firstName || '',
@@ -326,7 +347,9 @@ exports.addEmployee = async (req, res) => {
             { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Previous Experience Certificate' },
-            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
+            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
+            { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
         let calculatedSalary = salary || {};
@@ -364,7 +387,7 @@ exports.addEmployee = async (req, res) => {
                     } else {
                         annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
                         monthlyCTC = annualCTC / 12;
-                        
+
                         const source = {
                             monthlyCTC,
                             payType,
@@ -386,7 +409,7 @@ exports.addEmployee = async (req, res) => {
                                 professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                             }
                         };
-                        
+
                         if (config.salaryComponents) {
                             config.salaryComponents.forEach(c => {
                                 if (c.linkedTo === 'fixed') {
@@ -401,7 +424,7 @@ exports.addEmployee = async (req, res) => {
                                 }
                             });
                         }
-                        
+
                         const master = buildMasterSalaryStructure(source, config);
                         if (master) {
                             calculatedSalary.annualCTC = String(annualCTC);
@@ -410,7 +433,7 @@ exports.addEmployee = async (req, res) => {
                             calculatedSalary.hra = String(master.hraMaster);
                             calculatedSalary.specialAllowance = String(master.specialAllowance);
                             calculatedSalary.monthlyGross = String(master.totalEarnings);
-                            
+
                             calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                             calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
                             calculatedSalary.gratuity = String(master.gratuity || 0);
@@ -421,7 +444,7 @@ exports.addEmployee = async (req, res) => {
                             calculatedSalary.professionalTax = String(master.professionalTax || 0);
                             calculatedSalary.tds = String(master.tds || 0);
                             calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                            
+
                             if (master.earningsMap) {
                                 Object.entries(master.earningsMap).forEach(([id, val]) => {
                                     calculatedSalary[id] = String(val);
@@ -460,7 +483,7 @@ exports.addEmployee = async (req, res) => {
             createdBy: req.user._id,
             requestedSections: [],
             requestedDocuments: [],
-            auditLog: [{ action: 'CREATED', details: `Created by ${req.user.firstName || 'Admin'}` }]
+            auditLog: [{ action: 'CREATED', details: `Created by ${req.user.firstName || 'Admin'}. ID: ${tempEmployeeId}, Password: ${rawPassword}` }]
         });
 
         await employee.save();
@@ -531,13 +554,32 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         });
         employee.requestedSections = sectionsData;
 
+        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
+        const companyPolicies = companyRecord?.settings?.onboarding?.policies || [];
+
         const docsData = employee.requestedDocuments || [];
         (documents || []).forEach(d => {
-            const found = docsData.find(rd => rd.label === d);
+            const template = companyDynamicTemplates.find(t => t.name === d && t.isDeleted !== true);
+            const policy = companyPolicies.find(p => p.name === d && p.isDeleted !== true);
+
+            const resolvedId = template ? template._id : (policy ? policy._id : null);
+            const resolvedIdStr = resolvedId ? resolvedId.toString() : null;
+
+            // Find existing requested document with the same resolvedId or label
+            const found = docsData.find(rd =>
+                (resolvedIdStr && rd.templateId && rd.templateId.toString() === resolvedIdStr) ||
+                (!resolvedIdStr && rd.label === d)
+            );
+
             if (found) {
                 found.emailSentAt = emailSentAt;
             } else {
-                docsData.push({ label: d, emailSentAt });
+                docsData.push({
+                    label: d,
+                    emailSentAt,
+                    templateId: resolvedId || undefined
+                });
             }
         });
         employee.requestedDocuments = docsData;
@@ -563,8 +605,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             });
         }
 
-        const companyRecord = await Company.findById(req.companyId).select('settings.onboarding').lean();
-        const companyDynamicTemplates = companyRecord?.settings?.onboarding?.dynamicTemplates || [];
         const includesDynamicTemplate = (documents || []).includes('Offer Letter') ||
             (sections || []).includes('Offer Declaration') ||
             companyDynamicTemplates.some(t => (documents || []).includes(t.name));
@@ -617,7 +657,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${employee.tempEmployeeId}</code></p>
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${rawPassword}</code></p>
                     ${employee.credentialsExpireAt ? `
-                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${new Date(employee.credentialsExpireAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${new Date(employee.credentialsExpireAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</p>
                     ` : ''}
                     <p style="color: #64748b; font-size: 12px; margin-top: 8px;">⚠️ You will be asked to change your password on first login. Please keep these credentials secure.</p>
                 </div>
@@ -676,7 +716,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         }
 
         const deadlineStr = employee.documentDeadline
-            ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+            ? new Date(employee.documentDeadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
             : 'Not specified';
 
         let selectedTemplate = null;
@@ -1063,7 +1103,9 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
                     { type: 'experience_certificate', label: 'Previous Experience Certificate' },
-                    { type: 'passport_photo', label: 'Recent Passport-Size Photograph' }
+                    { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+                    { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
+                    { type: 'character_certificate', label: 'Character Certificate' }
                 ];
 
                 const employee = new OnboardingEmployee({
@@ -1085,7 +1127,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     documents: defaultDocuments,
                     companyId: req.companyId,
                     createdBy: req.user._id,
-                    auditLog: [{ action: 'CREATED', details: 'Bulk created' }]
+                    auditLog: [{ action: 'CREATED', details: `Bulk created. ID: ${tempEmployeeId}, Password: ${rawPassword}` }]
                 });
 
                 await employee.save();
@@ -1170,7 +1212,12 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         await normalizeOnboardingExperienceCertificateLabels(employee);
 
-        res.status(200).json(employee.toObject());
+        const employeeObj = employee.toObject();
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        employeeObj.companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        res.status(200).json(employeeObj);
     } catch (error) {
         console.error('Error fetching onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1206,7 +1253,7 @@ exports.updateEmployee = async (req, res) => {
             try {
                 const PayrollConfig = require('../models/PayrollConfig');
                 const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
-                
+
                 const payType = calculatedSalary.payType || 'salaried';
                 let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
                 let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
@@ -1261,7 +1308,7 @@ exports.updateEmployee = async (req, res) => {
                             professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                         }
                     };
-                    
+
                     if (config.salaryComponents) {
                         config.salaryComponents.forEach(c => {
                             if (c.linkedTo === 'fixed') {
@@ -1276,7 +1323,7 @@ exports.updateEmployee = async (req, res) => {
                             }
                         });
                     }
-                    
+
                     const master = buildMasterSalaryStructure(source, config);
                     if (master) {
                         calculatedSalary.annualCTC = String(annualCTC);
@@ -1285,7 +1332,7 @@ exports.updateEmployee = async (req, res) => {
                         calculatedSalary.hra = String(master.hraMaster);
                         calculatedSalary.specialAllowance = String(master.specialAllowance);
                         calculatedSalary.monthlyGross = String(master.totalEarnings);
-                        
+
                         calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
                         calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
                         calculatedSalary.gratuity = String(master.gratuity || 0);
@@ -1296,7 +1343,7 @@ exports.updateEmployee = async (req, res) => {
                         calculatedSalary.professionalTax = String(master.professionalTax || 0);
                         calculatedSalary.tds = String(master.tds || 0);
                         calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-                        
+
                         if (master.earningsMap) {
                             Object.entries(master.earningsMap).forEach(([id, val]) => {
                                 calculatedSalary[id] = String(val);
@@ -1307,8 +1354,8 @@ exports.updateEmployee = async (req, res) => {
             } catch (err) {
                 console.error('Error calculating candidate salary on backend update:', err);
             }
-            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function') 
-                ? employee.salary.toObject() 
+            const currentSalary = (employee.salary && typeof employee.salary.toObject === 'function')
+                ? employee.salary.toObject()
                 : (employee.salary || {});
             employee.salary = { ...currentSalary, ...calculatedSalary };
         }
@@ -1350,6 +1397,7 @@ exports.updateEmployee = async (req, res) => {
 // --- Regenerate temporary credentials ---
 exports.regenerateCredentials = async (req, res) => {
     try {
+        const { sendEmail, emailAccountId } = req.body;
         const employee = await OnboardingEmployee
             .findOne({ _id: req.params.id, companyId: req.companyId })
             .select('+pendingCredentialPassword');
@@ -1374,18 +1422,92 @@ exports.regenerateCredentials = async (req, res) => {
         // Add audit log
         employee.auditLog.push({
             action: 'CREDENTIALS_REGENERATED',
-            details: `Credentials regenerated by ${req.user.firstName || 'Admin'}`
+            details: `Credentials regenerated${sendEmail ? ' and emailed' : ''} by ${req.user.firstName || 'Admin'}. ID: ${employee.tempEmployeeId}, Password: ${newPassword}`
         });
 
         await employee.save();
 
-        // Email logic removed per requirements; credentials will be sent when 'Send Pre-Onboarding Email' is triggered.
+        if (sendEmail) {
+            const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
+            const companyName = req.company?.name || (await Company.findById(req.companyId).select('name').lean())?.name || 'TalentCIO';
+            const subject = `Your Updated Pre-Onboarding Credentials - ${companyName}`;
+
+            const emailHtml = `
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; margin:0 auto; border:1px solid #e2e8f0; border-radius:12px; background:#ffffff; font-family: Arial, sans-serif;">
+                  <tr>
+                    <td align="center" style="background:#0f172a; padding:24px; border-radius:12px 12px 0 0;">
+                      <div style="color:#ffffff; font-size:20px; font-weight:700;">Onboarding Portal Access</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px; color: #334155; font-size: 15px; line-height: 1.6;">
+                      <p>Hello ${employee.firstName},</p>
+                      <p>Your temporary credentials for the Pre-Onboarding Portal have been regenerated. You can log in using the details below:</p>
+
+                      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                        <p style="margin: 4px 0;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${employee.tempEmployeeId}</code></p>
+                        <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 15px; color: #1e293b;">${newPassword}</code></p>
+                        <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}</p>
+                      </div>
+
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:24px auto;">
+                        <tr>
+                          <td bgcolor="#2563eb" style="border-radius:8px; text-align:center;">
+                            <a href="${portalUrl}" style="display:inline-block; padding:12px 28px; color:#ffffff; text-decoration:none; font-size:15px; font-weight:700;">Open Portal</a>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <p style="font-size: 12px; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 16px; margin-top: 24px;">
+                        ⚠️ You will be prompted to set a new password on your first login. Please do not share these credentials with anyone.
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="background:#f1f5f9; padding:16px; text-align:center; border-top:1px solid #e2e8f0; border-radius:0 0 12px 12px; font-size: 12px; color: #94a3b8;">
+                      &copy; ${new Date().getFullYear()} ${companyName}. All rights reserved.
+                    </td>
+                  </tr>
+                </table>
+            `;
+
+            const branding = await getCompanyEmailBranding(employee.companyId, req.company);
+            const delivery = await resolveNotificationEmailDelivery(
+                employee.companyId,
+                'pre_onboarding_email_sent',
+                emailAccountId
+            );
+
+            if (delivery.shouldSendEmail) {
+                await sendEmailForCompany({
+                    companyId: employee.companyId,
+                    emailAccountId: delivery.emailAccountId,
+                    to: employee.email,
+                    html: emailHtml,
+                    subject: subject,
+                    text: `Hello ${employee.firstName}, your temporary credentials have been regenerated: ID: ${employee.tempEmployeeId}, Password: ${newPassword}. Access URL: ${portalUrl}`,
+                    ...branding
+                });
+
+                await HREmailLog.create({
+                    companyId: employee.companyId,
+                    sentBy: req.user?._id,
+                    candidateId: employee._id,
+                    type: 'onboarding',
+                    subject: subject,
+                    recipientEmail: employee.email,
+                    status: 'Sent',
+                    sentAt: new Date()
+                });
+            }
+        }
 
         res.status(200).json({
             message: 'Credentials regenerated successfully.',
             tempEmployeeId: employee.tempEmployeeId,
             tempPassword: newPassword,
-            expiry
+            expiry,
+            employee
         });
     } catch (error) {
         console.error('Error regenerating credentials:', error);
@@ -1393,8 +1515,40 @@ exports.regenerateCredentials = async (req, res) => {
     }
 };
 
+// --- Toggle Live Photo requirement on a document ---
+exports.toggleDocLivePhoto = async (req, res) => {
+    try {
+        const { id, docId } = req.params;
+        const { requireLivePhoto } = req.body; // boolean
+
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const doc = employee.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Document not found' });
+
+        doc.requireLivePhoto = Boolean(requireLivePhoto);
+
+        employee.auditLog.push({
+            action: 'LIVE_PHOTO_TOGGLE',
+            details: `${doc.label} live photo requirement set to ${doc.requireLivePhoto}`
+        });
+        await employee.save();
+
+        res.status(200).json({
+            message: `Live photo requirement ${doc.requireLivePhoto ? 'enabled' : 'disabled'} for ${doc.label}`,
+            document: doc,
+            employee
+        });
+    } catch (error) {
+        console.error('Error toggling live photo requirement:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
 // --- Flag a document for re-upload ---
 exports.flagDocument = async (req, res) => {
+
     try {
         const { id, docId } = req.params;
         const { reason } = req.body;
@@ -1800,6 +1954,7 @@ exports.getMyOnboarding = async (req, res) => {
 
         const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
         const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
+        const activeTemplateIds = (employee.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         // If selective onboarding is configured, filter the sections and documents accordingly
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
@@ -1818,7 +1973,11 @@ exports.getMyOnboarding = async (req, res) => {
                 // Keep offerDeclaration if specifically requested or if any offer templates/letters are requested
                 const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
                     activeDocumentLabels.includes('Offer Letter') ||
-                    dynamicTemplates.some(t => activeDocumentLabels.includes(t.name));
+                    dynamicTemplates.some(t => {
+                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                        if (hasIdAssigned) return true;
+                        return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                    });
 
                 if (!showOfferDeclaration) {
                     delete employeeObj.offerDeclaration;
@@ -1828,10 +1987,25 @@ exports.getMyOnboarding = async (req, res) => {
             // Filter documents, company policies and dynamic templates
             if (activeDocumentLabels.length > 0) {
                 if (employeeObj.documents) {
-                    employeeObj.documents = employeeObj.documents.filter(doc => activeDocumentLabels.includes(doc.label));
+                    employeeObj.documents = employeeObj.documents.filter(doc =>
+                        activeDocumentLabels.includes(doc.label) ||
+                        activeDocumentLabels.some(al => doc.label.startsWith(al))
+                    );
                 }
-                policies = policies.filter(p => activeDocumentLabels.includes(p.name));
-                dynamicTemplates = dynamicTemplates.filter(t => activeDocumentLabels.includes(t.name));
+
+                // Filter policies: support specific templateId mapping or label fallback for legacy entries
+                policies = policies.filter(p => {
+                    const hasIdAssigned = activeTemplateIds.includes(p._id.toString());
+                    if (hasIdAssigned) return true;
+                    return p.isDeleted !== true && activeDocumentLabels.includes(p.name);
+                });
+
+                // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
+                dynamicTemplates = dynamicTemplates.filter(t => {
+                    const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                    if (hasIdAssigned) return true;
+                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                });
             }
         }
 
@@ -1909,6 +2083,10 @@ exports.saveSection = async (req, res) => {
             }
         }
 
+        if (section === 'offerDeclaration' && data.isComplete) {
+            data.eSignDate = new Date();
+        }
+
         // Merge the update
         const update = {};
         for (const key of Object.keys(data)) {
@@ -1962,6 +2140,13 @@ exports.uploadDocument = async (req, res) => {
         doc.status = 'Uploaded';
         doc.rejectionReason = '';
         doc.uploadedAt = new Date();
+
+        if (doc.type === 'live_photo') {
+            doc.livePhotoMetadata = {
+                capturedAt: new Date(),
+                address: req.body.address || ''
+            };
+        }
 
         employee.auditLog.push({ action: 'DOCUMENT_UPLOAD', details: `${doc.label} uploaded` });
         if (employee.status === 'Pending') employee.status = 'In Progress';
@@ -2090,7 +2275,7 @@ exports.submitOnboarding = async (req, res) => {
         if (!isSelective || reqSectionLabels.includes('Bank Details')) {
             if (!employee.bankDetails?.isComplete) errors.push('Bank Details incomplete');
         }
-        
+
         const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
         const dynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
         const hasDynamicTemplate = reqDocLabels.includes('Offer Letter') || dynamicTemplates.some(t => reqDocLabels.includes(t.name));
@@ -2107,8 +2292,8 @@ exports.submitOnboarding = async (req, res) => {
             const isSharedCustomFile = doc.type === 'custom_file';
 
             if (isSelective) {
-                // Modified: Skip validation for 'passport' type even if requested (it is labeled as Optional)
-                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport') {
+                // Modified: Skip validation for 'passport' and 'character_certificate' types even if requested (they are optional)
+                if (!isSharedCustomFile && isRequested && (doc.status === 'Pending' || doc.status === 'Mail Sent' || !doc.url) && doc.type !== 'passport' && doc.type !== 'character_certificate') {
                     errors.push(`${doc.label} not uploaded`);
                 }
             } else if (isMandatory) {
@@ -2287,17 +2472,43 @@ exports.deletePolicy = async (req, res) => {
         const policy = company.settings.onboarding.policies.id(policyId);
         if (!policy) return res.status(404).json({ message: 'Policy not found' });
 
-        // Delete from Cloudinary
-        if (policy.publicId) {
-            try {
-                await cloudinary.uploader.destroy(policy.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        // Remove from DB
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.policies': { _id: policyId } }
+        // Check if any candidate has this policy assigned/requested or accepted
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': policyId },
+                { 'offerDeclaration.acceptedPolicies.policyId': policyId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingPolicyBin = require('../models/OnboardingPolicyBin');
+        await OnboardingPolicyBin.deleteMany({ companyId: req.companyId, originalId: policyId });
+        const binItem = new OnboardingPolicyBin({
+            companyId: req.companyId,
+            originalId: policyId,
+            name: policy.name,
+            url: policy.url,
+            publicId: policy.publicId,
+            isRequired: policy.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.policies._id': policyId },
+                { $set: { 'settings.onboarding.policies.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.policies': { _id: policyId } }
+            });
+        }
 
         res.json({ message: 'Policy deleted successfully' });
     } catch (error) {
@@ -2401,12 +2612,21 @@ const DUMMY_PREVIEW_DATA = {
 exports.getTemplatePreview = async (req, res) => {
     try {
         const { type } = req.params; // 'offerLetter' or 'declaration'
+        const { withData } = req.query;
         const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
 
         const customUrl = type === 'offerLetter' ? company?.settings?.onboarding?.offerLetterTemplateUrl : company?.settings?.onboarding?.declarationTemplateUrl;
         const defaultPath = type === 'offerLetter' ?
             path.join(__dirname, '../../templates/offer_letter_template.docx') :
             path.join(__dirname, '../../templates/declaration_template.docx');
+
+        const content = await getTemplateContent(customUrl, defaultPath);
+        const zip = new PizZip(content);
+        const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            nullGetter: () => '—'
+        });
 
         let previewData = { ...DUMMY_PREVIEW_DATA };
         try {
@@ -2580,14 +2800,14 @@ const generateSalaryTableXML = (master, payroll, formatCurrency) => {
 const getSalaryBreakups = async (employee) => {
     const breakups = {};
     if (!employee.salary || !employee.salary.annualCTC) return breakups;
-    
+
     try {
         const PayrollConfig = require('../models/PayrollConfig');
         const config = await PayrollConfig.findOne({ companyId: employee.companyId });
         if (config) {
             const annualCTC = parseFloat(String(employee.salary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
             const monthlyCTC = annualCTC / 12;
-            
+
             const source = {
                 monthlyCTC,
                 payType: employee.salary?.payType || 'salaried',
@@ -2608,7 +2828,7 @@ const getSalaryBreakups = async (employee) => {
                     professionalTax: employee.salary?.ptState === 'custom' ? (parseFloat(employee.salary?.professionalTax) || 0) : 0,
                 }
             };
-            
+
             if (config.salaryComponents) {
                 config.salaryComponents.forEach(c => {
                     if (c.linkedTo === 'fixed') {
@@ -2623,13 +2843,13 @@ const getSalaryBreakups = async (employee) => {
                     }
                 });
             }
-            
+
             const master = buildMasterSalaryStructure(source, config);
             if (master) {
                 // 1. Earnings Breakdown List
                 const earningsList = [];
                 const comps = config.salaryComponents && config.salaryComponents.length > 0 ? config.salaryComponents : [];
-                
+
                 const getEarningVal = (cId) => {
                     if (master.earningsMap && master.earningsMap[cId] !== undefined) return master.earningsMap[cId];
                     if (cId === 'basic') return master.basicMaster || 0;
@@ -2701,7 +2921,7 @@ const getSalaryBreakups = async (employee) => {
                     workingDays: config.defaultWorkingDays,
                     paidDays: config.defaultWorkingDays,
                 }, {}, new Date().getMonth() + 1, new Date().getFullYear());
-                
+
                 const deductionsList = [];
                 if (payroll && payroll.deductions) {
                     if (payroll.deductions.pfEmployee > 0) {
@@ -2754,7 +2974,7 @@ const getSalaryBreakups = async (employee) => {
                     Object.entries(master.earningsMap).forEach(([id, val]) => {
                         breakups[id] = formatCurrency(val);
                         breakups[`${id}_annual`] = formatCurrency(val * 12);
-                        
+
                         const cleanId = id.replace(/([A-Z])/g, '_$1').toLowerCase();
                         breakups[cleanId] = formatCurrency(val);
                         breakups[`${cleanId}_annual`] = formatCurrency(val * 12);
@@ -2764,7 +2984,7 @@ const getSalaryBreakups = async (employee) => {
                         }
                     });
                 }
-                
+
                 breakups['basic_salary'] = formatCurrency(master.basicMaster);
                 breakups['basic_salary_annual'] = formatCurrency(master.basicMaster * 12);
                 breakups['hra'] = formatCurrency(master.hraMaster);
@@ -2786,14 +3006,14 @@ const preprocessDocxXml = (xmlString) => {
             const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
             if (rawTagMatch) {
                 const tag = rawTagMatch[1];
-                
+
                 // Extract paragraph properties
                 const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
                 const pPr = pPrMatch ? pPrMatch[0] : '';
-                
+
                 // Clean the current paragraph by removing the raw tag
                 let cleanedHtml = paragraphHtml.replace(tag, '');
-                
+
                 // Check if the cleaned paragraph only has whitespace runs
                 // If it's empty of actual text, we can just replace the whole paragraph to avoid empty lines
                 let hasActualText = false;
@@ -2803,12 +3023,12 @@ const preprocessDocxXml = (xmlString) => {
                         hasActualText = true;
                     }
                 });
-                
+
                 if (!hasActualText) {
                     // Just return a single paragraph with only the raw tag
                     return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
                 }
-                
+
                 // Otherwise, split: first paragraph is the label/preceding text, second is the raw tag
                 return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
             }
@@ -2824,90 +3044,234 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
 
     try {
         let docXml = zip.file('word/document.xml').asText();
+
+        const _eSignStyleRaw = employee.offerDeclaration?.eSignStyle || '';
+        let fontName = 'Calibri';
+        if (_eSignStyleRaw.includes('Brush Script MT')) {
+            fontName = 'Brush Script MT';
+        } else if (_eSignStyleRaw.includes('Lucida Handwriting')) {
+            fontName = 'Lucida Handwriting';
+        } else if (_eSignStyleRaw.includes('Segoe Print')) {
+            fontName = 'Segoe Print';
+        } else if (_eSignStyleRaw.includes('Courier New')) {
+            fontName = 'Courier New';
+        }
+
+        // Dynamically register the selected font in the document's font table
+        try {
+            let fontTableXml = zip.file('word/fontTable.xml').asText();
+            if (!fontTableXml.includes(`w:name="${fontName}"`)) {
+                const fontTag = `<w:font w:name="${fontName}"/>`;
+                fontTableXml = fontTableXml.replace('</fonts>', `${fontTag}</fonts>`);
+                zip.file('word/fontTable.xml', fontTableXml);
+            }
+        } catch (ftErr) {
+            console.error('Error updating fontTable.xml:', ftErr.message);
+        }
+
+        // --- Inline signature injection ---
+        // We inject the signature DIRECTLY into the raw XML before docxtemplater sees it.
+        // This keeps "Employee Signature: <signature>" all on the same line, because docxtemplater's
+        // {@tag} replacement always destroys the surrounding paragraph text.
+        if (docXml.includes('{@employee_signature}')) {
+            // Build the inline run XML for the signature (typed or pending)
+            const _eSignNameRaw = employee.offerDeclaration?.eSignName;
+            const _eSignTypeRaw = employee.offerDeclaration?.eSignType;
+            const _eSignValueRaw = employee.offerDeclaration?.eSignValue;
+            let inlineRunXml = '';
+
+            if (employee.offerDeclaration?.isComplete && _eSignNameRaw) {
+                if (_eSignTypeRaw === 'drawn' && _eSignValueRaw && _eSignValueRaw.startsWith('data:image/png;base64,')) {
+                    // For drawn signatures: embed the actual image inline at the {@ tag location
+                    try {
+                        const _base64Data = _eSignValueRaw.split(';base64,').pop();
+                        zip.file('word/media/candidate_signature.png', Buffer.from(_base64Data, 'base64'));
+
+                        // Ensure PNG extension is registered in Content_Types
+                        try {
+                            let contentTypesXml = zip.file('[Content_Types].xml').asText();
+                            if (!contentTypesXml.includes('Extension="png"')) {
+                                const pngType = `<Default Extension="png" ContentType="image/png"/>`;
+                                contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
+                                zip.file('[Content_Types].xml', contentTypesXml);
+                            }
+                        } catch (ctErr) {
+                            console.error('Error updating Content_Types.xml:', ctErr.message);
+                        }
+
+                        let relsXml = zip.file('word/_rels/document.xml.rels').asText();
+                        if (!relsXml.includes('Target="media/candidate_signature.png"')) {
+                            const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
+                            relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
+                            zip.file('word/_rels/document.xml.rels', relsXml);
+                        }
+
+                        const _drawingXml = `
+                            <w:drawing>
+                                <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
+                                    <wp:extent cx="1371600" cy="457200"/>
+                                    <wp:docPr id="999" name="Candidate Signature"/>
+                                    <wp:cNvGraphicFramePr>
+                                        <a:graphicFrameLocks noChangeAspect="1"/>
+                                    </wp:cNvGraphicFramePr>
+                                    <a:graphic>
+                                        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                            <pic:pic>
+                                                <pic:nvPicPr>
+                                                    <pic:cNvPr id="999" name="candidate_signature.png"/>
+                                                    <pic:cNvPicPr/>
+                                                </pic:nvPicPr>
+                                                <pic:blipFill>
+                                                    <a:blip r:embed="rIdSignature"/>
+                                                    <a:stretch>
+                                                        <a:fillRect/>
+                                                    </a:stretch>
+                                                </pic:blipFill>
+                                                <pic:spPr>
+                                                    <a:xfrm>
+                                                        <a:off x="0" y="0"/>
+                                                        <a:ext cx="1371600" cy="457200"/>
+                                                    </a:xfrm>
+                                                    <a:prstGeom prst="rect">
+                                                        <a:avLst/>
+                                                    </a:prstGeom>
+                                                </pic:spPr>
+                                            </pic:pic>
+                                        </a:graphicData>
+                                    </a:graphic>
+                                </wp:inline>
+                            </w:drawing>
+                        `.trim().replace(/\s+/g, ' ');
+                        inlineRunXml = `<w:r>${_drawingXml}</w:r>`;
+                    } catch (_drawErr) {
+                        console.error('Error building drawn signature for inline injection:', _drawErr.message);
+                        // Fallback to text name if image embedding fails
+                        inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                    }
+                } else {
+                    inlineRunXml = `<w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:cs="${fontName}"/></w:rPr><w:t xml:space="preserve"> ${_eSignNameRaw}</w:t></w:r>`;
+                }
+            } else {
+                inlineRunXml = `<w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t xml:space="preserve"> (Pending Signature)</w:t></w:r>`;
+            }
+
+            // Word XML often SPLITS text like '{@employee_signature}' across multiple <w:r> runs.
+            // Strategy: parse the paragraph into structured child elements, find the tag across
+            // text runs, replace it surgically, and serialize everything back (preserving w:br, etc.)
+            docXml = docXml.replace(/<w:p( [^>]*)?>[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+                // Broad check to identify paragraphs containing components of the tag even if split
+                if (!paragraphXml.includes('employee_signature') &&
+                    !paragraphXml.includes('employee_signa') &&
+                    !paragraphXml.includes('signature')) return paragraphXml;
+
+                // 1. Parse the paragraph into structured elements
+                const elements = [];
+                const elementRegex = /(<w:pPr>[\s\S]*?<\/w:pPr>|<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>|<[^>]+>)/g;
+                let match;
+                while ((match = elementRegex.exec(paragraphXml)) !== null) {
+                    const rawXml = match[0];
+                    const runTextMatch = rawXml.match(/<w:r(?:\s[^>]*)?>([\s\S]*?)<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>([\s\S]*?)<\/w:r>/);
+                    if (runTextMatch) {
+                        elements.push({
+                            type: 'text_run',
+                            rawXml,
+                            rPr: rawXml.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/)?.[0] || '',
+                            text: runTextMatch[2]
+                        });
+                    } else {
+                        elements.push({
+                            type: 'other',
+                            rawXml
+                        });
+                    }
+                }
+
+                // 2. Reconstruct text from text runs
+                let fullText = '';
+                const textRunIndices = [];
+                const textElements = elements.filter(el => el.type === 'text_run');
+                if (textElements.length === 0) return paragraphXml;
+
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    if (el.type === 'text_run') {
+                        for (let j = 0; j < el.text.length; j++) {
+                            textRunIndices.push({ elIndex: i, charIndex: j });
+                        }
+                        fullText += el.text;
+                    }
+                }
+
+                const tag = '{@employee_signature}';
+                const tagStart = fullText.indexOf(tag);
+                if (tagStart === -1) return paragraphXml;
+
+                const tagEnd = tagStart + tag.length;
+
+                // Identify affected runs
+                const affectedElIndices = new Set();
+                for (let idx = tagStart; idx < tagEnd; idx++) {
+                    affectedElIndices.add(textRunIndices[idx].elIndex);
+                }
+                const affectedElIndicesArr = Array.from(affectedElIndices).sort((a, b) => a - b);
+
+                const firstElIndex = affectedElIndicesArr[0];
+                const firstEl = elements[firstElIndex];
+                const startInRun = textRunIndices[tagStart].charIndex;
+                const prefix = firstEl.text.slice(0, startInRun);
+
+                const lastElIndex = affectedElIndicesArr[affectedElIndicesArr.length - 1];
+                const lastEl = elements[lastElIndex];
+                const endInRun = textRunIndices[tagEnd - 1].charIndex + 1;
+                const suffix = lastEl.text.slice(endInRun);
+
+                // Clear text in all affected runs
+                for (const elIdx of affectedElIndicesArr) {
+                    elements[elIdx].text = '';
+                }
+
+                // Inject prefix, signature and suffix into the first affected run
+                const rPr = firstEl.rPr;
+                let newRawXml = '';
+                if (prefix) {
+                    newRawXml += `<w:r>${rPr}<w:t xml:space="preserve">${prefix}</w:t></w:r>`;
+                }
+                newRawXml += inlineRunXml;
+                if (suffix) {
+                    newRawXml += `<w:r>${rPr}<w:t xml:space="preserve">${suffix}</w:t></w:r>`;
+                }
+                firstEl.rawXml = newRawXml;
+
+                // Clear raw XML for other affected runs
+                for (let i = 1; i < affectedElIndicesArr.length; i++) {
+                    elements[affectedElIndicesArr[i]].rawXml = '';
+                }
+
+                // 3. Serialize back
+                return elements.map(el => {
+                    if (el.type === 'text_run' && el.text !== '') {
+                        return `<w:r>${el.rPr}<w:t xml:space="preserve">${el.text}</w:t></w:r>`;
+                    }
+                    return el.rawXml;
+                }).join('');
+            });
+        }
+
         docXml = preprocessDocxXml(docXml);
         zip.file('word/document.xml', docXml);
     } catch (e) {
         console.error('Error pre-processing document.xml:', e.message);
     }
 
-    // Handle candidate digital signature injection in the docx
-    let employeeSignatureXml = '';
+    // Signature data for plain-text / typed signatures (drawn is handled inline above via {@ tag})
     const eSignName = employee.offerDeclaration?.eSignName;
     const eSignType = employee.offerDeclaration?.eSignType;
     const eSignValue = employee.offerDeclaration?.eSignValue;
 
-    if (employee.offerDeclaration?.isComplete && eSignName) {
-        if (eSignType === 'drawn' && eSignValue && eSignValue.startsWith('data:image/png;base64,')) {
-            try {
-                const base64Data = eSignValue.split(';base64,').pop();
-                zip.file('word/media/candidate_signature.png', Buffer.from(base64Data, 'base64'));
-
-                // Ensure PNG extension is registered in Content_Types
-                try {
-                    let contentTypesXml = zip.file('[Content_Types].xml').asText();
-                    if (!contentTypesXml.includes('Extension="png"')) {
-                        const pngType = `<Default Extension="png" ContentType="image/png"/>`;
-                        contentTypesXml = contentTypesXml.replace('</Types>', `${pngType}</Types>`);
-                        zip.file('[Content_Types].xml', contentTypesXml);
-                    }
-                } catch (ctErr) {
-                    console.error('Error updating Content_Types.xml:', ctErr.message);
-                }
-
-                let relsXml = zip.file('word/_rels/document.xml.rels').asText();
-                if (!relsXml.includes('Target="media/candidate_signature.png"')) {
-                    const signatureRel = `<Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/candidate_signature.png"/>`;
-                    relsXml = relsXml.replace('</Relationships>', `${signatureRel}</Relationships>`);
-                    zip.file('word/_rels/document.xml.rels', relsXml);
-                }
-
-                const drawingXml = `
-                    <w:drawing>
-                        <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" distT="0" distB="0" distL="0" distR="0">
-                            <wp:extent cx="1371600" cy="457200"/>
-                            <wp:docPr id="999" name="Candidate Signature"/>
-                            <wp:cNvGraphicFramePr>
-                                <a:graphicFrameLocks noChangeAspect="1"/>
-                            </wp:cNvGraphicFramePr>
-                            <a:graphic>
-                                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                                    <pic:pic>
-                                        <pic:nvPicPr>
-                                            <pic:cNvPr id="999" name="candidate_signature.png"/>
-                                            <pic:cNvPicPr/>
-                                        </pic:nvPicPr>
-                                        <pic:blipFill>
-                                            <a:blip r:embed="rIdSignature"/>
-                                            <a:stretch>
-                                                <a:fillRect/>
-                                            </a:stretch>
-                                        </pic:blipFill>
-                                        <pic:spPr>
-                                            <a:xfrm>
-                                                <a:off x="0" y="0"/>
-                                                <a:ext cx="1371600" cy="457200"/>
-                                            </a:xfrm>
-                                            <a:prstGeom prst="rect">
-                                                <a:avLst/>
-                                            </a:prstGeom>
-                                        </pic:spPr>
-                                    </pic:pic>
-                                </a:graphicData>
-                            </a:graphic>
-                        </wp:inline>
-                    </w:drawing>
-                `.trim().replace(/\s+/g, ' ');
-                employeeSignatureXml = `<w:p><w:r>${drawingXml}</w:r></w:p>`;
-            } catch (err) {
-                console.error('Error injecting drawn signature to docx:', err.message);
-                employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
-            }
-        } else {
-            employeeSignatureXml = `<w:p><w:r><w:rPr><w:i/><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr><w:t>${eSignName}</w:t></w:r></w:p>`;
-        }
-    } else {
-        employeeSignatureXml = `<w:p><w:r><w:rPr><w:color w:val="94A3B8"/></w:rPr><w:t>(Pending Signature)</w:t></w:r></w:p>`;
-    }
+    // Plain-text version for inline use next to headings like "Employee Signature: {employee_signature_inline}"
+    const employeeSignatureInline = (employee.offerDeclaration?.isComplete && eSignName)
+        ? eSignName
+        : '(Pending Signature)';
 
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
@@ -2947,10 +3311,12 @@ const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaul
             hr_designation: hrUser.designation || 'HR Manager',
             declaration_date: formatDate(new Date()),
             employee_signature_name: fullName,
-            employee_signature: employeeSignatureXml,
+            // NOTE: employee_signature is injected directly into the raw XML above (inline),
+            // so we do NOT pass it here to avoid docxtemplater replacing the whole paragraph.
+            employee_signature_inline: employeeSignatureInline,
             employee_signature_date: employee.offerDeclaration?.eSignDate ? formatDate(employee.offerDeclaration.eSignDate) : '—',
             employee_signature_ip: employee.offerDeclaration?.eSignIp || '—',
-            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }),
+            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' }),
             ...salaryBreakups
         });
     } catch (err) {
@@ -3102,48 +3468,7 @@ exports.getMyOfferLetter = async (req, res) => {
         const customUrl = company?.settings?.onboarding?.offerLetterTemplateUrl;
         const defaultPath = path.join(__dirname, '../../templates/offer_letter_template.docx');
 
-        const content = await getTemplateContent(customUrl, defaultPath);
-        const zip = new PizZip(content);
-        const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            nullGetter: () => '—'
-        });
-
-        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName}`.trim();
-        const permAddr = employee.personalDetails?.permanentAddress || employee.personalDetails?.currentAddress || {};
-        const hrUser = employee.createdBy || {};
-
-        doc.render({
-            offer_date: formatDate(employee.offerDate || new Date()),
-            employee_full_name: fullName,
-            employee_first_name: employee.firstName,
-            employee_last_name: employee.lastName,
-            employee_permanent_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            employee_address: [permAddr.line1, permAddr.line2].filter(Boolean).join(', ') || employee.address || '—',
-            employee_city: permAddr.city || '—',
-            designation: employee.designation || '—',
-            department: employee.department || '—',
-            joining_date: formatDate(employee.joiningDate),
-            work_location: employee.workLocation || '—',
-            probation_period: employee.probationPeriod || '6 months',
-            probationPeriod: employee.probationPeriod || '6 months',
-            annual_ctc: formatCurrency(employee.salary?.annualCTC),
-            annual_salary: formatCurrency(employee.salary?.annualCTC),
-            basic_salary: formatCurrency(employee.salary?.basic),
-            hra: formatCurrency(employee.salary?.hra),
-            special_allowance: formatCurrency(employee.salary?.specialAllowance),
-            monthly_gross: formatCurrency(employee.salary?.monthlyGross),
-            monthly_ctc: formatCurrency(employee.salary?.monthlyCTC),
-            hr_name: hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory',
-            hr_designation: hrUser.designation || 'HR Manager',
-            declaration_date: formatDate(employee.offerDate || new Date()),
-            employee_signature_name: fullName,
-            employee_id: employee.tempEmployeeId,
-            current_date: new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })
-        });
-
-        const buffer = doc.getZip().generate({ type: 'nodebuffer' });
+        const buffer = await getPopulatedDocumentBuffer(employee, company, customUrl, defaultPath);
 
         await OnboardingEmployee.findByIdAndUpdate(employee._id, {
             $push: {
@@ -3297,16 +3622,43 @@ exports.deleteDynamicTemplate = async (req, res) => {
         const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
-        const { cloudinary } = require('../config/cloudinary');
-        if (template.publicId) {
-            try {
-                await cloudinary.uploader.destroy(template.publicId, { resource_type: 'raw' });
-            } catch (e) { /* ignore */ }
-        }
-
-        await Company.findByIdAndUpdate(req.companyId, {
-            $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+        // Check if any candidate has this template assigned/requested
+        const isUsed = await OnboardingEmployee.exists({
+            companyId: req.companyId,
+            $or: [
+                { 'requestedDocuments.templateId': templateId },
+                { 'offerDeclaration.acceptedTemplates.templateId': templateId }
+            ]
         });
+
+        // Add to Recycle Bin
+        const OnboardingTemplateBin = require('../models/OnboardingTemplateBin');
+        await OnboardingTemplateBin.deleteMany({ companyId: req.companyId, originalId: templateId });
+        const binItem = new OnboardingTemplateBin({
+            companyId: req.companyId,
+            originalId: templateId,
+            name: template.name,
+            url: template.url,
+            publicId: template.publicId,
+            isRequired: template.isRequired,
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id
+        });
+        await binItem.save();
+
+        if (isUsed) {
+            // Soft delete: mark as isDeleted = true and keep in DB and Cloudinary
+            await Company.updateOne(
+                { _id: req.companyId, 'settings.onboarding.dynamicTemplates._id': templateId },
+                { $set: { 'settings.onboarding.dynamicTemplates.$.isDeleted': true } }
+            );
+        } else {
+            // Hard delete: remove completely from settings (file remains in Cloudinary, managed by Bin)
+            await Company.findByIdAndUpdate(req.companyId, {
+                $pull: { 'settings.onboarding.dynamicTemplates': { _id: templateId } }
+            });
+        }
 
         res.json({ message: 'Template deleted successfully' });
     } catch (error) {
@@ -3356,12 +3708,14 @@ const DOC_CATEGORY_MAP = {
     'aadhaar_back': 'ID Proof',
     'passport': 'ID Proof',
     'passport_photo': 'ID Proof',
+    'live_photo': 'ID Proof',
     'salary_slip': 'Payslips',
     '10th_marksheet': 'Education',
     '12th_marksheet': 'Education',
     'graduation': 'Education',
     'relieving_letter': 'Relieving Letter',
-    'experience_certificate': 'Employment'
+    'experience_certificate': 'Employment',
+    'character_certificate': 'Other'
 };
 
 exports.logout = async (req, res) => {
@@ -3386,7 +3740,9 @@ exports.logout = async (req, res) => {
 const DOC_TITLE_MAP = {
     'passport': 'Passport',
     'passport_photo': 'Recent Passport-Size Photograph',
-    'experience_certificate': 'Previous Experience Certificate'
+    'live_photo': 'Live Photograph',
+    'experience_certificate': 'Previous Experience Certificate',
+    'character_certificate': 'Character Certificate'
 };
 
 const EMPLOYMENT_WORK_LOCATION_OPTIONS = new Set(['Office', 'Remote', 'Hybrid']);
@@ -3496,12 +3852,13 @@ exports.transferToActiveEmployee = async (req, res) => {
                 const normalizedTitle = DOC_TITLE_MAP[doc.type] || doc.label;
 
                 return ({
-                category: DOC_CATEGORY_MAP[doc.type] || 'Other',
-                title: normalizedTitle,
-                fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
-                url: doc.url,
-                uploadDate: doc.uploadedAt || new Date(),
-                verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
+                    category: DOC_CATEGORY_MAP[doc.type] || 'Other',
+                    title: normalizedTitle,
+                    fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
+                    url: doc.url,
+                    uploadDate: doc.uploadedAt || new Date(),
+                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending',
+                    livePhotoMetadata: doc.livePhotoMetadata
                 });
             });
 
@@ -3529,7 +3886,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
                         `${safeName}_${Date.now()}.docx`
                     );
-                    
+
                     dossierDocuments.push({
                         category: 'Other',
                         title: template.name,
@@ -3555,7 +3912,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
                         `Offer_Letter_${Date.now()}.docx`
                     );
-                    
+
                     dossierDocuments.push({
                         category: 'Offer Letter',
                         title: 'Offer Letter',
@@ -3855,7 +4212,7 @@ exports.resolveExtensionRequest = async (req, res) => {
         let logDetail = `Extension request ${status}`;
         if (status === 'Approved' && newDeadline) {
             employee.documentDeadline = new Date(newDeadline);
-            logDetail += ` - New deadline: ${new Date(newDeadline).toLocaleDateString()}`;
+            logDetail += ` - New deadline: ${new Date(newDeadline).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
         }
 
         employee.auditLog.push({

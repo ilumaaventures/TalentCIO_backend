@@ -13,7 +13,12 @@ const documentSchema = new mongoose.Schema({
     },
     rejectionReason: { type: String, default: '' },
     uploadedAt: Date,
-    emailSentAt: Date
+    emailSentAt: Date,
+    requireLivePhoto: { type: Boolean, default: false }, // HR can require live camera capture instead of file upload
+    livePhotoMetadata: {
+        capturedAt: { type: Date },
+        address: { type: String, default: '' }
+    }
 }, { _id: true });
 
 const auditEntrySchema = new mongoose.Schema({
@@ -171,6 +176,7 @@ const onboardingEmployeeSchema = new mongoose.Schema({
         agreesToOriginalVerification: { type: Boolean, default: false },
         eSignName: { type: String, default: '' },
         eSignType: { type: String, enum: ['typed', 'drawn', ''], default: '' },
+        eSignStyle: { type: String, default: '' },
         eSignValue: { type: String, default: '' },
         eSignIp: { type: String, default: '' },
         eSignDate: { type: Date },
@@ -191,7 +197,8 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     }],
     requestedDocuments: [{
         label: { type: String, required: true },
-        emailSentAt: { type: Date }
+        emailSentAt: { type: Date },
+        templateId: { type: mongoose.Schema.Types.ObjectId }
     }],
     selectionDraft: {
         sections: [{ type: String, trim: true }],
@@ -310,7 +317,7 @@ const seedOnboardingEmployeeSequenceCounter = async (companyId, year) => {
 // Generate Temp Employee ID — atomic via SequenceCounter to prevent race conditions
 onboardingEmployeeSchema.statics.generateTempId = async function (companyId) {
     const SequenceCounter = require('./SequenceCounter');
-    const year = new Date().getFullYear();
+    const year = parseInt(new Date().toLocaleString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' }), 10);
 
     await seedOnboardingEmployeeSequenceCounter(companyId, year);
 

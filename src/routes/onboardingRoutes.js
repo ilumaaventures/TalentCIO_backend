@@ -114,6 +114,7 @@ router.post('/employees/:id/send-onboarding-email', protect, requireOnboardingRe
 router.post('/employees/:id/send-custom-file', protect, requireOnboardingRequest, handleCustomFileUpload, onboardingController.sendCustomFile);
 router.patch('/employees/:id/documents/:docId/flag', protect, requireOnboardingReview, onboardingController.flagDocument);
 router.patch('/employees/:id/documents/:docId/approve', protect, requireOnboardingReview, onboardingController.approveDocument);
+router.patch('/employees/:id/documents/:docId/live-photo', protect, requireOnboardingReview, onboardingController.toggleDocLivePhoto);
 router.post('/employees/:id/extension/:extId/resolve', protect, requireOnboardingCredentialManage, onboardingController.resolveExtensionRequest);
 router.get('/employees/:id/download', protect, requireOnboardingReview, onboardingController.downloadAllDocuments);
 router.get('/employees/:id/offer-letter', protect, requireOnboardingRequest, onboardingController.generateOfferLetter);

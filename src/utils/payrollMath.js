@@ -407,9 +407,19 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           } else if (c.id === 'hra') {
             amount = hraMaster;
           } else if (c.linkedTo === 'ctc_percent') {
-            amount = roundAmount(monthlyCTC * c.linkValue);
+            let pct = c.linkValue;
+            const overrideVal = source[c.id + 'Percent'];
+            if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+              pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+            }
+            amount = roundAmount(monthlyCTC * pct);
           } else if (c.linkedTo === 'basic_percent') {
-            amount = roundAmount(basicMaster * c.linkValue);
+            let pct = c.linkValue;
+            const overrideVal = source[c.id + 'Percent'];
+            if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+              pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+            }
+            amount = roundAmount(basicMaster * pct);
           } else if (c.linkedTo === 'fixed') {
             let val = source[c.id] !== undefined ? source[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : 0);
             if (c.id === 'medical' && val === 0) {
@@ -428,7 +438,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
             0
           ));
         }
@@ -458,7 +468,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     conveyance = roundAmount(source.salaryStructure?.conveyance);
     medicalAllowance = roundAmount(source.salaryStructure?.medicalAllowance);
     specialAllowance = roundAmount(Math.max(
-      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
       0
     ));
   }
@@ -500,7 +510,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       }
     } else {
       specialAllowance = roundAmount(Math.max(
-        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
         0
       ));
     }
@@ -512,17 +522,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     ? roundAmount(Object.values(earningsMap).reduce((sum, v) => sum + v, 0) + otherAllowancesSum)
     : roundAmount(basicMaster + hraMaster + flexi + broadband + petrol + lta + specialAllowance + conveyance + medicalAllowance + otherAllowancesSum);
 
-  const grossSalary = hasDynamicComponents
-    ? roundAmount(Object.entries(earningsMap).reduce((sum, [id, val]) => {
-        const comp = config.salaryComponents?.find(c => c.id === id);
-        if (comp) {
-          if (comp.taxable || comp.id === 'hra') return sum + val;
-          return sum;
-        }
-        if (['flexi', 'broadband', 'petrol', 'lta'].includes(id)) return sum;
-        return sum + val;
-      }, 0) + otherAllowancesSum)
-    : roundAmount(basicMaster + hraMaster + conveyance + medicalAllowance + specialAllowance + otherAllowancesSum);
+  // Gross Salary = all earnings paid to employee (Basic + HRA + Flexi + all allowances)
+  // Standard CTC formula: CTC = Gross + Employer PF + Employer ESI + LWF + Gratuity + Employer NPS
+  const grossSalary = totalEarnings;
 
   const totalEmployerContributions = roundAmount(
     pfEmployer + esiEmployer + gratuity + lwfEmployer + insurance + employerNPS
@@ -555,13 +557,43 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const otherDeductions = source.deductions?.otherDeductions || source.otherDeductions || [];
   const otherDeductionsSum = roundAmount(otherDeductions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
 
+  const deductionsMap = {};
+  if (hasDynamicComponents) {
+    config.salaryComponents.forEach(c => {
+      if (c.type === 'deduction') {
+        let amount = 0;
+        if (c.linkedTo === 'ctc_percent') {
+          let pct = c.linkValue;
+          const overrideVal = source[c.id + 'Percent'];
+          if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+            pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+          }
+          amount = roundAmount(monthlyCTC * pct);
+        } else if (c.linkedTo === 'basic_percent') {
+          let pct = c.linkValue;
+          const overrideVal = source[c.id + 'Percent'];
+          if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+            pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+          }
+          amount = roundAmount(basicMaster * pct);
+        } else if (c.linkedTo === 'fixed') {
+          let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : 0);
+          amount = roundAmount(val);
+        }
+        deductionsMap[c.id] = amount;
+      }
+    });
+  }
+  const dynamicDeductionsSum = roundAmount(Object.values(deductionsMap).reduce((sum, v) => sum + v, 0));
+
   const totalDeductions = roundAmount(
     pfEmployee +
     esiEmployee +
     professionalTax +
     tds +
     lwfEmployee +
-    otherDeductionsSum
+    otherDeductionsSum +
+    dynamicDeductionsSum
   );
 
   return {
@@ -595,7 +627,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions),
     totalDeductions,
     netTakeHome: roundAmount(Math.max(0, totalEarnings - totalDeductions)),
-    diff: roundAmount(monthlyCTC - (basicMaster + hraMaster + flexi + broadband + petrol + lta + pfEmployerInCTC + gratuityInCTC + lwfEmployer + insurance + esiEmployer + employerNPS + conveyance + medicalAllowance + specialAllowance)),
+    diff: roundAmount(monthlyCTC - (basicMaster + hraMaster + flexi + broadband + petrol + lta + pfEmployer + gratuity + lwfEmployer + insurance + esiEmployer + employerNPS + conveyance + medicalAllowance + specialAllowance)),
     taxRegime,
     declarations,
     taxDetails,
@@ -610,6 +642,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     includeGratuityInCTC,
     useSalaryComponents: source.useSalaryComponents !== false,
     earningsMap,
+    deductionsMap,
   };
 };
 
@@ -688,7 +721,7 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
       monthlyCTC = Number(revisions[0].previousCTC) || Number(employee.monthlyCTC) || 0;
     }
 
-    return {
+    const resObj = {
       monthlyCTC,
       employmentType: getVal('employmentType', 'full-time'),
       payType: getVal('payType', 'salaried'),
@@ -722,6 +755,21 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
         otherAllowances: getStructureVal('otherAllowances', []),
       },
     };
+
+    if (config?.salaryComponents) {
+      config.salaryComponents.forEach(c => {
+        const pctKey = `${c.id}Percent`;
+        resObj[pctKey] = getVal(pctKey, null);
+        resObj[c.id] = getVal(c.id, null);
+        if (c.type === 'deduction') {
+          resObj.deductions[c.id] = getDeductionVal(c.id, null);
+        } else {
+          resObj.salaryStructure[c.id] = getStructureVal(c.id, null);
+        }
+      });
+    }
+
+    return resObj;
   };
 
   const totalDaysInMonth = new Date(year, month, 0).getDate();
@@ -753,6 +801,18 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
       _month: month,
       _year: year,
     };
+
+    // Copy custom percentage overrides and component overrides from activeParams and adjustments to daySource
+    Object.keys(activeParams).forEach(key => {
+      if (key.endsWith('Percent') || (config.salaryComponents && config.salaryComponents.some(c => c.id === key || `${c.id}Percent` === key))) {
+        daySource[key] = activeParams[key];
+      }
+    });
+    Object.keys(adjustments).forEach(key => {
+      if ((key.endsWith('Percent') || (config.salaryComponents && config.salaryComponents.some(c => c.id === key || `${c.id}Percent` === key))) && adjustments[key] !== undefined && adjustments[key] !== null) {
+        daySource[key] = adjustments[key];
+      }
+    });
 
     const dayMaster = buildMasterSalaryStructure(daySource, config);
     dailyStructures.push(dayMaster);
@@ -936,15 +996,16 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
         else if (c.id === 'special') earnings.specialAllowance = proratedVal;
         else if (c.id === 'conveyance') earnings.conveyance = proratedVal;
         else if (c.id === 'medical') earnings.medicalAllowance = proratedVal;
-        else {
-          const name = c.name || c.id;
-          const adjustedIndex = earnings.otherEarnings.findIndex(x => x.name === name);
-          if (adjustedIndex === -1) {
-            earnings.otherEarnings.push({ name, amount: proratedVal });
-          }
-        }
       }
     });
+
+    const averagedEarningsMap = {};
+    config.salaryComponents.forEach(c => {
+      if (c.type === 'earning') {
+        averagedEarningsMap[c.id] = earnings[c.id] || 0;
+      }
+    });
+    earnings.earningsMap = averagedEarningsMap;
 
     earnings.totalEarnings = roundAmount(
       config.salaryComponents
@@ -955,7 +1016,10 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
           return sum + (earnings[c.id] || 0);
         }, 0) +
       earnings.overtime +
-      sumNamedAmounts(earnings.otherEarnings)
+      sumNamedAmounts(earnings.otherEarnings) +
+      Object.entries(averagedEarningsMap)
+        .filter(([key]) => !['basic', 'hra', 'flexi', 'broadband', 'petrol', 'lta', 'special', 'conveyance', 'medical'].includes(key))
+        .reduce((sum, [, val]) => sum + val, 0)
     );
   } else {
     const sumDailyComponent = (compField) => {
@@ -1069,6 +1133,21 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
 
   const totalPayable = roundAmount(employerContributions.grossTotalSalary + variablePay.totalVariablePay);
 
+  const averagedDeductionsMap = {};
+  if (hasDynamicComponents) {
+    config.salaryComponents.forEach(c => {
+      if (c.type === 'deduction') {
+        let sumDeductionVal = 0;
+        for (let d = 0; d < totalDaysInMonth; d++) {
+          const ds = dailyStructures[d];
+          const dailyVal = ds.deductionsMap?.[c.id] ?? ds[c.id] ?? 0;
+          sumDeductionVal += (dailyVal / totalDaysInMonth);
+        }
+        averagedDeductionsMap[c.id] = roundAmount(sumDeductionVal);
+      }
+    });
+  }
+
   const deductions = {
     pfEmployee,
     esiEmployee,
@@ -1080,12 +1159,17 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     loanDeduction: roundAmount(adjustments.loanDeduction),
     advanceDeduction: roundAmount(adjustments.advanceDeduction),
     otherDeductions,
+    deductionsMap: averagedDeductionsMap,
   };
+
+  const dynamicDeductionsSum = roundAmount(Object.values(averagedDeductionsMap).reduce((sum, v) => sum + v, 0));
+
   deductions.totalDeductions = roundAmount(
     Object.entries(deductions)
-      .filter(([key, value]) => key !== 'otherDeductions' && typeof value === 'number')
+      .filter(([key, value]) => key !== 'otherDeductions' && key !== 'deductionsMap' && typeof value === 'number')
       .reduce((sum, [, value]) => sum + value, 0) +
-    sumNamedAmounts(deductions.otherDeductions)
+    sumNamedAmounts(deductions.otherDeductions) +
+    dynamicDeductionsSum
   );
 
   const reimbursements = Array.isArray(adjustments.reimbursements) ? adjustments.reimbursements : [];
