@@ -296,13 +296,34 @@ exports.createQuery = async (req, res) => {
 exports.getMyQueries = async (req, res) => {
     try {
         setPrivateCache(res, 20);
-        const queries = await HelpdeskQuery.find({ raisedBy: req.user._id, companyId: req.companyId })
-            .populate('queryType', 'name')
-            .populate('assignedTo', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .lean();
 
-        res.status(200).json({ success: true, data: queries });
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
+
+        const filter = { raisedBy: req.user._id, companyId: req.companyId };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('queryType', 'name')
+                .populate('assignedTo', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -312,13 +333,34 @@ exports.getMyQueries = async (req, res) => {
 exports.getAssignedQueries = async (req, res) => {
     try {
         setPrivateCache(res, 20);
-        const queries = await HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
-            .populate('raisedBy', 'firstName lastName email')
-            .populate('queryType', 'name')
-            .sort({ createdAt: -1 })
-            .lean();
 
-        res.status(200).json({ success: true, data: queries });
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
+
+        const filter = { assignedTo: req.user._id, companyId: req.companyId };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('raisedBy', 'firstName lastName email')
+                .populate('queryType', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching assigned queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -334,14 +376,34 @@ exports.getAllQueries = async (req, res) => {
 
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
 
-        const queries = await HelpdeskQuery.find({ companyId: req.companyId })
-            .populate('raisedBy', 'firstName lastName email')
-            .populate('assignedTo', 'firstName lastName email')
-            .populate('queryType', 'name')
-            .sort({ createdAt: -1 })
-            .lean();
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
 
-        res.status(200).json({ success: true, data: queries });
+        const filter = { companyId: req.companyId };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('raisedBy', 'firstName lastName email')
+                .populate('assignedTo', 'firstName lastName email')
+                .populate('queryType', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching all queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
