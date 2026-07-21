@@ -639,6 +639,14 @@ exports.sendPreOnboardingEmail = async (req, res) => {
 
         await employee.save();
 
+        const employeeResponse = employee.toObject();
+        delete employeeResponse.pendingCredentialPassword;
+
+        // Dynamically prefix template names for this candidate
+        const formattedTemplates = formatEmployeeDynamicTemplates(employeeResponse, companyDynamicTemplates);
+        employeeResponse.companyDynamicTemplates = formattedTemplates;
+        employeeResponse.companyPolicies = companyPolicies;
+
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
 
         // Credentials Logic - include original ID and password (regenerate if not changed yet)
@@ -858,9 +866,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         if (includesOfferLetter) {
             await syncTADecision(employee, 'Offer Sent');
         }
-
-        const employeeResponse = employee.toObject();
-        delete employeeResponse.pendingCredentialPassword;
 
         res.json({ message: 'Pre-onboarding email sent successfully', employee: employeeResponse });
     } catch (error) {
@@ -1201,6 +1206,45 @@ exports.getOnboardingList = async (req, res) => {
     }
 };
 
+const formatEmployeeDynamicTemplates = (employeeObj, companyTemplates = []) => {
+    const candidateName = `${employeeObj.firstName || ''}`.replace(/[^a-zA-Z0-9]/g, '').trim();
+
+    // 1. Format company templates name
+    const formattedTemplates = companyTemplates.map(t => {
+        const tObj = typeof t.toObject === 'function' ? t.toObject() : { ...t };
+        tObj.name = `${candidateName}_${tObj.name}`;
+        return tObj;
+    });
+
+    // 2. Format requestedDocuments label
+    if (Array.isArray(employeeObj.requestedDocuments)) {
+        employeeObj.requestedDocuments.forEach(rd => {
+            const matchingTemplate = companyTemplates.find(t => 
+                (rd.templateId && t._id.toString() === rd.templateId.toString()) || 
+                t.name === rd.label
+            );
+            if (matchingTemplate) {
+                rd.label = `${candidateName}_${matchingTemplate.name}`;
+            }
+        });
+    }
+
+    // 3. Format acceptedTemplates name
+    if (Array.isArray(employeeObj.offerDeclaration?.acceptedTemplates)) {
+        employeeObj.offerDeclaration.acceptedTemplates.forEach(at => {
+            const matchingTemplate = companyTemplates.find(t => 
+                (at.templateId && t._id.toString() === at.templateId.toString()) || 
+                t.name === at.name
+            );
+            if (matchingTemplate) {
+                at.name = `${candidateName}_${matchingTemplate.name}`;
+            }
+        });
+    }
+
+    return formattedTemplates;
+};
+
 // --- Get single onboarding employee ---
 exports.getOnboardingEmployee = async (req, res) => {
     try {
@@ -1214,7 +1258,8 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         const employeeObj = employee.toObject();
         const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
-        employeeObj.companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const companyTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        employeeObj.companyDynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, companyTemplates);
         employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
 
         res.status(200).json(employeeObj);
@@ -1387,7 +1432,14 @@ exports.updateEmployee = async (req, res) => {
 
         employee.markModified('salary');
         await employee.save();
-        res.status(200).json({ message: 'Employee updated successfully', employee });
+
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        const companyTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const employeeObj = employee.toObject();
+        employeeObj.companyDynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, companyTemplates);
+        employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        res.status(200).json({ message: 'Employee updated successfully', employee: employeeObj });
     } catch (error) {
         console.error('Error updating employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1952,9 +2004,12 @@ exports.getMyOnboarding = async (req, res) => {
         // Remove HR-internal config from candidate payload
         delete employeeObj.selectionDraft;
 
-        const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
-        const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
-        const activeTemplateIds = (employee.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
+        // Dynamically prefix template names for this candidate
+        dynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, dynamicTemplates);
+
+        const activeSectionLabels = (employeeObj.requestedSections || []).map(s => s.label).filter(Boolean);
+        const activeDocumentLabels = (employeeObj.requestedDocuments || []).map(d => d.label).filter(Boolean);
+        const activeTemplateIds = (employeeObj.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         // If selective onboarding is configured, filter the sections and documents accordingly
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
