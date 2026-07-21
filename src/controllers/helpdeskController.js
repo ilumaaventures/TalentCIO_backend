@@ -100,7 +100,8 @@ exports.addQueryType = async (req, res) => {
 
         const {
             name, assignedRole, assignedPerson,
-            enableEscalation, escalationDays, escalationRole, escalationPerson
+            enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse
         } = req.body;
 
         await validateQueryTypeAssignments({
@@ -114,6 +115,7 @@ exports.addQueryType = async (req, res) => {
         const newType = new QueryType({
             name, assignedRole, assignedPerson,
             enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse,
             companyId: req.companyId
         });
         await newType.save();
@@ -134,7 +136,8 @@ exports.updateQueryType = async (req, res) => {
 
         const {
             name, assignedRole, assignedPerson, isActive,
-            enableEscalation, escalationDays, escalationRole, escalationPerson
+            enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse
         } = req.body;
         const type = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
 
@@ -156,6 +159,7 @@ exports.updateQueryType = async (req, res) => {
         if (escalationDays !== undefined) type.escalationDays = escalationDays;
         if (escalationRole !== undefined) type.escalationRole = escalationRole ? escalationRole : null;
         if (escalationPerson !== undefined) type.escalationPerson = escalationPerson ? escalationPerson : null;
+        if (autoResponse !== undefined) type.autoResponse = autoResponse;
 
         await type.save();
         res.status(200).json({ success: true, data: type });
@@ -190,10 +194,10 @@ exports.createQuery = async (req, res) => {
     try {
         const { subject, description, queryTypeId, priority } = req.body;
 
-        const qType = await QueryType.findOne({ 
+        const qType = await QueryType.findOne({
             _id: queryTypeId,
             companyId: req.companyId
-        });
+        }).populate('assignedPerson', 'firstName lastName');
         if (!qType || !qType.isActive) return res.status(400).json({ success: false, message: 'Invalid or inactive query type.' });
 
         const newQuery = new HelpdeskQuery({
@@ -202,20 +206,27 @@ exports.createQuery = async (req, res) => {
             queryType: qType._id,
             priority: priority || 'Medium',
             raisedBy: req.user._id,
-            assignedTo: qType.assignedPerson,
+            assignedTo: qType.assignedPerson?._id || qType.assignedPerson,
             status: 'New',
             companyId: req.companyId
         });
+
+        if (qType.autoResponse && qType.autoResponse.trim()) {
+            newQuery.comments.push({
+                user: qType.assignedPerson?._id || qType.assignedPerson,
+                text: qType.autoResponse.trim()
+            });
+        }
 
         await newQuery.save();
 
         // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
         const notificationTargets = new Set();
-        
+
         // Only Notify Specific Assigned Person
         if (qType.assignedPerson) {
-            notificationTargets.add(qType.assignedPerson.toString());
+            notificationTargets.add((qType.assignedPerson?._id || qType.assignedPerson).toString());
         }
 
 
@@ -249,10 +260,25 @@ exports.createQuery = async (req, res) => {
             link: `/helpdesk`
         });
 
+        // 6. Notify employee of the auto-generated comment/initial response
+        if (qType.autoResponse && qType.autoResponse.trim()) {
+            const senderName = qType.assignedPerson?.firstName || 'Representative';
+            await NotificationService.createNotification(io, {
+                user: req.user._id,
+                companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_comment_added',
+                title: 'New Comment on Query',
+                message: `${senderName} commented on "${subject}"`,
+                type: 'Info',
+                link: `/helpdesk/${newQuery._id}`
+            });
+        }
+
         // POPULATE FOR INSTANT UI UPDATE
         const populatedQuery = await HelpdeskQuery.findById(newQuery._id)
             .populate('raisedBy', 'firstName lastName email profilePicture')
             .populate('assignedTo', 'firstName lastName email profilePicture')
+            .populate('comments.user', 'firstName lastName roles')
             .populate('queryType', 'name')
             .lean();
 
@@ -303,7 +329,7 @@ exports.getAllQueries = async (req, res) => {
     try {
         setPrivateCache(res, 20);
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
-        
+
         console.log(`[HelpDesk Debug] User: ${req.user.email}, Roles: ${JSON.stringify(req.user.roles.map(r => r.name || r))}, IsAdmin: ${isAdmin}, CompanyId: ${req.companyId}`);
 
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
@@ -375,7 +401,7 @@ exports.getQueryById = async (req, res) => {
         const company = await Company.findById(query.companyId).lean();
         const weeklyOff = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
         const workHoursElapsed = calculateWorkHours(query.createdAt, new Date(), weeklyOff);
-        
+
         let resolvedWorkHoursElapsed = 0;
         if (query.status === 'Resolved' && query.resolvedAt) {
             resolvedWorkHoursElapsed = calculateWorkHours(query.resolvedAt, new Date(), weeklyOff);
@@ -428,7 +454,7 @@ exports.updateQueryStatus = async (req, res) => {
                 const company = await Company.findById(query.companyId).lean();
                 const weeklyOff = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
                 const resolvedHours = calculateWorkHours(query.resolvedAt, new Date(), weeklyOff);
-                
+
                 if (resolvedHours < 48) {
                     return res.status(403).json({ success: false, message: `Admins/Assignees can only close a resolved query after 48 work hours if the raiser doesn't confirm. Currently ${resolvedHours.toFixed(1)} work hours have passed since resolution.` });
                 }
