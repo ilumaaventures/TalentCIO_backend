@@ -166,16 +166,12 @@ const getAttendanceSummary = async (req, res) => {
                         const hasEntry = attendanceMap.has(attendanceKey);
 
                         // Find matching approved leave for this day
+                        const cursorTime = cursor.getTime();
                         const matchingLeave = approvedLeaves.find(l => {
                             if (String(l.user) !== userIdStr) return false;
-                            const leaveStart = new Date(l.startDate);
-                            const leaveEnd = new Date(l.endDate);
-                            const temp = new Date(leaveStart);
-                            while (temp <= leaveEnd) {
-                                if (temp.toDateString() === dateStr) return true;
-                                temp.setDate(temp.getDate() + 1);
-                            }
-                            return false;
+                            const start = new Date(l.startDate).setHours(0,0,0,0);
+                            const end = new Date(l.endDate).setHours(23,59,59,999);
+                            return cursorTime >= start && cursorTime <= end;
                         });
 
                         if (isOffDay) {

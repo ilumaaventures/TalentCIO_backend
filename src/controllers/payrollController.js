@@ -1,12 +1,13 @@
 const PayrollConfig = require('../models/PayrollConfig');
 const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('../utils/payrollMath');
 
+const getCompanyId = (req) => req.companyId || req.user?.companyId || req.user?.company;
+
 exports.getConfig = async (req, res) => {
   try {
-    const companyId = req.companyId || req.user?.companyId || req.user?.company;
-    if (!companyId) {
-      return res.status(400).json({ message: 'Company ID not found in user request context.' });
-    }
+    const companyId = getCompanyId(req);
+    if (!companyId) return res.status(400).json({ message: 'Company ID not found in user request context.' });
+    
     let config = await PayrollConfig.findOne({ companyId });
     if (!config) {
       config = new PayrollConfig({ companyId });
@@ -21,13 +22,10 @@ exports.getConfig = async (req, res) => {
 
 exports.updateConfig = async (req, res) => {
   try {
-    const companyId = req.companyId || req.user?.companyId || req.user?.company;
-    if (!companyId) {
-      return res.status(400).json({ message: 'Company ID not found in user request context.' });
-    }
-    const updateData = req.body || {};
+    const companyId = getCompanyId(req);
+    if (!companyId) return res.status(400).json({ message: 'Company ID not found in user request context.' });
     
-    // Ensure companyId is not changed
+    const updateData = req.body || {};
     delete updateData.companyId;
 
     const config = await PayrollConfig.findOneAndUpdate(
@@ -44,10 +42,8 @@ exports.updateConfig = async (req, res) => {
 
 exports.calculateSalary = async (req, res) => {
   try {
-    const companyId = req.companyId || req.user?.companyId || req.user?.company;
-    if (!companyId) {
-      return res.status(400).json({ message: 'Company ID not found in user request context.' });
-    }
+    const companyId = getCompanyId(req);
+    if (!companyId) return res.status(400).json({ message: 'Company ID not found in user request context.' });
 
     const config = await PayrollConfig.findOne({ companyId }) || new PayrollConfig({ companyId });
 
