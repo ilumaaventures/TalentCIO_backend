@@ -758,7 +758,7 @@ exports.getHelpdeskBootstrap = async (req, res) => {
         const assignedQueriesPromise = HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
             .populate('raisedBy', 'firstName lastName email')
             .populate('queryType', 'name')
-            .sort({ priority: -1, createdAt: 1 })
+            .sort({ createdAt: -1 })
             .limit(50) // assigned queries capped at 50
             .lean();
         const allQueriesPromise = isAdmin
@@ -766,7 +766,7 @@ exports.getHelpdeskBootstrap = async (req, res) => {
                 .populate('raisedBy', 'firstName lastName email')
                 .populate('assignedTo', 'firstName lastName email')
                 .populate('queryType', 'name')
-                .sort({ priority: -1, createdAt: -1 })
+                .sort({ createdAt: -1 })
                 .skip(qSkip).limit(qLimitNum) // paginated for admins
                 .lean()
             : Promise.resolve([]);

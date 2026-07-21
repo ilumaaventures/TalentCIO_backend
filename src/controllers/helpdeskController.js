@@ -315,7 +315,7 @@ exports.getAssignedQueries = async (req, res) => {
         const queries = await HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
             .populate('raisedBy', 'firstName lastName email')
             .populate('queryType', 'name')
-            .sort({ priority: -1, createdAt: 1 }) // High priority first, then oldest
+            .sort({ createdAt: -1 })
             .lean();
 
         res.status(200).json({ success: true, data: queries });
@@ -338,7 +338,7 @@ exports.getAllQueries = async (req, res) => {
             .populate('raisedBy', 'firstName lastName email')
             .populate('assignedTo', 'firstName lastName email')
             .populate('queryType', 'name')
-            .sort({ priority: -1, createdAt: -1 })
+            .sort({ createdAt: -1 })
             .lean();
 
         res.status(200).json({ success: true, data: queries });
