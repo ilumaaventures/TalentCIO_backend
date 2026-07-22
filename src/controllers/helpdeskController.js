@@ -79,7 +79,8 @@ const validateQueryTypeAssignments = async ({
 
 exports.getQueryTypes = async (req, res) => {
     try {
-        setPrivateCache(res, 60);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 60);
         const types = await QueryType.find({ companyId: req.companyId })
             .populate('assignedRole', 'name')
             .populate('assignedPerson', 'firstName lastName email')
@@ -295,7 +296,8 @@ exports.createQuery = async (req, res) => {
 
 exports.getMyQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
 
         const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
         const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
@@ -332,7 +334,8 @@ exports.getMyQueries = async (req, res) => {
 
 exports.getAssignedQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
 
         const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
         const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
@@ -369,7 +372,8 @@ exports.getAssignedQueries = async (req, res) => {
 
 exports.getAllQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
 
         console.log(`[HelpDesk Debug] User: ${req.user.email}, Roles: ${JSON.stringify(req.user.roles.map(r => r.name || r))}, IsAdmin: ${isAdmin}, CompanyId: ${req.companyId}`);
@@ -412,7 +416,8 @@ exports.getAllQueries = async (req, res) => {
 
 exports.getEscalatedQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
 
@@ -709,6 +714,139 @@ exports.addComment = async (req, res) => {
         res.status(200).json({ success: true, data: query });
     } catch (error) {
         console.error('Error adding comment:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+exports.getHelpdeskAnalytics = async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        const companyId = req.companyId;
+
+        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isResolverRole = req.user.roles.some(r => ['HR', 'Supervisor', 'Admin', 'System'].includes(r.name || r));
+        if (!isAdmin && !isResolverRole) {
+            return res.status(403).json({ success: false, message: 'Admins or resolvers only' });
+        }
+
+        let queryFilter = { companyId };
+        let queryTypeFilter = { companyId };
+        const matchQuery = { companyId: new mongoose.Types.ObjectId(companyId) };
+
+        if (!isAdmin) {
+            // Find query types assigned to the user
+            const assignedQueryTypes = await QueryType.find({
+                companyId,
+                $or: [
+                    { assignedPerson: req.user._id },
+                    { escalationPerson: req.user._id }
+                ]
+            }).select('_id');
+
+            const queryTypeIds = assignedQueryTypes.map(qt => qt._id);
+            queryFilter.queryType = { $in: queryTypeIds };
+            queryTypeFilter._id = { $in: queryTypeIds };
+            matchQuery.queryType = { $in: queryTypeIds.map(id => new mongoose.Types.ObjectId(id)) };
+        }
+
+        const [
+            totalQueries,
+            totalQueryTypes,
+            statusBreakdown,
+            priorityBreakdown,
+            queryTypeBreakdown,
+            trendBreakdown
+        ] = await Promise.all([
+            HelpdeskQuery.countDocuments(queryFilter),
+            QueryType.countDocuments(queryTypeFilter),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$priority", count: { $sum: 1 } } }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$queryType", count: { $sum: 1 } } },
+                {
+                    $lookup: {
+                        from: "querytypes",
+                        localField: "_id",
+                        foreignField: "_id",
+                        as: "queryTypeInfo"
+                    }
+                },
+                { $unwind: { path: "$queryTypeInfo", preserveNullAndEmptyArrays: true } },
+                {
+                    $project: {
+                        name: { $ifNull: ["$queryTypeInfo.name", "Unknown Type"] },
+                        count: 1
+                    }
+                }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                {
+                    $match: {
+                        ...matchQuery,
+                        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ])
+        ]);
+
+        const statusSummary = {
+            New: 0,
+            "In Progress": 0,
+            Resolved: 0,
+            Closed: 0,
+            Escalated: 0,
+            Pending: 0
+        };
+        statusBreakdown.forEach(item => {
+            if (item._id in statusSummary) {
+                statusSummary[item._id] = item.count;
+            }
+        });
+
+        const prioritySummary = {
+            Low: 0,
+            Medium: 0,
+            High: 0,
+            Urgent: 0
+        };
+        priorityBreakdown.forEach(item => {
+            if (item._id in prioritySummary) {
+                prioritySummary[item._id] = item.count;
+            }
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalQueries,
+                totalQueryTypes,
+                escalatedQueriesCount: statusSummary.Escalated || 0,
+                statusSummary,
+                prioritySummary,
+                queryTypeBreakdown,
+                trendBreakdown
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching helpdesk analytics:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
