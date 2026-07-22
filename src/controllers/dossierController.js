@@ -20,6 +20,7 @@ const BANK_DOCUMENT_TITLE = 'Cancelled Cheque / Passbook Front Page';
 const PASSPORT_DOCUMENT_TITLE = 'Passport';
 const LEGACY_PASSPORT_DOCUMENT_TITLE = 'Passport (Optional)';
 const PASSPORT_PHOTO_DOCUMENT_TITLE = 'Recent Passport-Size Photograph';
+const LIVE_PHOTO_DOCUMENT_TITLE = 'Live Photograph';
 const EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Previous Experience Certificate';
 const LEGACY_EXPERIENCE_CERTIFICATE_DOCUMENT_TITLE = 'Experience Certificate';
 const OFFER_LETTER_DOCUMENT_TITLE = 'Offer Letter';
@@ -203,7 +204,8 @@ const archiveCurrentDocumentVersion = (doc, archiveReason) => {
         revokedAt: doc.revokedAt,
         revocationReason: doc.revocationReason,
         archivedAt: new Date(),
-        archiveReason
+        archiveReason,
+        livePhotoMetadata: doc.livePhotoMetadata
     });
 };
 
@@ -390,6 +392,7 @@ const normalizeTransferredIdentityDocuments = async (profile) => {
         if (
             normalizedTitle === PASSPORT_DOCUMENT_TITLE.toLowerCase()
             || normalizedTitle === PASSPORT_PHOTO_DOCUMENT_TITLE.toLowerCase()
+            || normalizedTitle === LIVE_PHOTO_DOCUMENT_TITLE.toLowerCase()
         ) {
             if (doc.category !== 'ID Proof') {
                 doc.category = 'ID Proof';

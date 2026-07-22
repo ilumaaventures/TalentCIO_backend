@@ -13,7 +13,12 @@ const documentSchema = new mongoose.Schema({
     },
     rejectionReason: { type: String, default: '' },
     uploadedAt: Date,
-    emailSentAt: Date
+    emailSentAt: Date,
+    requireLivePhoto: { type: Boolean, default: false }, // HR can require live camera capture instead of file upload
+    livePhotoMetadata: {
+        capturedAt: { type: Date },
+        address: { type: String, default: '' }
+    }
 }, { _id: true });
 
 const auditEntrySchema = new mongoose.Schema({

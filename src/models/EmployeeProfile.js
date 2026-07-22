@@ -62,7 +62,11 @@ const DocumentVersionSchema = new mongoose.Schema({
     revokedAt: Date,
     revocationReason: String,
     archivedAt: { type: Date, default: Date.now },
-    archiveReason: String
+    archiveReason: String,
+    livePhotoMetadata: {
+        capturedAt: { type: Date },
+        address: { type: String, default: '' }
+    }
 }, { _id: false });
 
 const employeeProfileSchema = new mongoose.Schema({
@@ -204,6 +208,10 @@ const employeeProfileSchema = new mongoose.Schema({
         deletedAt: Date,
         versionNumber: { type: Number, default: 1 },
         isDeleted: { type: Boolean, default: false },
+        livePhotoMetadata: {
+            capturedAt: { type: Date },
+            address: { type: String, default: '' }
+        },
         versionHistory: [DocumentVersionSchema]
     }],
     documentSubmissionStatus: {

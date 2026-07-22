@@ -60,6 +60,7 @@ const meetingSchema = new mongoose.Schema({
     reviewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     approvalDate: Date,
     status: { type: String, enum: ['Draft', 'Published', 'Approved', 'Archived'], default: 'Draft' },
+    priority: { type: String, enum: ['Low', 'Medium', 'High', 'Urgent'], default: 'Medium' },
 
     // Misc
     summary: String,

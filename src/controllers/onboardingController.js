@@ -162,6 +162,17 @@ const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
             changed = true;
         }
 
+        const hasLivePhoto = employee.documents.some(doc => doc?.type === 'live_photo');
+        if (!hasLivePhoto) {
+            employee.documents.push({
+                type: 'live_photo',
+                label: 'Live Photograph',
+                status: 'Pending',
+                requireLivePhoto: true
+            });
+            changed = true;
+        }
+
         employee.documents.forEach((doc) => {
             if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
                 doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
@@ -337,6 +348,7 @@ exports.addEmployee = async (req, res) => {
             { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
             { type: 'experience_certificate', label: 'Previous Experience Certificate' },
             { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
             { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
@@ -627,6 +639,14 @@ exports.sendPreOnboardingEmail = async (req, res) => {
 
         await employee.save();
 
+        const employeeResponse = employee.toObject();
+        delete employeeResponse.pendingCredentialPassword;
+
+        // Dynamically prefix template names for this candidate
+        const formattedTemplates = formatEmployeeDynamicTemplates(employeeResponse, companyDynamicTemplates);
+        employeeResponse.companyDynamicTemplates = formattedTemplates;
+        employeeResponse.companyPolicies = companyPolicies;
+
         const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
 
         // Credentials Logic - include original ID and password (regenerate if not changed yet)
@@ -846,9 +866,6 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         if (includesOfferLetter) {
             await syncTADecision(employee, 'Offer Sent');
         }
-
-        const employeeResponse = employee.toObject();
-        delete employeeResponse.pendingCredentialPassword;
 
         res.json({ message: 'Pre-onboarding email sent successfully', employee: employeeResponse });
     } catch (error) {
@@ -1092,6 +1109,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
                     { type: 'experience_certificate', label: 'Previous Experience Certificate' },
                     { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+                    { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
                     { type: 'character_certificate', label: 'Character Certificate' }
                 ];
 
@@ -1188,6 +1206,45 @@ exports.getOnboardingList = async (req, res) => {
     }
 };
 
+const formatEmployeeDynamicTemplates = (employeeObj, companyTemplates = []) => {
+    const candidateName = `${employeeObj.firstName || ''}`.replace(/[^a-zA-Z0-9]/g, '').trim();
+
+    // 1. Format company templates name
+    const formattedTemplates = companyTemplates.map(t => {
+        const tObj = typeof t.toObject === 'function' ? t.toObject() : { ...t };
+        tObj.name = `${candidateName}_${tObj.name}`;
+        return tObj;
+    });
+
+    // 2. Format requestedDocuments label
+    if (Array.isArray(employeeObj.requestedDocuments)) {
+        employeeObj.requestedDocuments.forEach(rd => {
+            const matchingTemplate = companyTemplates.find(t => 
+                (rd.templateId && t._id.toString() === rd.templateId.toString()) || 
+                t.name === rd.label
+            );
+            if (matchingTemplate) {
+                rd.label = `${candidateName}_${matchingTemplate.name}`;
+            }
+        });
+    }
+
+    // 3. Format acceptedTemplates name
+    if (Array.isArray(employeeObj.offerDeclaration?.acceptedTemplates)) {
+        employeeObj.offerDeclaration.acceptedTemplates.forEach(at => {
+            const matchingTemplate = companyTemplates.find(t => 
+                (at.templateId && t._id.toString() === at.templateId.toString()) || 
+                t.name === at.name
+            );
+            if (matchingTemplate) {
+                at.name = `${candidateName}_${matchingTemplate.name}`;
+            }
+        });
+    }
+
+    return formattedTemplates;
+};
+
 // --- Get single onboarding employee ---
 exports.getOnboardingEmployee = async (req, res) => {
     try {
@@ -1201,7 +1258,8 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         const employeeObj = employee.toObject();
         const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
-        employeeObj.companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const companyTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        employeeObj.companyDynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, companyTemplates);
         employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
 
         res.status(200).json(employeeObj);
@@ -1374,7 +1432,14 @@ exports.updateEmployee = async (req, res) => {
 
         employee.markModified('salary');
         await employee.save();
-        res.status(200).json({ message: 'Employee updated successfully', employee });
+
+        const company = await Company.findById(employee.companyId).select('settings.onboarding').lean();
+        const companyTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const employeeObj = employee.toObject();
+        employeeObj.companyDynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, companyTemplates);
+        employeeObj.companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        res.status(200).json({ message: 'Employee updated successfully', employee: employeeObj });
     } catch (error) {
         console.error('Error updating employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -1502,8 +1567,40 @@ exports.regenerateCredentials = async (req, res) => {
     }
 };
 
+// --- Toggle Live Photo requirement on a document ---
+exports.toggleDocLivePhoto = async (req, res) => {
+    try {
+        const { id, docId } = req.params;
+        const { requireLivePhoto } = req.body; // boolean
+
+        const employee = await OnboardingEmployee.findOne({ _id: id, companyId: req.companyId });
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const doc = employee.documents.id(docId);
+        if (!doc) return res.status(404).json({ message: 'Document not found' });
+
+        doc.requireLivePhoto = Boolean(requireLivePhoto);
+
+        employee.auditLog.push({
+            action: 'LIVE_PHOTO_TOGGLE',
+            details: `${doc.label} live photo requirement set to ${doc.requireLivePhoto}`
+        });
+        await employee.save();
+
+        res.status(200).json({
+            message: `Live photo requirement ${doc.requireLivePhoto ? 'enabled' : 'disabled'} for ${doc.label}`,
+            document: doc,
+            employee
+        });
+    } catch (error) {
+        console.error('Error toggling live photo requirement:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
 // --- Flag a document for re-upload ---
 exports.flagDocument = async (req, res) => {
+
     try {
         const { id, docId } = req.params;
         const { reason } = req.body;
@@ -1907,9 +2004,12 @@ exports.getMyOnboarding = async (req, res) => {
         // Remove HR-internal config from candidate payload
         delete employeeObj.selectionDraft;
 
-        const activeSectionLabels = (employee.requestedSections || []).map(s => s.label).filter(Boolean);
-        const activeDocumentLabels = (employee.requestedDocuments || []).map(d => d.label).filter(Boolean);
-        const activeTemplateIds = (employee.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
+        // Dynamically prefix template names for this candidate
+        dynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, dynamicTemplates);
+
+        const activeSectionLabels = (employeeObj.requestedSections || []).map(s => s.label).filter(Boolean);
+        const activeDocumentLabels = (employeeObj.requestedDocuments || []).map(d => d.label).filter(Boolean);
+        const activeTemplateIds = (employeeObj.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         // If selective onboarding is configured, filter the sections and documents accordingly
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
@@ -1957,9 +2057,18 @@ exports.getMyOnboarding = async (req, res) => {
 
                 // Filter dynamic templates: support specific templateId mapping or label fallback for legacy entries
                 dynamicTemplates = dynamicTemplates.filter(t => {
-                    const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
-                    if (hasIdAssigned) return true;
-                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                    const reqDoc = (employee.requestedDocuments || []).find(d => 
+                        d.templateId?.toString() === t._id.toString() || d.label === t.name
+                    );
+                    const isAccepted = (employee.offerDeclaration?.acceptedTemplates || []).some(at => at.templateId === t._id.toString());
+
+                    if (t.isDeleted !== true) {
+                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
+                        if (hasIdAssigned) return true;
+                        return activeDocumentLabels.includes(t.name);
+                    }
+                    // If deleted, only return if it has already been sent or accepted
+                    return (reqDoc && reqDoc.emailSentAt) || isAccepted;
                 });
             }
         }
@@ -2095,6 +2204,13 @@ exports.uploadDocument = async (req, res) => {
         doc.status = 'Uploaded';
         doc.rejectionReason = '';
         doc.uploadedAt = new Date();
+
+        if (doc.type === 'live_photo') {
+            doc.livePhotoMetadata = {
+                capturedAt: new Date(),
+                address: req.body.address || ''
+            };
+        }
 
         employee.auditLog.push({ action: 'DOCUMENT_UPLOAD', details: `${doc.label} uploaded` });
         if (employee.status === 'Pending') employee.status = 'In Progress';
@@ -3387,9 +3503,10 @@ exports.generateDynamicTemplate = async (req, res) => {
 
         const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
 
+        const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        res.setHeader('Content-Disposition', `inline; filename=${safeName}.docx`);
+        res.setHeader('Content-Disposition', `inline; filename=${candidateName}_${safeName}.docx`);
         res.send(buffer);
     } catch (error) {
         console.error('Error generating dynamic template preview:', error);
@@ -3427,6 +3544,7 @@ exports.getMyOfferLetter = async (req, res) => {
             }
         });
 
+        const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName || ''}`.trim();
         const safeName = fullName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Disposition', `attachment; filename=OfferLetter_${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -3630,8 +3748,9 @@ exports.downloadTemplateById = async (req, res) => {
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
         const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+        const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
         const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
-        res.setHeader('Content-Disposition', `attachment; filename=${safeName}.docx`);
+        res.setHeader('Content-Disposition', `attachment; filename=${candidateName}_${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.send(buffer);
     } catch (error) {
@@ -3656,6 +3775,7 @@ const DOC_CATEGORY_MAP = {
     'aadhaar_back': 'ID Proof',
     'passport': 'ID Proof',
     'passport_photo': 'ID Proof',
+    'live_photo': 'ID Proof',
     'salary_slip': 'Payslips',
     '10th_marksheet': 'Education',
     '12th_marksheet': 'Education',
@@ -3687,6 +3807,7 @@ exports.logout = async (req, res) => {
 const DOC_TITLE_MAP = {
     'passport': 'Passport',
     'passport_photo': 'Recent Passport-Size Photograph',
+    'live_photo': 'Live Photograph',
     'experience_certificate': 'Previous Experience Certificate',
     'character_certificate': 'Character Certificate'
 };
@@ -3803,7 +3924,8 @@ exports.transferToActiveEmployee = async (req, res) => {
                     fileName: normalizedTitle.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf',
                     url: doc.url,
                     uploadDate: doc.uploadedAt || new Date(),
-                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending'
+                    verificationStatus: doc.status === 'Approved' ? 'Verified' : 'Pending',
+                    livePhotoMetadata: doc.livePhotoMetadata
                 });
             });
 
@@ -3825,17 +3947,19 @@ exports.transferToActiveEmployee = async (req, res) => {
             if (template && template.url) {
                 try {
                     const templateBuffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+                    const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
                     const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+                    const candidateSafeName = `${candidateName}_${safeName}`;
                     const uploadedTemplate = await uploadBufferToCloudinary(
                         templateBuffer,
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
-                        `${safeName}_${Date.now()}.docx`
+                        `${candidateSafeName}_${Date.now()}.docx`
                     );
 
                     dossierDocuments.push({
                         category: 'Other',
-                        title: template.name,
-                        fileName: `${safeName}.docx`,
+                        title: `${template.name} - ${employee.firstName} ${employee.lastName || ''}`.trim(),
+                        fileName: `${candidateSafeName}.docx`,
                         url: uploadedTemplate.secure_url,
                         uploadDate: acceptedT.acceptedAt || new Date(),
                         verificationStatus: 'Verified'
@@ -3852,16 +3976,17 @@ exports.transferToActiveEmployee = async (req, res) => {
             if (offerLetterTemplateUrl) {
                 try {
                     const offerLetterBuffer = await getPopulatedDocumentBuffer(employee, company, offerLetterTemplateUrl);
+                    const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
                     const uploadedOffer = await uploadBufferToCloudinary(
                         offerLetterBuffer,
                         `talentcio/${employee.companyId}/dossier/${newUser._id}`,
-                        `Offer_Letter_${Date.now()}.docx`
+                        `Offer_Letter_${candidateName}_${Date.now()}.docx`
                     );
 
                     dossierDocuments.push({
                         category: 'Offer Letter',
                         title: 'Offer Letter',
-                        fileName: 'Offer_Letter.docx',
+                        fileName: `Offer_Letter_${candidateName}.docx`,
                         url: uploadedOffer.secure_url,
                         uploadDate: employee.offerDeclaration?.eSignDate || new Date(),
                         verificationStatus: 'Verified'

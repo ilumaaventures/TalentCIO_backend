@@ -79,7 +79,8 @@ const validateQueryTypeAssignments = async ({
 
 exports.getQueryTypes = async (req, res) => {
     try {
-        setPrivateCache(res, 60);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 60);
         const types = await QueryType.find({ companyId: req.companyId })
             .populate('assignedRole', 'name')
             .populate('assignedPerson', 'firstName lastName email')
@@ -100,7 +101,8 @@ exports.addQueryType = async (req, res) => {
 
         const {
             name, assignedRole, assignedPerson,
-            enableEscalation, escalationDays, escalationRole, escalationPerson
+            enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse
         } = req.body;
 
         await validateQueryTypeAssignments({
@@ -114,6 +116,7 @@ exports.addQueryType = async (req, res) => {
         const newType = new QueryType({
             name, assignedRole, assignedPerson,
             enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse,
             companyId: req.companyId
         });
         await newType.save();
@@ -134,7 +137,8 @@ exports.updateQueryType = async (req, res) => {
 
         const {
             name, assignedRole, assignedPerson, isActive,
-            enableEscalation, escalationDays, escalationRole, escalationPerson
+            enableEscalation, escalationDays, escalationRole, escalationPerson,
+            autoResponse
         } = req.body;
         const type = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
 
@@ -156,6 +160,7 @@ exports.updateQueryType = async (req, res) => {
         if (escalationDays !== undefined) type.escalationDays = escalationDays;
         if (escalationRole !== undefined) type.escalationRole = escalationRole ? escalationRole : null;
         if (escalationPerson !== undefined) type.escalationPerson = escalationPerson ? escalationPerson : null;
+        if (autoResponse !== undefined) type.autoResponse = autoResponse;
 
         await type.save();
         res.status(200).json({ success: true, data: type });
@@ -190,10 +195,10 @@ exports.createQuery = async (req, res) => {
     try {
         const { subject, description, queryTypeId, priority } = req.body;
 
-        const qType = await QueryType.findOne({ 
+        const qType = await QueryType.findOne({
             _id: queryTypeId,
             companyId: req.companyId
-        });
+        }).populate('assignedPerson', 'firstName lastName');
         if (!qType || !qType.isActive) return res.status(400).json({ success: false, message: 'Invalid or inactive query type.' });
 
         const newQuery = new HelpdeskQuery({
@@ -202,20 +207,27 @@ exports.createQuery = async (req, res) => {
             queryType: qType._id,
             priority: priority || 'Medium',
             raisedBy: req.user._id,
-            assignedTo: qType.assignedPerson,
+            assignedTo: qType.assignedPerson?._id || qType.assignedPerson,
             status: 'New',
             companyId: req.companyId
         });
+
+        if (qType.autoResponse && qType.autoResponse.trim()) {
+            newQuery.comments.push({
+                user: qType.assignedPerson?._id || qType.assignedPerson,
+                text: qType.autoResponse.trim()
+            });
+        }
 
         await newQuery.save();
 
         // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
         const notificationTargets = new Set();
-        
+
         // Only Notify Specific Assigned Person
         if (qType.assignedPerson) {
-            notificationTargets.add(qType.assignedPerson.toString());
+            notificationTargets.add((qType.assignedPerson?._id || qType.assignedPerson).toString());
         }
 
 
@@ -249,10 +261,25 @@ exports.createQuery = async (req, res) => {
             link: `/helpdesk`
         });
 
+        // 6. Notify employee of the auto-generated comment/initial response
+        if (qType.autoResponse && qType.autoResponse.trim()) {
+            const senderName = qType.assignedPerson?.firstName || 'Representative';
+            await NotificationService.createNotification(io, {
+                user: req.user._id,
+                companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_comment_added',
+                title: 'New Comment on Query',
+                message: `${senderName} commented on "${subject}"`,
+                type: 'Info',
+                link: `/helpdesk/${newQuery._id}`
+            });
+        }
+
         // POPULATE FOR INSTANT UI UPDATE
         const populatedQuery = await HelpdeskQuery.findById(newQuery._id)
             .populate('raisedBy', 'firstName lastName email profilePicture')
             .populate('assignedTo', 'firstName lastName email profilePicture')
+            .populate('comments.user', 'firstName lastName roles')
             .populate('queryType', 'name')
             .lean();
 
@@ -269,14 +296,36 @@ exports.createQuery = async (req, res) => {
 
 exports.getMyQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
-        const queries = await HelpdeskQuery.find({ raisedBy: req.user._id, companyId: req.companyId })
-            .populate('queryType', 'name')
-            .populate('assignedTo', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .lean();
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
 
-        res.status(200).json({ success: true, data: queries });
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
+
+        const filter = { raisedBy: req.user._id, companyId: req.companyId };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('queryType', 'name')
+                .populate('assignedTo', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -285,14 +334,42 @@ exports.getMyQueries = async (req, res) => {
 
 exports.getAssignedQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
-        const queries = await HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
-            .populate('raisedBy', 'firstName lastName email')
-            .populate('queryType', 'name')
-            .sort({ priority: -1, createdAt: 1 }) // High priority first, then oldest
-            .lean();
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
 
-        res.status(200).json({ success: true, data: queries });
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
+
+        const filter = {
+            companyId: req.companyId,
+            $or: [
+                { assignedTo: req.user._id },
+                { originalAssignee: req.user._id }
+            ]
+        };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('raisedBy', 'firstName lastName email')
+                .populate('queryType', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching assigned queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -301,21 +378,42 @@ exports.getAssignedQueries = async (req, res) => {
 
 exports.getAllQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
-        
+
         console.log(`[HelpDesk Debug] User: ${req.user.email}, Roles: ${JSON.stringify(req.user.roles.map(r => r.name || r))}, IsAdmin: ${isAdmin}, CompanyId: ${req.companyId}`);
 
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
 
-        const queries = await HelpdeskQuery.find({ companyId: req.companyId })
-            .populate('raisedBy', 'firstName lastName email')
-            .populate('assignedTo', 'firstName lastName email')
-            .populate('queryType', 'name')
-            .sort({ priority: -1, createdAt: -1 })
-            .lean();
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
+        const skip = (page - 1) * limit;
 
-        res.status(200).json({ success: true, data: queries });
+        const filter = { companyId: req.companyId };
+
+        const [queries, total] = await Promise.all([
+            HelpdeskQuery.find(filter)
+                .populate('raisedBy', 'firstName lastName email')
+                .populate('assignedTo', 'firstName lastName email')
+                .populate('queryType', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            HelpdeskQuery.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: queries,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error('Error fetching all queries:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -324,7 +422,8 @@ exports.getAllQueries = async (req, res) => {
 
 exports.getEscalatedQueries = async (req, res) => {
     try {
-        setPrivateCache(res, 20);
+        // Caching disabled for real-time visibility consistency
+        // setPrivateCache(res, 20);
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
 
@@ -375,7 +474,7 @@ exports.getQueryById = async (req, res) => {
         const company = await Company.findById(query.companyId).lean();
         const weeklyOff = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
         const workHoursElapsed = calculateWorkHours(query.createdAt, new Date(), weeklyOff);
-        
+
         let resolvedWorkHoursElapsed = 0;
         if (query.status === 'Resolved' && query.resolvedAt) {
             resolvedWorkHoursElapsed = calculateWorkHours(query.resolvedAt, new Date(), weeklyOff);
@@ -428,7 +527,7 @@ exports.updateQueryStatus = async (req, res) => {
                 const company = await Company.findById(query.companyId).lean();
                 const weeklyOff = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
                 const resolvedHours = calculateWorkHours(query.resolvedAt, new Date(), weeklyOff);
-                
+
                 if (resolvedHours < 48) {
                     return res.status(403).json({ success: false, message: `Admins/Assignees can only close a resolved query after 48 work hours if the raiser doesn't confirm. Currently ${resolvedHours.toFixed(1)} work hours have passed since resolution.` });
                 }
@@ -621,6 +720,139 @@ exports.addComment = async (req, res) => {
         res.status(200).json({ success: true, data: query });
     } catch (error) {
         console.error('Error adding comment:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+exports.getHelpdeskAnalytics = async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        const companyId = req.companyId;
+
+        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isResolverRole = req.user.roles.some(r => ['HR', 'Supervisor', 'Admin', 'System'].includes(r.name || r));
+        if (!isAdmin && !isResolverRole) {
+            return res.status(403).json({ success: false, message: 'Admins or resolvers only' });
+        }
+
+        let queryFilter = { companyId };
+        let queryTypeFilter = { companyId };
+        const matchQuery = { companyId: new mongoose.Types.ObjectId(companyId) };
+
+        if (!isAdmin) {
+            // Find query types assigned to the user
+            const assignedQueryTypes = await QueryType.find({
+                companyId,
+                $or: [
+                    { assignedPerson: req.user._id },
+                    { escalationPerson: req.user._id }
+                ]
+            }).select('_id');
+
+            const queryTypeIds = assignedQueryTypes.map(qt => qt._id);
+            queryFilter.queryType = { $in: queryTypeIds };
+            queryTypeFilter._id = { $in: queryTypeIds };
+            matchQuery.queryType = { $in: queryTypeIds.map(id => new mongoose.Types.ObjectId(id)) };
+        }
+
+        const [
+            totalQueries,
+            totalQueryTypes,
+            statusBreakdown,
+            priorityBreakdown,
+            queryTypeBreakdown,
+            trendBreakdown
+        ] = await Promise.all([
+            HelpdeskQuery.countDocuments(queryFilter),
+            QueryType.countDocuments(queryTypeFilter),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$priority", count: { $sum: 1 } } }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                { $match: matchQuery },
+                { $group: { _id: "$queryType", count: { $sum: 1 } } },
+                {
+                    $lookup: {
+                        from: "querytypes",
+                        localField: "_id",
+                        foreignField: "_id",
+                        as: "queryTypeInfo"
+                    }
+                },
+                { $unwind: { path: "$queryTypeInfo", preserveNullAndEmptyArrays: true } },
+                {
+                    $project: {
+                        name: { $ifNull: ["$queryTypeInfo.name", "Unknown Type"] },
+                        count: 1
+                    }
+                }
+            ]),
+
+            HelpdeskQuery.aggregate([
+                {
+                    $match: {
+                        ...matchQuery,
+                        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ])
+        ]);
+
+        const statusSummary = {
+            New: 0,
+            "In Progress": 0,
+            Resolved: 0,
+            Closed: 0,
+            Escalated: 0,
+            Pending: 0
+        };
+        statusBreakdown.forEach(item => {
+            if (item._id in statusSummary) {
+                statusSummary[item._id] = item.count;
+            }
+        });
+
+        const prioritySummary = {
+            Low: 0,
+            Medium: 0,
+            High: 0,
+            Urgent: 0
+        };
+        priorityBreakdown.forEach(item => {
+            if (item._id in prioritySummary) {
+                prioritySummary[item._id] = item.count;
+            }
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalQueries,
+                totalQueryTypes,
+                escalatedQueriesCount: statusSummary.Escalated || 0,
+                statusSummary,
+                prioritySummary,
+                queryTypeBreakdown,
+                trendBreakdown
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching helpdesk analytics:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };

@@ -15,7 +15,8 @@ const queryTypeSchema = new mongoose.Schema({
     escalationDays: { type: Number, default: 2 },
     escalationRole: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' },
     escalationPerson: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true },
+    autoResponse: { type: String, default: "" }
 }, { timestamps: true });
  
 queryTypeSchema.index({ name: 1, companyId: 1 }, { unique: true });
