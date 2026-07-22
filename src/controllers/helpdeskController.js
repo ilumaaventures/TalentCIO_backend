@@ -464,9 +464,10 @@ exports.getQueryById = async (req, res) => {
 
         const isAdmin = isAdminUser(req.user);
         const isAssignee = query.assignedTo?._id?.toString() === req.user._id.toString() || query.assignedTo?.toString() === req.user._id.toString();
+        const isOriginalAssignee = query.originalAssignee?._id?.toString() === req.user._id.toString() || query.originalAssignee?.toString() === req.user._id.toString();
         const isRaiser = query.raisedBy?._id?.toString() === req.user._id.toString() || query.raisedBy?.toString() === req.user._id.toString();
 
-        if (!isAdmin && !isAssignee && !isRaiser) {
+        if (!isAdmin && !isAssignee && !isOriginalAssignee && !isRaiser) {
             return res.status(403).json({ success: false, message: 'Unauthorized to view this query.' });
         }
 
@@ -675,9 +676,10 @@ exports.addComment = async (req, res) => {
 
         const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
         const isAssignee = query.assignedTo?.toString() === req.user._id.toString();
+        const isOriginalAssignee = query.originalAssignee?.toString() === req.user._id.toString();
         const isRaiser = query.raisedBy?.toString() === req.user._id.toString();
 
-        if (!isAdmin && !isAssignee && !isRaiser) {
+        if (!isAdmin && !isAssignee && !isOriginalAssignee && !isRaiser) {
             return res.status(403).json({ success: false, message: 'Unauthorized to comment on this query.' });
         }
 

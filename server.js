@@ -365,3 +365,20 @@ initServer().catch((error) => {
 process.on('unhandledRejection', (err) => {
     console.log(`Error: ${err.message}`);
 });
+
+const gracefulShutdown = (signal) => {
+    console.log(`[SERVER] ${signal} received. Closing server on port ${PORT}...`);
+    server.close(() => {
+        console.log('[SERVER] HTTP server closed cleanly.');
+        if (signal === 'SIGUSR2') {
+            process.kill(process.pid, 'SIGUSR2');
+        } else {
+            process.exit(0);
+        }
+    });
+};
+
+process.once('SIGUSR2', () => gracefulShutdown('SIGUSR2'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
