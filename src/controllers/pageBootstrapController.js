@@ -755,7 +755,13 @@ exports.getHelpdeskBootstrap = async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(50) // personal queries capped at 50
             .lean();
-        const assignedQueriesPromise = HelpdeskQuery.find({ assignedTo: req.user._id, companyId: req.companyId })
+        const assignedQueriesPromise = HelpdeskQuery.find({
+            companyId: req.companyId,
+            $or: [
+                { assignedTo: req.user._id },
+                { originalAssignee: req.user._id }
+            ]
+        })
             .populate('raisedBy', 'firstName lastName email')
             .populate('queryType', 'name')
             .sort({ createdAt: -1 })

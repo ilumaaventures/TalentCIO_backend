@@ -341,7 +341,13 @@ exports.getAssignedQueries = async (req, res) => {
         const limit = Math.max(parseInt(req.query.limit, 10) || 30, 1);
         const skip = (page - 1) * limit;
 
-        const filter = { assignedTo: req.user._id, companyId: req.companyId };
+        const filter = {
+            companyId: req.companyId,
+            $or: [
+                { assignedTo: req.user._id },
+                { originalAssignee: req.user._id }
+            ]
+        };
 
         const [queries, total] = await Promise.all([
             HelpdeskQuery.find(filter)
