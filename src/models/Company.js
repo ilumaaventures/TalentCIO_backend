@@ -210,7 +210,33 @@ const companySchema = new mongoose.Schema({
                 lat: { type: Number },
                 lng: { type: Number }
             },
-            allowedIps: { type: [String], default: [] }
+            allowedIps: { type: [String], default: [] },
+            flexWeeklyOff: {
+                enabled: { type: Boolean, default: false },
+                allowedDay: { type: String, default: 'Custom (Employee Chooses)' },
+                allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] },
+                allowedCount: { type: Number, default: 2 },
+                targetRoles: { type: [String], default: [] },
+                targetEmploymentTypes: { type: [String], default: [] },
+                targetUserIds: { type: [String], default: [] },
+                rolePolicies: [{
+                    roleId: { type: String },
+                    roleName: { type: String },
+                    enabled: { type: Boolean, default: false },
+                    isCustom: { type: Boolean, default: false },
+                    allowedCount: { type: Number, default: 2 },
+                    allowedDay: { type: String, default: 'Custom (Employee Chooses)' },
+                    allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] }
+                }],
+                employmentTypePolicies: [{
+                    employmentType: { type: String },
+                    enabled: { type: Boolean, default: false },
+                    isCustom: { type: Boolean, default: false },
+                    allowedCount: { type: Number, default: 2 },
+                    allowedDay: { type: String, default: 'Custom (Employee Chooses)' },
+                    allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] }
+                }]
+            }
         },
         timesheet: {
             approvalCycle: {
