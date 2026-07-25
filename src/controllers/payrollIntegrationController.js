@@ -57,12 +57,16 @@ const resolveMonthRange = (month, year) => {
         return null;
     }
 
-    const start = parseDateAsIST(`${parsedYear}-${String(parsedMonth).padStart(2, '0')}-01`);
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + 1);
+    // Use UTC boundaries so the full calendar month is included regardless of
+    // how attendance dates are stored (UTC midnight vs IST midnight).
+    // start = first millisecond of the month at UTC midnight.
+    // end   = first millisecond of the *next* month (exclusive upper bound).
+    const start = new Date(Date.UTC(parsedYear, parsedMonth - 1, 1));
+    const end   = new Date(Date.UTC(parsedYear, parsedMonth,     1));
 
     return { start, end };
 };
+
 
 const getEmployees = async (req, res) => {
     try {
@@ -228,7 +232,9 @@ const getAttendanceSummary = async (req, res) => {
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (leaveConfig?.isPaid === false) unpaidLeaves += leaveDays;
                                         else paidLeaves += leaveDays;
-                                        if (matchingLeave.isHalfDay) absentDays += 0.5;
+                                        // Do NOT add to absentDays — the leave (paid or unpaid) covers
+                                        // this day. Adding 0.5 here when isHalfDay broke the invariant:
+                                        // presentDays + absentDays + paidLeaves + unpaidLeaves = workingDaysTillDate
                                     } else {
                                         absentDays += 1;
                                     }
