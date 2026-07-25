@@ -370,7 +370,14 @@ const buildCompanyEditableAttendanceInput = (incoming = {}, current = {}) => {
         editable.weeklyOff = incoming.weeklyOff;
     }
     if (incoming.flexWeeklyOff !== undefined) {
-        editable.flexWeeklyOff = incoming.flexWeeklyOff;
+        if (current?.flexWeeklyOff?.enabled === false) {
+            editable.flexWeeklyOff = {
+                ...(incoming.flexWeeklyOff || {}),
+                enabled: false
+            };
+        } else {
+            editable.flexWeeklyOff = incoming.flexWeeklyOff;
+        }
     }
     if (controls.workingHours && incoming.workingHours !== undefined) {
         editable.workingHours = incoming.workingHours;

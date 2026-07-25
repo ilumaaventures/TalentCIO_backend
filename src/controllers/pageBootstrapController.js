@@ -380,6 +380,31 @@ exports.getAttendanceBootstrap = async (req, res) => {
             .select('month status submittedAt updatedAt rejectionReason')
             .lean();
 
+        const rawAttendanceSettings = company?.settings?.attendance || {};
+        const isAdmin = isAdminUser(req.user);
+
+        const attendanceSettings = {
+            weeklyOff: rawAttendanceSettings.weeklyOff || ['Saturday', 'Sunday'],
+            workingHours: rawAttendanceSettings.workingHours || 8,
+            defaultShiftCode: rawAttendanceSettings.defaultShiftCode || 'general',
+            defaultAttendanceMode: rawAttendanceSettings.defaultAttendanceMode || 'clock_in_out',
+            attendanceShifts: rawAttendanceSettings.attendanceShifts || [],
+            flexWeeklyOff: rawAttendanceSettings.flexWeeklyOff || {},
+            halfDayAllowed: rawAttendanceSettings.halfDayAllowed ?? true,
+            requireLocationCheckIn: rawAttendanceSettings.requireLocationCheckIn ?? false,
+            requireLocationCheckOut: rawAttendanceSettings.requireLocationCheckOut ?? false,
+            requireLocationTimesheet: rawAttendanceSettings.requireLocationTimesheet ?? false,
+            locationCheck: rawAttendanceSettings.locationCheck ?? false,
+            ipCheck: rawAttendanceSettings.ipCheck ?? false,
+            selfService: rawAttendanceSettings.selfService || {},
+            exportFormat: rawAttendanceSettings.exportFormat || 'Standard',
+            ...(isAdmin ? {
+                allowedIps: rawAttendanceSettings.allowedIps || [],
+                allowedRadius: rawAttendanceSettings.allowedRadius || 200,
+                coordinates: rawAttendanceSettings.coordinates || { lat: 0, lng: 0 }
+            } : {})
+        };
+
         res.json({
             status: viewingSelf ? (status || { status: 'Not Clocked In' }) : null,
             history,
@@ -388,8 +413,8 @@ exports.getAttendanceBootstrap = async (req, res) => {
             recentLogs,
             targetUser,
             customFlexibleOffDays: targetUser?.customFlexibleOffDays || [],
-            weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'],
-            attendanceSettings: company?.settings?.attendance || {},
+            weeklyOff: rawAttendanceSettings.weeklyOff || ['Saturday', 'Sunday'],
+            attendanceSettings,
             timesheetSummary: timesheetSummary || {
                 month: periodId,
                 status: 'DRAFT',
