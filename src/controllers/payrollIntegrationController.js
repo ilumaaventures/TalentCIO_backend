@@ -125,6 +125,11 @@ const getAttendanceSummary = async (req, res) => {
         const now = new Date();
         const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
+        // If querying the current ongoing month, evaluate days up to current day only.
+        // For past months, evaluate the entire month.
+        const isCurrentMonth = now.getFullYear() === monthRange.start.getFullYear() && now.getMonth() === monthRange.start.getMonth();
+        const evalEnd = isCurrentMonth ? new Date(Math.min(end.getTime(), todayEnd + 1)) : end;
+
         const response = users
             .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user) === String(user._id)))
             .map((user) => {
@@ -138,9 +143,9 @@ const getAttendanceSummary = async (req, res) => {
                 const joiningTime = user.joiningDate ? new Date(user.joiningDate).getTime() : 0;
                 const leavingTime = user.dateOfLeaving ? new Date(user.dateOfLeaving).getTime() : Infinity;
 
-                // Loop through every day of the month
+                // Loop through days up to current day (or end of month if past month)
                 const cursor = new Date(start);
-                while (cursor < end) {
+                while (cursor < evalEnd) {
                     const cursorTime = cursor.getTime();
                     const isFutureDay = cursorTime > todayEnd;
                     
