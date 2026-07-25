@@ -328,7 +328,37 @@ const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
             ...(Number.isFinite(latitude) ? { lat: latitude } : {}),
             ...(Number.isFinite(longitude) ? { lng: longitude } : {})
         },
-        allowedIps: normalizeStringArray(base.allowedIps)
+        allowedIps: normalizeStringArray(base.allowedIps),
+        flexWeeklyOff: {
+            enabled: toBoolean(base.flexWeeklyOff?.enabled, current?.flexWeeklyOff?.enabled ?? false),
+            allowedDay: String(base.flexWeeklyOff?.allowedDay || current?.flexWeeklyOff?.allowedDay || 'Custom (Employee Chooses)'),
+            allowedDays: normalizeStringArray(base.flexWeeklyOff?.allowedDays || current?.flexWeeklyOff?.allowedDays || [base.flexWeeklyOff?.allowedDay || 'Custom (Employee Chooses)']),
+            allowedCount: Math.max(1, Number(base.flexWeeklyOff?.allowedCount) || Number(current?.flexWeeklyOff?.allowedCount) || 2),
+            targetRoles: normalizeStringArray(base.flexWeeklyOff?.targetRoles || current?.flexWeeklyOff?.targetRoles),
+            targetEmploymentTypes: normalizeStringArray(base.flexWeeklyOff?.targetEmploymentTypes || current?.flexWeeklyOff?.targetEmploymentTypes),
+            targetUserIds: normalizeStringArray(base.flexWeeklyOff?.targetUserIds || current?.flexWeeklyOff?.targetUserIds),
+            rolePolicies: Array.isArray(base.flexWeeklyOff?.rolePolicies)
+                ? base.flexWeeklyOff.rolePolicies.map((rp) => ({
+                    roleId: String(rp.roleId || rp.roleName || ''),
+                    roleName: String(rp.roleName || rp.roleId || ''),
+                    enabled: Boolean(rp.enabled),
+                    isCustom: Boolean(rp.isCustom),
+                    allowedCount: Math.max(1, Number(rp.allowedCount) || 2),
+                    allowedDay: String(rp.allowedDay || 'Custom (Employee Chooses)'),
+                    allowedDays: normalizeStringArray(rp.allowedDays || [rp.allowedDay || 'Custom (Employee Chooses)'])
+                }))
+                : (current?.flexWeeklyOff?.rolePolicies || []),
+            employmentTypePolicies: Array.isArray(base.flexWeeklyOff?.employmentTypePolicies)
+                ? base.flexWeeklyOff.employmentTypePolicies.map((ep) => ({
+                    employmentType: String(ep.employmentType || ''),
+                    enabled: Boolean(ep.enabled),
+                    isCustom: Boolean(ep.isCustom),
+                    allowedCount: Math.max(1, Number(ep.allowedCount) || 2),
+                    allowedDay: String(ep.allowedDay || 'Custom (Employee Chooses)'),
+                    allowedDays: normalizeStringArray(ep.allowedDays || [ep.allowedDay || 'Custom (Employee Chooses)'])
+                }))
+                : (current?.flexWeeklyOff?.employmentTypePolicies || [])
+        }
     };
 };
 
@@ -338,6 +368,16 @@ const buildCompanyEditableAttendanceInput = (incoming = {}, current = {}) => {
 
     if (controls.weeklyOff && incoming.weeklyOff !== undefined) {
         editable.weeklyOff = incoming.weeklyOff;
+    }
+    if (incoming.flexWeeklyOff !== undefined) {
+        if (current?.flexWeeklyOff?.enabled === false) {
+            editable.flexWeeklyOff = {
+                ...(incoming.flexWeeklyOff || {}),
+                enabled: false
+            };
+        } else {
+            editable.flexWeeklyOff = incoming.flexWeeklyOff;
+        }
     }
     if (controls.workingHours && incoming.workingHours !== undefined) {
         editable.workingHours = incoming.workingHours;
@@ -625,6 +665,10 @@ const updateOwnAttendanceSettings = async (req, res) => {
         company.markModified('settings.attendance');
         await company.save();
         invalidateTenantCache(company.subdomain);
+
+        if (req.body?.resetUserFlexOverrides || incomingAttendance?.resetUserFlexOverrides) {
+            await User.updateMany({ companyId: req.companyId }, { $set: { flexWeeklyOffCount: null } });
+        }
 
         const actor = {
             _id: req.user?._id,

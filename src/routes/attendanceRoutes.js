@@ -20,7 +20,8 @@ const {
     exportTeamAttendanceExcel,
     requestRegularization,
     getRegularizationRequests,
-    processRegularizationRequest
+    processRegularizationRequest,
+    updateCustomFlexibleOffDays
 } = require('../controllers/attendanceController');
 const { getAttendanceBootstrap } = require('../controllers/pageBootstrapController');
 
@@ -36,6 +37,7 @@ router.get('/history', getAttendanceByMonth);
 router.get('/team-report', getTeamAttendanceReport);
 router.get('/export-excel', authorize('attendance.export|attendance.view_others|user.read'), exportTeamAttendanceExcel);
 router.get('/approvals', getPendingRequests);
+router.put('/flexible-off', updateCustomFlexibleOffDays);
 
 // Regularization
 router.post('/regularize', dossierGate, requestRegularization);

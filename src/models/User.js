@@ -105,6 +105,14 @@ const userSchema = new mongoose.Schema({
     otpExpires: {
         type: Date,
         default: null
+    },
+    flexWeeklyOffCount: {
+        type: Number,
+        default: null
+    },
+    customFlexibleOffDays: {
+        type: [String],
+        default: []
     }
 }, { timestamps: true });
 

@@ -295,15 +295,17 @@ exports.getAttendanceBootstrap = async (req, res) => {
         const viewingSelf = String(targetUserId) === String(req.user._id);
         const today = getStartOfDayIST();
 
+        const targetUserPromise = User.findOne({ _id: targetUserId, companyId: req.companyId })
+            .select('firstName lastName email roles employmentType flexWeeklyOffCount customFlexibleOffDays joiningDate reportingManagers attendanceMode attendanceShiftCode')
+            .populate('roles', 'name')
+            .lean();
+
+        const targetUser = await targetUserPromise;
+        if (!targetUser) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
         if (!viewingSelf) {
-            const targetUser = await User.findOne({ _id: targetUserId, companyId: req.companyId })
-                .select('reportingManagers')
-                .lean();
-
-            if (!targetUser) {
-                return res.status(404).json({ message: 'User not found' });
-            }
-
             const isManager = (targetUser.reportingManagers || []).some(managerId => String(managerId) === String(req.user._id));
             if (!canViewOtherAttendance(req.user) && !isManager) {
                 return res.status(403).json({ message: 'Not authorized to view this user attendance' });
@@ -378,14 +380,41 @@ exports.getAttendanceBootstrap = async (req, res) => {
             .select('month status submittedAt updatedAt rejectionReason')
             .lean();
 
+        const rawAttendanceSettings = company?.settings?.attendance || {};
+        const isAdmin = isAdminUser(req.user);
+
+        const attendanceSettings = {
+            weeklyOff: rawAttendanceSettings.weeklyOff || ['Saturday', 'Sunday'],
+            workingHours: rawAttendanceSettings.workingHours || 8,
+            defaultShiftCode: rawAttendanceSettings.defaultShiftCode || 'general',
+            defaultAttendanceMode: rawAttendanceSettings.defaultAttendanceMode || 'clock_in_out',
+            attendanceShifts: rawAttendanceSettings.attendanceShifts || [],
+            flexWeeklyOff: rawAttendanceSettings.flexWeeklyOff || {},
+            halfDayAllowed: rawAttendanceSettings.halfDayAllowed ?? true,
+            requireLocationCheckIn: rawAttendanceSettings.requireLocationCheckIn ?? false,
+            requireLocationCheckOut: rawAttendanceSettings.requireLocationCheckOut ?? false,
+            requireLocationTimesheet: rawAttendanceSettings.requireLocationTimesheet ?? false,
+            locationCheck: rawAttendanceSettings.locationCheck ?? false,
+            ipCheck: rawAttendanceSettings.ipCheck ?? false,
+            selfService: rawAttendanceSettings.selfService || {},
+            exportFormat: rawAttendanceSettings.exportFormat || 'Standard',
+            ...(isAdmin ? {
+                allowedIps: rawAttendanceSettings.allowedIps || [],
+                allowedRadius: rawAttendanceSettings.allowedRadius || 200,
+                coordinates: rawAttendanceSettings.coordinates || { lat: 0, lng: 0 }
+            } : {})
+        };
+
         res.json({
             status: viewingSelf ? (status || { status: 'Not Clocked In' }) : null,
             history,
             holidays,
             approvedLeaves,
             recentLogs,
-            weeklyOff: company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'],
-            attendanceSettings: company?.settings?.attendance || {},
+            targetUser,
+            customFlexibleOffDays: targetUser?.customFlexibleOffDays || [],
+            weeklyOff: rawAttendanceSettings.weeklyOff || ['Saturday', 'Sunday'],
+            attendanceSettings,
             timesheetSummary: timesheetSummary || {
                 month: periodId,
                 status: 'DRAFT',

@@ -425,6 +425,11 @@ const updateUser = async (req, res) => {
         user.attendanceMode = attendanceMode || user.attendanceMode;
         user.attendanceShiftCode = attendanceShiftCode || user.attendanceShiftCode;
         if (joiningDate) user.joiningDate = joiningDate;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'flexWeeklyOffCount')) {
+            user.flexWeeklyOffCount = req.body.flexWeeklyOffCount !== null && req.body.flexWeeklyOffCount !== '' && req.body.flexWeeklyOffCount !== undefined
+                ? Number(req.body.flexWeeklyOffCount)
+                : null;
+        }
 
         if (roleId) {
             // Only update role if it's different and valid
