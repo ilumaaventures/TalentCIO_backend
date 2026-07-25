@@ -4,13 +4,15 @@ const { protectPayrollIntegration } = require('../middlewares/payrollIntegration
 const {
     getEmployees,
     getAttendanceSummary,
-    getPayrollConfig
+    getPayrollConfig,
+    receivePayrollResult,
 } = require('../controllers/payrollIntegrationController');
 
 router.use(protectPayrollIntegration);
 
-router.get('/employees', getEmployees);
-router.get('/attendance', getAttendanceSummary);
-router.get('/payroll-config', getPayrollConfig);
+router.get('/employees',       getEmployees);
+router.get('/attendance',      getAttendanceSummary);
+router.get('/payroll-config',  getPayrollConfig);
+router.post('/payroll-result', receivePayrollResult);
 
 module.exports = router;

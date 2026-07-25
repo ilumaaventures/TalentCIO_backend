@@ -1,4 +1,4 @@
-const { eachDayOfInterval, format } = require('date-fns');
+const { format } = require('date-fns');
 const Attendance = require('../models/Attendance');
 const Holiday = require('../models/Holiday');
 const LeaveRequest = require('../models/LeaveRequest');
@@ -12,14 +12,10 @@ const { parseDateAsIST } = require('../utils/attendancePolicy');
 const { toLocalTimezoneRep } = require('../utils/timesheetPeriod');
 
 const buildEncryptedResponseIfNeeded = (payload, payrollIntegration) => {
-    if (!payrollIntegration?.encryptPayloads) {
-        return payload;
-    }
-
+    if (!payrollIntegration?.encryptPayloads) return payload;
     if (!payrollIntegration.encryptionSecret) {
         throw new Error('Payload encryption is enabled but no encryptionSecret is configured.');
     }
-
     return encryptPayload(payload, payrollIntegration.encryptionSecret);
 };
 
@@ -31,28 +27,22 @@ const countLeaveDaysInRange = ({
     weeklyOffs = ['Saturday', 'Sunday'],
     holidayDateSet = new Set()
 }) => {
-    if (!startDate || !endDate) {
-        return 0;
-    }
+    if (!startDate || !endDate) return 0;
 
     const localStart = toLocalTimezoneRep(startDate);
     const localEnd = toLocalTimezoneRep(endDate);
 
     if (isHalfDay) {
-        const dayName = format(localStart, 'EEEE');
-        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(localStart.toDateString());
+        const isOffDay = weeklyOffs.includes(format(localStart, 'EEEE')) || holidayDateSet.has(localStart.toDateString());
         return isOffDay && !sandwichRule ? 0 : 0.5;
     }
 
-    return eachDayOfInterval({ start: localStart, end: localEnd }).reduce((total, currentDate) => {
-        const dayName = format(currentDate, 'EEEE');
-        const isOffDay = weeklyOffs.includes(dayName) || holidayDateSet.has(currentDate.toDateString());
-        if (isOffDay && !sandwichRule) {
-            return total;
-        }
-
-        return total + 1;
-    }, 0);
+    let count = 0;
+    for (let d = new Date(localStart); d <= localEnd; d.setDate(d.getDate() + 1)) {
+        const isOffDay = weeklyOffs.includes(format(d, 'EEEE')) || holidayDateSet.has(d.toDateString());
+        if (!isOffDay || sandwichRule) count++;
+    }
+    return count;
 };
 
 const resolveMonthRange = (month, year) => {
@@ -287,8 +277,74 @@ const getPayrollConfig = async (req, res) => {
     }
 };
 
+const crypto = require('crypto');
+const PayrollResult = require('../models/PayrollResult');
+
+const receivePayrollResult = async (req, res) => {
+    try {
+        // Verify HMAC signature from MyBills
+        const signature = req.headers['x-mybills-signature'];
+        if (!signature) {
+            return res.status(401).json({ message: 'x-mybills-signature header is required.' });
+        }
+
+        const { webhookSecret } = req.payrollIntegration;
+        if (!webhookSecret) {
+            return res.status(401).json({ message: 'Payroll integration webhook secret is not configured.' });
+        }
+
+        const rawBody = req.rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+        const computedSig = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+
+        const provided = Buffer.from(signature,   'hex');
+        const computed  = Buffer.from(computedSig, 'hex');
+        if (provided.length !== computed.length || !crypto.timingSafeEqual(provided, computed)) {
+            return res.status(401).json({ message: 'Signature mismatch: HMAC verification failed.' });
+        }
+
+        const { payrollResult } = req.body;
+        if (
+            !payrollResult ||
+            !payrollResult.employeeCode ||
+            !Number.isInteger(payrollResult.month) ||
+            !Number.isInteger(payrollResult.year)
+        ) {
+            return res.status(400).json({
+                message: 'Invalid payroll result payload: employeeCode, month, and year are required.'
+            });
+        }
+
+        await PayrollResult.findOneAndUpdate(
+            {
+                companyId:    req.companyId,
+                employeeCode: payrollResult.employeeCode,
+                month:        payrollResult.month,
+                year:         payrollResult.year,
+            },
+            {
+                $set: {
+                    status:          payrollResult.status          || 'paid',
+                    netSalary:       payrollResult.netSalary       || 0,
+                    grossSalary:     payrollResult.grossSalary     || 0,
+                    totalDeductions: payrollResult.totalDeductions || 0,
+                    paidDate:        payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
+                    breakdown:       payrollResult.breakdown       || {},
+                    receivedAt:      new Date(),
+                },
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({ message: 'Payroll result received and stored.' });
+    } catch (error) {
+        console.error('[PayrollIntegration] receivePayrollResult error:', error);
+        res.status(500).json({ message: 'Failed to process payroll result.' });
+    }
+};
+
 module.exports = {
     getEmployees,
     getAttendanceSummary,
-    getPayrollConfig
+    getPayrollConfig,
+    receivePayrollResult,
 };

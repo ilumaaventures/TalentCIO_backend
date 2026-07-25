@@ -215,6 +215,30 @@ const listActiveEmployeesForPayroll = async (companyId) => {
     return users.map((user) => buildEmployeePayload(user, profileMap.get(String(user._id)) || null));
 };
 
+/**
+ * Retries an async function with exponential backoff.
+ *
+ * @param {Function} fn           - Async function to attempt
+ * @param {number}   maxAttempts  - Maximum number of calls (default 3)
+ * @param {number}   baseDelayMs  - Initial delay in ms; doubles each attempt (default 500)
+ */
+const withRetry = async (fn, maxAttempts = 3, baseDelayMs = 500) => {
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            return await fn();
+        } catch (err) {
+            lastError = err;
+            if (attempt < maxAttempts) {
+                await new Promise(resolve =>
+                    setTimeout(resolve, baseDelayMs * Math.pow(2, attempt - 1))
+                );
+            }
+        }
+    }
+    throw lastError;
+};
+
 const dispatchEmployeeWebhook = async ({
     companyId,
     company = null,
@@ -244,15 +268,26 @@ const dispatchEmployeeWebhook = async ({
     };
     const signature = signWebhookPayload(payload, config.webhookSecret);
 
-    await axios.post(config.webhookUrl, payload, {
-        headers: {
-            'Content-Type': 'application/json',
-            'x-hrms-signature': signature
-        },
-        timeout: 10000
-    });
+    let attempts = 0;
+    try {
+        await withRetry(async () => {
+            attempts += 1;
+            await axios.post(config.webhookUrl, payload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-hrms-signature': signature
+                },
+                timeout: 10000
+            });
+        }, 3, 500);
 
-    return { dispatched: true };
+        return { dispatched: true, attempts };
+    } catch (err) {
+        console.error(
+            `[PayrollWebhook FAILED] company=${resolvedCompany._id} user=${userId} event=${event} attempts=${attempts} error=${err.message}`
+        );
+        return { dispatched: false, attempts, error: err.message };
+    }
 };
 
 module.exports = {
