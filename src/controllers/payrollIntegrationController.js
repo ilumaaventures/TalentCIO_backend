@@ -164,10 +164,16 @@ const getAttendanceSummary = async (req, res) => {
                 const userIdStr = String(user._id);
                 let workingDaysTillDate = 0;
                 let weeklyOffDays = 0;      // paid rest days (weekly offs within active period)
+                let holidayDays = 0;        // paid company holidays (within active period)
                 let presentDays = 0;
                 let absentDays = 0;
                 let paidLeaves = 0;
                 let unpaidLeaves = 0;
+
+                // Resolve weekly off days per employee: use customFlexibleOffDays if set, otherwise company setting
+                const userWeeklyOffs = Array.isArray(user.customFlexibleOffDays) && user.customFlexibleOffDays.length > 0
+                    ? user.customFlexibleOffDays
+                    : weeklyOffs;
 
                 const joiningTime = user.joiningDate ? new Date(user.joiningDate).getTime() : 0;
                 const leavingTime = user.dateOfLeaving ? new Date(user.dateOfLeaving).getTime() : Infinity;
@@ -183,8 +189,8 @@ const getAttendanceSummary = async (req, res) => {
                         const localCursor = toLocalTimezoneRep(cursor);
                         const dateStr = format(localCursor, 'yyyy-MM-dd');
                         const dayName = format(localCursor, 'EEEE');
-                        const isWeeklyOff = weeklyOffs.includes(dayName);
-                        // holidayDateSet keys are IST toDateString() values (built at line 111);
+                        const isWeeklyOff = userWeeklyOffs.includes(dayName);
+                        // holidayDateSet keys are IST toDateString() values (built at line 118);
                         // use the already-converted localCursor here to match the same timezone.
                         const isHoliday = holidayDateSet.has(localCursor.toDateString());
                         const isOffDay = isWeeklyOff || isHoliday;
@@ -202,13 +208,14 @@ const getAttendanceSummary = async (req, res) => {
                         });
 
                         if (isOffDay) {
-                            // Weekly offs are paid rest days — count them toward paidDays
+                            // Weekly offs and company holidays are paid rest/off days — count them toward paidDays
                             // regardless of whether the employee clocked in.
-                            // Holidays are NOT counted here (they are treated separately).
                             if (isWeeklyOff) {
                                 weeklyOffDays += 1;
+                            } else if (isHoliday) {
+                                holidayDays += 1;
                             }
-                            // If the employee voluntarily clocked in on a weekly off, credit presence.
+                            // If the employee voluntarily clocked in on an off day, credit presence.
                             if (hasEntry) {
                                 if (status === 'PRESENT') presentDays += 1;
                                 else if (status === 'HALF_DAY') presentDays += 0.5;
@@ -244,9 +251,6 @@ const getAttendanceSummary = async (req, res) => {
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (leaveConfig?.isPaid === false) unpaidLeaves += leaveDays;
                                         else paidLeaves += leaveDays;
-                                        // Do NOT add to absentDays — the leave (paid or unpaid) covers
-                                        // this day. Adding 0.5 here when isHalfDay broke the invariant:
-                                        // presentDays + absentDays + paidLeaves + unpaidLeaves = workingDaysTillDate
                                     } else {
                                         absentDays += 1;
                                     }
@@ -268,11 +272,8 @@ const getAttendanceSummary = async (req, res) => {
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                // paidDays = working days present + paid leave days + weekly off days (paid rest).
-                // Weekly offs (e.g. Sundays) are paid rest days in Indian payroll — employees are
-                // entitled to pay for them even though they don't work. Holidays already fall
-                // outside workingDaysTillDate and absentDays, so they don't need special handling.
-                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays;
+                // paidDays = working days present + paid leave days + weekly off days + company holidays.
+                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays + holidayDays;
 
                 // Validation invariant checks (working-day tally only — weekly offs are excluded).
                 if (workingDaysTillDate > elapsedDays) {
@@ -290,6 +291,7 @@ const getAttendanceSummary = async (req, res) => {
                     elapsedDays,
                     workingDaysTillDate,
                     weeklyOffDays,
+                    holidayDays,
                     presentDays,
                     absentDays,
                     paidLeaves,
