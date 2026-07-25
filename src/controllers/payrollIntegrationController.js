@@ -117,9 +117,11 @@ const getAttendanceSummary = async (req, res) => {
         // Build attendance map: userId_dateStr -> status
         const attendanceMap = new Map();
         attendanceRecords.forEach((rec) => {
+            const uid = String(rec.user?._id || rec.user || '');
             const dateStr = toLocalTimezoneRep(rec.date).toDateString();
-            const key = `${String(rec.user)}_${dateStr}`;
-            attendanceMap.set(key, rec.status || 'PRESENT');
+            if (uid) {
+                attendanceMap.set(`${uid}_${dateStr}`, rec.status || 'PRESENT');
+            }
         });
 
         const now = new Date();
@@ -135,7 +137,7 @@ const getAttendanceSummary = async (req, res) => {
         evalEnd.setHours(23, 59, 59, 999);
 
         const response = users
-            .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user) === String(user._id)))
+            .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user?._id || r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user?._id || l.user) === String(user._id)))
             .map((user) => {
                 const userIdStr = String(user._id);
                 let workingDaysTillDate = 0;
@@ -166,7 +168,8 @@ const getAttendanceSummary = async (req, res) => {
                         const hasEntry = attendanceMap.has(attendanceKey);
 
                         const matchingLeave = approvedLeaves.find(l => {
-                            if (String(l.user) !== userIdStr) return false;
+                            const lUserId = String(l.user?._id || l.user || '');
+                            if (lUserId !== userIdStr) return false;
                             const lStart = toLocalTimezoneRep(l.startDate).setHours(0, 0, 0, 0);
                             const lEnd   = toLocalTimezoneRep(l.endDate).setHours(23, 59, 59, 999);
                             return cursorTime >= lStart && cursorTime <= lEnd;
