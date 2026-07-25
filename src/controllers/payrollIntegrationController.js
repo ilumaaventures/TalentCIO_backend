@@ -122,14 +122,6 @@ const getAttendanceSummary = async (req, res) => {
             attendanceMap.set(key, rec.status || 'PRESENT');
         });
 
-        const now = new Date();
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
-
-        // If querying the current ongoing month, evaluate days up to current day only.
-        // For past months, evaluate the entire month.
-        const isCurrentMonth = now.getFullYear() === monthRange.start.getFullYear() && now.getMonth() === monthRange.start.getMonth();
-        const evalEnd = isCurrentMonth ? new Date(Math.min(end.getTime(), todayEnd + 1)) : end;
-
         const response = users
             .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user) === String(user._id)))
             .map((user) => {
@@ -143,11 +135,10 @@ const getAttendanceSummary = async (req, res) => {
                 const joiningTime = user.joiningDate ? new Date(user.joiningDate).getTime() : 0;
                 const leavingTime = user.dateOfLeaving ? new Date(user.dateOfLeaving).getTime() : Infinity;
 
-                // Loop through days up to current day (or end of month if past month)
+                // Loop through every day of the month
                 const cursor = new Date(start);
-                while (cursor < evalEnd) {
+                while (cursor < end) {
                     const cursorTime = cursor.getTime();
-                    const isFutureDay = cursorTime > todayEnd;
                     
                     // Check if employee had joined and not left by this day
                     const hasJoined = cursorTime >= joiningTime;
@@ -239,8 +230,8 @@ const getAttendanceSummary = async (req, res) => {
                                     if (matchingLeave.isHalfDay) {
                                         absentDays += 0.5;
                                     }
-                                } else if (!isFutureDay) {
-                                    // Only count unexcused absence for past or today's working days
+                                } else {
+                                    // Mark all unworked scheduled working days (past or future) as absent
                                     absentDays += 1;
                                 }
                             }
