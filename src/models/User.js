@@ -65,6 +65,7 @@ const userSchema = new mongoose.Schema({
         trim: true
     }],
     joiningDate: Date,
+    dateOfLeaving: Date,
     employeeProfile: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'EmployeeProfile'

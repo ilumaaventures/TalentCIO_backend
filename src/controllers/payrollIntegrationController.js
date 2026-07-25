@@ -130,14 +130,28 @@ const getAttendanceSummary = async (req, res) => {
         const totalDaysInMonth = new Date(parsedYear, parsedMonth, 0).getDate();
 
         const isCurrentMonth = now.getFullYear() === parsedYear && (now.getMonth() + 1) === parsedMonth;
-        const elapsedDays = isCurrentMonth ? Math.min(now.getDate(), totalDaysInMonth) : totalDaysInMonth;
+        // For the current month, clamp to today's IST day; otherwise use the full month.
+        const elapsedDays = isCurrentMonth
+            ? Math.min(Number.parseInt(toLocalTimezoneRep(now).getDate(), 10), totalDaysInMonth)
+            : totalDaysInMonth;
 
-        const evalEnd = new Date(start);
-        evalEnd.setDate(elapsedDays);
-        evalEnd.setHours(23, 59, 59, 999);
+        // Build evalEnd as IST end-of-day for elapsedDays so it is not affected
+        // by the server's local timezone. parseDateAsIST returns a UTC Date that
+        // represents IST midnight; adding 23:59:59 gives IST end-of-day.
+        const evalEndPadded = String(elapsedDays).padStart(2, '0');
+        const evalEndMonthPadded = String(parsedMonth).padStart(2, '0');
+        const evalEnd = parseDateAsIST(`${parsedYear}-${evalEndMonthPadded}-${evalEndPadded}`);
+        evalEnd.setSeconds(evalEnd.getSeconds() + (23 * 3600 + 59 * 60 + 59));
 
         const response = users
-            .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user?._id || r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user?._id || l.user) === String(user._id)))
+            .filter((user) => {
+                // Employees without an employeeCode cannot be matched by MyBill;
+                // omit them rather than emitting a raw ObjectId as employeeNumber.
+                if (!user.employeeCode) return false;
+                return user.isActive
+                    || attendanceRecords.some(r => String(r.user?._id || r.user) === String(user._id))
+                    || approvedLeaves.some(l => String(l.user?._id || l.user) === String(user._id));
+            })
             .map((user) => {
                 const userIdStr = String(user._id);
                 let workingDaysTillDate = 0;
@@ -161,7 +175,9 @@ const getAttendanceSummary = async (req, res) => {
                         const dateStr = format(localCursor, 'yyyy-MM-dd');
                         const dayName = format(localCursor, 'EEEE');
                         const isWeeklyOff = weeklyOffs.includes(dayName);
-                        const isHoliday = holidayDateSet.has(cursor.toDateString());
+                        // holidayDateSet keys are IST toDateString() values (built at line 111);
+                        // use the already-converted localCursor here to match the same timezone.
+                        const isHoliday = holidayDateSet.has(localCursor.toDateString());
                         const isOffDay = isWeeklyOff || isHoliday;
 
                         const attendanceKey = `${userIdStr}_${dateStr}`;
@@ -247,7 +263,7 @@ const getAttendanceSummary = async (req, res) => {
 
                 return {
                     employeeId: String(user._id),
-                    employeeNumber: user.employeeCode || String(user._id),
+                    employeeNumber: user.employeeCode, // always present — filtered above
                     totalDaysInMonth,
                     elapsedDays,
                     workingDaysTillDate,
