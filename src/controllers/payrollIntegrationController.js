@@ -89,8 +89,12 @@ const getAttendanceSummary = async (req, res) => {
         }
 
         const { start, end } = monthRange;
-        // As requested: "only sundays are marked as weekly off / OFF. Rest all days checked."
-        const weeklyOffs = ['Sunday'];
+        // Read weekly off days from company attendance settings.
+        // Falls back to ['Sunday'] if not configured so the sync never breaks.
+        const weeklyOffs = Array.isArray(req.company?.settings?.attendance?.weeklyOff)
+            && req.company.settings.attendance.weeklyOff.length > 0
+                ? req.company.settings.attendance.weeklyOff
+                : ['Sunday'];
 
         const [attendanceRecords, approvedLeaves, leaveConfigs, holidays, users] = await Promise.all([
             Attendance.find({
@@ -159,6 +163,7 @@ const getAttendanceSummary = async (req, res) => {
             .map((user) => {
                 const userIdStr = String(user._id);
                 let workingDaysTillDate = 0;
+                let weeklyOffDays = 0;      // paid rest days (weekly offs within active period)
                 let presentDays = 0;
                 let absentDays = 0;
                 let paidLeaves = 0;
@@ -197,6 +202,13 @@ const getAttendanceSummary = async (req, res) => {
                         });
 
                         if (isOffDay) {
+                            // Weekly offs are paid rest days — count them toward paidDays
+                            // regardless of whether the employee clocked in.
+                            // Holidays are NOT counted here (they are treated separately).
+                            if (isWeeklyOff) {
+                                weeklyOffDays += 1;
+                            }
+                            // If the employee voluntarily clocked in on a weekly off, credit presence.
                             if (hasEntry) {
                                 if (status === 'PRESENT') presentDays += 1;
                                 else if (status === 'HALF_DAY') presentDays += 0.5;
@@ -256,9 +268,13 @@ const getAttendanceSummary = async (req, res) => {
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                const calculatedPaidDays = presentDays + paidLeaves;
+                // paidDays = working days present + paid leave days + weekly off days (paid rest).
+                // Weekly offs (e.g. Sundays) are paid rest days in Indian payroll — employees are
+                // entitled to pay for them even though they don't work. Holidays already fall
+                // outside workingDaysTillDate and absentDays, so they don't need special handling.
+                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays;
 
-                // Validation invariant checks
+                // Validation invariant checks (working-day tally only — weekly offs are excluded).
                 if (workingDaysTillDate > elapsedDays) {
                     console.warn(`[Validation Warning] user ${user._id}: workingDaysTillDate (${workingDaysTillDate}) > elapsedDays (${elapsedDays})`);
                 }
@@ -273,6 +289,7 @@ const getAttendanceSummary = async (req, res) => {
                     totalDaysInMonth,
                     elapsedDays,
                     workingDaysTillDate,
+                    weeklyOffDays,
                     presentDays,
                     absentDays,
                     paidLeaves,
