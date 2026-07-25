@@ -122,6 +122,9 @@ const getAttendanceSummary = async (req, res) => {
             attendanceMap.set(key, rec.status || 'PRESENT');
         });
 
+        const now = new Date();
+        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+
         const response = users
             .filter((user) => user.isActive || attendanceRecords.some(r => String(r.user) === String(user._id)) || approvedLeaves.some(l => String(l.user) === String(user._id)))
             .map((user) => {
@@ -139,6 +142,7 @@ const getAttendanceSummary = async (req, res) => {
                 const cursor = new Date(start);
                 while (cursor < end) {
                     const cursorTime = cursor.getTime();
+                    const isFutureDay = cursorTime > todayEnd;
                     
                     // Check if employee had joined and not left by this day
                     const hasJoined = cursorTime >= joiningTime;
@@ -156,7 +160,6 @@ const getAttendanceSummary = async (req, res) => {
                         const hasEntry = attendanceMap.has(attendanceKey);
 
                         // Find matching approved leave for this day
-                        const cursorTime = cursor.getTime();
                         const matchingLeave = approvedLeaves.find(l => {
                             if (String(l.user) !== userIdStr) return false;
                             const start = new Date(l.startDate).setHours(0,0,0,0);
@@ -231,7 +234,8 @@ const getAttendanceSummary = async (req, res) => {
                                     if (matchingLeave.isHalfDay) {
                                         absentDays += 0.5;
                                     }
-                                } else {
+                                } else if (!isFutureDay) {
+                                    // Only count unexcused absence for past or today's working days
                                     absentDays += 1;
                                 }
                             }
