@@ -162,14 +162,9 @@ const getAttendanceSummary = async (req, res) => {
                         // Find matching approved leave for this day
                         const matchingLeave = approvedLeaves.find(l => {
                             if (String(l.user) !== userIdStr) return false;
-                            const leaveStart = new Date(l.startDate);
-                            const leaveEnd = new Date(l.endDate);
-                            const temp = new Date(leaveStart);
-                            while (temp <= leaveEnd) {
-                                if (temp.toDateString() === dateStr) return true;
-                                temp.setDate(temp.getDate() + 1);
-                            }
-                            return false;
+                            const lStart = toLocalTimezoneRep(l.startDate).setHours(0, 0, 0, 0);
+                            const lEnd   = toLocalTimezoneRep(l.endDate).setHours(23, 59, 59, 999);
+                            return cursorTime >= lStart && cursorTime <= lEnd;
                         });
 
                         if (isOffDay) {
