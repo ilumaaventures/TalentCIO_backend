@@ -118,8 +118,8 @@ const getAttendanceSummary = async (req, res) => {
         const attendanceMap = new Map();
         attendanceRecords.forEach((rec) => {
             const uid = String(rec.user?._id || rec.user || '');
-            const dateStr = toLocalTimezoneRep(rec.date).toDateString();
-            if (uid) {
+            if (uid && rec.date) {
+                const dateStr = format(toLocalTimezoneRep(rec.date), 'yyyy-MM-dd');
                 attendanceMap.set(`${uid}_${dateStr}`, rec.status || 'PRESENT');
             }
         });
@@ -157,10 +157,11 @@ const getAttendanceSummary = async (req, res) => {
                     const hasLeft = cursorTime > leavingTime;
 
                     if (hasJoined && !hasLeft) {
-                        const dateStr = cursor.toDateString();
-                        const dayName = format(cursor, 'EEEE');
+                        const localCursor = toLocalTimezoneRep(cursor);
+                        const dateStr = format(localCursor, 'yyyy-MM-dd');
+                        const dayName = format(localCursor, 'EEEE');
                         const isWeeklyOff = weeklyOffs.includes(dayName);
-                        const isHoliday = holidayDateSet.has(dateStr);
+                        const isHoliday = holidayDateSet.has(cursor.toDateString());
                         const isOffDay = isWeeklyOff || isHoliday;
 
                         const attendanceKey = `${userIdStr}_${dateStr}`;
