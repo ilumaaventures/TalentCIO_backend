@@ -14,7 +14,8 @@ const {
     addQueryType,
     getQueryTypes,
     updateQueryType,
-    deleteQueryType
+    deleteQueryType,
+    getHelpdeskAnalytics
 } = require('../controllers/helpdeskController');
 const { getHelpdeskBootstrap } = require('../controllers/pageBootstrapController');
 
@@ -31,6 +32,7 @@ router.delete('/types/:id', deleteQueryType);
 // Ticket routes
 router.post('/', createQuery);
 router.get('/bootstrap', getHelpdeskBootstrap);
+router.get('/analytics/dashboard', getHelpdeskAnalytics);
 router.get('/all', getAllQueries); // Must be above /:id
 router.get('/my-queries', getMyQueries);
 router.get('/assigned', getAssignedQueries);

@@ -174,6 +174,10 @@ const normalizeOnboardingExperienceCertificateLabels = async (employee) => {
         }
 
         employee.documents.forEach((doc) => {
+            if (doc && !doc.type) {
+                doc.type = 'custom_file';
+                changed = true;
+            }
             if (doc?.type === 'experience_certificate' && doc.label === LEGACY_EXPERIENCE_CERTIFICATE_LABEL) {
                 doc.label = CURRENT_EXPERIENCE_CERTIFICATE_LABEL;
                 changed = true;

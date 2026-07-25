@@ -1193,3 +1193,43 @@ exports.processRegularizationRequest = async (req, res) => {
         res.status(500).json({ message: 'Server Error' });
     }
 };
+
+exports.updateCustomFlexibleOffDays = async (req, res) => {
+    try {
+        const { flexibleOffDays, userId } = req.body;
+        const targetUserId = userId || req.user._id;
+
+        if (String(targetUserId) !== String(req.user._id)) {
+            const isAdmin = req.user.roles?.some(r =>
+                (typeof r === 'string' && r === 'Admin') ||
+                (typeof r === 'object' && r?.name === 'Admin')
+            ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin');
+
+            const isManager = req.user.directReports?.some(id => String(id) === String(targetUserId));
+            if (!isAdmin && !isManager) {
+                return res.status(403).json({ message: 'Not authorized to update flexible off days for this user' });
+            }
+        }
+
+        const userToUpdate = await User.findOne({ _id: targetUserId, companyId: req.companyId });
+        if (!userToUpdate) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const flexDaysArray = Array.isArray(flexibleOffDays)
+            ? flexibleOffDays.map(d => String(d).trim()).filter(Boolean)
+            : [];
+
+        userToUpdate.customFlexibleOffDays = flexDaysArray;
+        await userToUpdate.save();
+
+        res.json({
+            message: 'Flexible off days updated successfully',
+            customFlexibleOffDays: userToUpdate.customFlexibleOffDays
+        });
+    } catch (error) {
+        console.error('updateCustomFlexibleOffDays error:', error);
+        res.status(500).json({ message: 'Failed to save flexible off days', error: error.message });
+    }
+};
+
