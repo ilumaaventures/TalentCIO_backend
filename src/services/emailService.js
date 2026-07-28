@@ -178,20 +178,41 @@ const sendEmail = async ({
                 url: att.path && att.path.startsWith('http') ? att.path : undefined
             })).filter(att => att.content || att.url);
 
+            const parseEmailListForBrevo = (emails) => {
+                if (!emails) return undefined;
+                if (Array.isArray(emails)) {
+                    return emails
+                        .flatMap(e => (typeof e === 'string' ? e.split(/[,;\s]+/) : [(e && (e.email || e.value)) || '']))
+                        .map(e => (typeof e === 'string' ? e.trim() : ''))
+                        .filter(e => e && e.includes('@'))
+                        .map(email => ({ email }));
+                }
+                if (typeof emails === 'string') {
+                    return emails
+                        .split(/[,;\s]+/)
+                        .map(e => e.trim())
+                        .filter(e => e && e.includes('@'))
+                        .map(email => ({ email }));
+                }
+                return undefined;
+            };
+
             const payload = {
                 sender: { name: senderName, email: fromEmail },
-                to: [{ email: to }],
+                to: Array.isArray(to) ? to.map(e => typeof e === 'object' ? e : { email: e }) : [{ email: to }],
                 subject: subject,
                 htmlContent: brandedHtml,
                 textContent: text
             };
 
-            if (cc) {
-                payload.cc = [{ email: cc }];
+            const parsedCc = parseEmailListForBrevo(cc);
+            if (parsedCc && parsedCc.length > 0) {
+                payload.cc = parsedCc;
             }
 
-            if (bcc) {
-                payload.bcc = [{ email: bcc }];
+            const parsedBcc = parseEmailListForBrevo(bcc);
+            if (parsedBcc && parsedBcc.length > 0) {
+                payload.bcc = parsedBcc;
             }
 
             if (resolvedReplyTo) {

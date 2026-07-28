@@ -94,12 +94,19 @@ router.get('/hiring-request/:id/previous-candidates', protect, taController.getP
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
 router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
-router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), taController.sendMassMail);
-router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), taController.sendMassMailBulk);
+const multer = require('multer');
+const massMailUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 15 * 1024 * 1024 }
+});
+
+router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), massMailUpload.array('attachments', 10), taController.sendMassMail);
+router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), massMailUpload.array('attachments', 10), taController.sendMassMailBulk);
 
 // Analytics
 router.get('/analytics/global', protect, requireTAAnalyticsAccess, taController.getGlobalAnalytics);
 router.get('/analytics/client/:clientName', protect, requireTAAnalyticsAccess, taController.getClientAnalytics);
+router.get('/analytics/interviews', protect, taController.getInterviewAnalytics);
 
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);

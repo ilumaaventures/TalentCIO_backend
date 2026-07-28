@@ -173,6 +173,12 @@ const serializeHiringRequestResponseWithCount = async (request, user, companyId)
             hiringRequestId: serialized._id,
             companyId
         });
+        serialized.wasEverPublished = Boolean(
+            request.wasEverPublished ||
+            request.isPublic ||
+            request.isResourceGatewayPublic ||
+            (serialized.publicApplicationsCount > 0)
+        );
     }
     return serialized;
 };
@@ -261,6 +267,8 @@ const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {
         ? `${taOwner.firstName || ''} ${taOwner.lastName || ''}`.trim()
         : '';
 
+    const clientName = hiringRequest?.client || candidate?.companyName || '';
+
     return {
         candidateName: fullName,
         firstName,
@@ -272,13 +280,15 @@ const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {
         phoneNumber: candidate.mobile || '',
         jobTitle: hiringRequest?.roleDetails?.title || '',
         designation: hiringRequest?.roleDetails?.title || '',
-        client: hiringRequest?.client || '',
+        client: clientName,
+        clientName,
         department: hiringRequest?.roleDetails?.department || '',
         location: hiringRequest?.location || '',
         managerName: '',
         managerEmail: '',
         recruiterName: candidate.profilePulledBy || taOwnerName || 'Talent Acquisition Team',
-        companyName: companyName || '',
+        companyName: clientName || companyName || '',
+        tenantCompanyName: companyName || '',
         requestId: hiringRequest?.requestId || '',
         currentStatus: candidate.status || '',
         interviewDate: extras.interviewDate || '',
@@ -498,7 +508,10 @@ const sendMassMailForHiringRequest = async ({
     customHtmlBody,
     candidateIds = [],
     filters = {},
-    customNote = ''
+    customNote = '',
+    cc,
+    bcc,
+    attachments = []
 }) => {
     if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
         const error = new Error('Invalid hiring request ID.');
@@ -562,9 +575,12 @@ const sendMassMailForHiringRequest = async ({
             companyId,
             emailAccountId: delivery.emailAccountId,
             to: candidate.email,
+            cc: cc || undefined,
+            bcc: bcc || undefined,
             subject: resolvedSubject,
             html: resolvedHtml,
-            text: resolvedText
+            text: resolvedText,
+            attachments
         });
 
         if (delivered) {
@@ -1525,6 +1541,10 @@ exports.toggleJobVisibility = async (req, res) => {
             request.publicJobDescription = req.body.publicJobDescription;
         }
 
+        if (request.isPublic || request.isResourceGatewayPublic) {
+            request.wasEverPublished = true;
+        }
+
         await request.save();
 
         if (auditEvents.length) {
@@ -1800,8 +1820,40 @@ exports.transferCandidatesBulk = async (req, res) => {
     }
 };
 
+const parseMassMailAttachmentsFromReq = (req) => {
+    const attachments = [];
+    if (Array.isArray(req.files) && req.files.length > 0) {
+        req.files.forEach((file) => {
+            attachments.push({
+                filename: file.originalname,
+                content: file.buffer,
+                contentType: file.mimetype || 'application/octet-stream'
+            });
+        });
+    }
+    if (Array.isArray(req.body?.attachments)) {
+        req.body.attachments.forEach((att) => {
+            if (att && att.filename) {
+                attachments.push(att);
+            }
+        });
+    }
+    return attachments;
+};
+
+const parseJsonIfNeeded = (val, fallback = null) => {
+    if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch (e) { return fallback !== null ? fallback : val; }
+    }
+    return val || fallback;
+};
+
 exports.sendMassMail = async (req, res) => {
     try {
+        const candidateIds = parseJsonIfNeeded(req.body?.candidateIds, []);
+        const filters = parseJsonIfNeeded(req.body?.filters, {});
+        const attachments = parseMassMailAttachmentsFromReq(req);
+
         const result = await sendMassMailForHiringRequest({
             companyId: req.companyId,
             user: req.user,
@@ -1810,9 +1862,12 @@ exports.sendMassMail = async (req, res) => {
             templateId: req.body?.templateId,
             customSubject: req.body?.customSubject,
             customHtmlBody: req.body?.customHtmlBody,
-            candidateIds: req.body?.candidateIds,
-            filters: req.body?.filters,
-            customNote: req.body?.customNote
+            candidateIds: Array.isArray(candidateIds) ? candidateIds : [],
+            filters: typeof filters === 'object' ? filters : {},
+            customNote: req.body?.customNote,
+            cc: req.body?.cc || req.body?.ccEmails,
+            bcc: req.body?.bcc || req.body?.bccEmails,
+            attachments
         });
 
         res.status(200).json(result);
@@ -1824,15 +1879,20 @@ exports.sendMassMail = async (req, res) => {
 
 exports.sendMassMailBulk = async (req, res) => {
     try {
-        const hiringRequestIds = Array.isArray(req.body?.hiringRequestIds) ? req.body.hiringRequestIds : [];
+        const rawHiringRequestIds = parseJsonIfNeeded(req.body?.hiringRequestIds, []);
+        const hiringRequestIds = Array.isArray(rawHiringRequestIds) ? rawHiringRequestIds : [];
         if (!hiringRequestIds.length) {
             return res.status(400).json({ message: 'At least one hiring request is required.' });
         }
 
+        const candidateSelections = parseJsonIfNeeded(req.body?.candidateSelections, []);
         const selectionMap = new Map(
-            (Array.isArray(req.body?.candidateSelections) ? req.body.candidateSelections : [])
+            (Array.isArray(candidateSelections) ? candidateSelections : [])
                 .map((item) => [String(item.hiringRequestId), Array.isArray(item.candidateIds) ? item.candidateIds : []])
         );
+
+        const filters = parseJsonIfNeeded(req.body?.filters, {});
+        const attachments = parseMassMailAttachmentsFromReq(req);
 
         const results = [];
         let sent = 0;
@@ -1850,8 +1910,11 @@ exports.sendMassMailBulk = async (req, res) => {
                     customSubject: req.body?.customSubject,
                     customHtmlBody: req.body?.customHtmlBody,
                     candidateIds: selectionMap.get(String(hiringRequestId)) || [],
-                    filters: req.body?.filters,
-                    customNote: req.body?.customNote
+                    filters: typeof filters === 'object' ? filters : {},
+                    customNote: req.body?.customNote,
+                    cc: req.body?.cc || req.body?.ccEmails,
+                    bcc: req.body?.bcc || req.body?.bccEmails,
+                    attachments
                 });
 
                 results.push(result);
@@ -2750,6 +2813,190 @@ exports.getGlobalAnalytics = async (req, res) => {
     } catch (error) {
         console.error('getGlobalAnalytics error:', error);
         res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    }
+};
+
+exports.getInterviewAnalytics = async (req, res) => {
+    try {
+        const { hiringRequestId, phase } = req.query;
+        const targetPhase = Math.max(parseInt(phase, 10) || 1, 1);
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limitParam = parseInt(req.query.limit, 10);
+        const limit = [50, 100, 150].includes(limitParam) ? limitParam : 50;
+
+        const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user, { action: 'view' });
+        const reqs = await HiringRequest.find(accessibleQuery).select('_id roleDetails client status useDynamicPhases phases').lean();
+
+        let targetReqIds = reqs.map(r => r._id);
+        if (hiringRequestId) {
+            targetReqIds = targetReqIds.filter(id => id.toString() === hiringRequestId.toString());
+        }
+
+        const candidates = await Candidate.find({
+            companyId: req.companyId,
+            hiringRequestId: { $in: targetReqIds }
+        })
+        .populate('hiringRequestId', 'client roleDetails.title roleDetails.department')
+        .populate('interviewRounds.assignedTo', 'firstName lastName email')
+        .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+        .lean();
+
+        const roundStatsMap = {};
+        let totalFinalShortlisted = 0;
+        let phaseCandidatesCount = 0;
+        const scheduledInterviews = [];
+        const candidateTrackersList = [];
+
+        candidates.forEach(c => {
+            let roundsForPhase = (c.interviewRounds || []).filter(r => Number(r.phase || 1) === targetPhase);
+
+            // Legacy Phase 2 fallback check
+            if (targetPhase === 2 && roundsForPhase.length === 0) {
+                const phase2InterviewStatus = String(c.phase2InterviewStatus || '').trim();
+                const phase2Feedback = String(c.phase2InterviewerFeedback || '').trim();
+                if (['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up'].includes(phase2InterviewStatus) || phase2Feedback) {
+                    roundsForPhase = [{
+                        _id: 'phase2-imported-interview-summary',
+                        phase: 2,
+                        status: phase2InterviewStatus === 'Rejected'
+                            ? 'Failed'
+                            : phase2InterviewStatus === 'Shortlisted'
+                                ? 'Passed'
+                                : phase2InterviewStatus === 'Did not Turn up'
+                                    ? 'Skipped'
+                                    : 'Scheduled',
+                        levelName: 'Round 1 (Phase 2)',
+                        feedback: c.phase2InterviewerFeedback || '',
+                        rating: null,
+                        assignedTo: [],
+                        evaluatedBy: null
+                    }];
+                }
+            }
+
+            // Check candidate membership/activity in targeted phase
+            const isCandidateInPhase = targetPhase === 1
+                ? true
+                : (targetPhase === 2
+                    ? (c.profileShared === true ||
+                        Boolean(String(c.phase2Decision || '').trim() && c.phase2Decision !== 'None') ||
+                        Boolean(String(c.phase2InterviewStatus || '').trim() && c.phase2InterviewStatus !== 'None') ||
+                        Boolean(String(c.phase2InterviewerFeedback || '').trim()) ||
+                        roundsForPhase.length > 0 ||
+                        Number(c.currentPhaseOrder || 1) >= 2)
+                    : (roundsForPhase.length > 0 || Number(c.currentPhaseOrder || 1) >= targetPhase));
+
+            if (isCandidateInPhase) {
+                phaseCandidatesCount++;
+
+                // Decision per phase
+                const phaseDecision = targetPhase === 2
+                    ? (c.phase2Decision || 'None')
+                    : (c.decision || 'None');
+
+                if (['Shortlisted', 'Selected'].includes(phaseDecision)) {
+                    totalFinalShortlisted++;
+                }
+
+                // Process interview rounds for stats & scheduled list
+                roundsForPhase.forEach(r => {
+                    const rName = (r.levelName || `Round ${targetPhase}`).trim();
+                    if (!roundStatsMap[rName]) {
+                        roundStatsMap[rName] = { roundName: rName, total: 0, pass: 0, fail: 0, pending: 0, scheduled: 0 };
+                    }
+                    roundStatsMap[rName].total++;
+
+                    if (r.status === 'Passed') roundStatsMap[rName].pass++;
+                    else if (r.status === 'Failed') roundStatsMap[rName].fail++;
+                    else if (r.status === 'Scheduled') roundStatsMap[rName].scheduled++;
+                    else roundStatsMap[rName].pending++;
+
+                    if (r.status === 'Scheduled' || r.scheduledDate || c.status === 'In Interview') {
+                        scheduledInterviews.push({
+                            _id: c._id,
+                            candidateName: c.candidateName,
+                            email: c.email,
+                            mobile: c.mobile,
+                            hiringRequestId: c.hiringRequestId?._id,
+                            roleTitle: c.hiringRequestId?.roleDetails?.title || 'N/A',
+                            clientName: c.hiringRequestId?.client || 'N/A',
+                            roundName: rName,
+                            scheduledDate: r.scheduledDate,
+                            status: r.status || c.status || 'Scheduled',
+                            interviewers: Array.isArray(r.assignedTo)
+                                ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim()).filter(Boolean).join(', ')
+                                : '',
+                            rating: r.rating || null,
+                            feedback: r.feedback || '',
+                            decision: phaseDecision
+                        });
+                    }
+                });
+
+                if (roundsForPhase.length > 0) {
+                    const mappedRounds = roundsForPhase.map(r => ({
+                        roundId: r._id,
+                        levelName: (r.levelName || `Round ${targetPhase}`).trim(),
+                        phase: r.phase || targetPhase,
+                        status: r.status === 'Passed' ? 'Pass' : r.status === 'Failed' ? 'Fail' : r.status || 'Pending',
+                        rating: r.rating ? `${r.rating}/5` : 'N/A',
+                        feedback: r.feedback || 'No feedback provided',
+                        interviewer: Array.isArray(r.assignedTo) && r.assignedTo.length > 0
+                            ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim()).filter(Boolean).join(', ')
+                            : (r.evaluatedBy ? `${r.evaluatedBy.firstName || ''} ${r.evaluatedBy.lastName || ''}`.trim() : 'Unassigned')
+                    }));
+
+                    candidateTrackersList.push({
+                        _id: c._id,
+                        candidateName: c.candidateName,
+                        email: c.email,
+                        mobile: c.mobile,
+                        hiringRequestId: c.hiringRequestId?._id,
+                        roleTitle: c.hiringRequestId?.roleDetails?.title || 'N/A',
+                        clientName: c.hiringRequestId?.client || 'N/A',
+                        totalRounds: mappedRounds.length,
+                        rounds: mappedRounds,
+                        finalDecision: phaseDecision
+                    });
+                }
+            }
+        });
+
+        const roundStats = Object.values(roundStatsMap);
+        const requisitions = reqs.map(r => ({
+            _id: r._id,
+            title: r.roleDetails?.title || 'Requisition',
+            client: r.client || ''
+        }));
+
+        const totalCount = candidateTrackersList.length;
+        const totalPages = Math.max(Math.ceil(totalCount / limit), 1);
+        const startIndex = (page - 1) * limit;
+        const candidateTrackers = candidateTrackersList.slice(startIndex, startIndex + limit);
+
+        res.status(200).json({
+            success: true,
+            phase: targetPhase,
+            summary: {
+                totalCandidates: phaseCandidatesCount,
+                totalShortlisted: totalFinalShortlisted,
+                totalScheduled: scheduledInterviews.length,
+                roundsCount: roundStats.length
+            },
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalCount,
+                limit
+            },
+            roundStats,
+            scheduledInterviews,
+            candidateTrackers,
+            requisitions
+        });
+    } catch (error) {
+        console.error('getInterviewAnalytics error:', error);
+        res.status(500).json({ message: 'Failed to fetch interview analytics', error: error.message });
     }
 };
 

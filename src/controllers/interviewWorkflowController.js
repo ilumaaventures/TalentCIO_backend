@@ -35,6 +35,7 @@ exports.getInterviewWorkflows = async (req, res) => {
     try {
         const workflows = await InterviewWorkflow.find({ companyId: req.companyId })
             .populate('rounds.role', 'name description')
+            .populate('rounds.emailTemplateId', 'name subject category')
             .populate('createdBy', 'firstName lastName email')
             .sort({ createdAt: -1 });
         res.json(workflows);
@@ -51,6 +52,7 @@ exports.getInterviewWorkflowById = async (req, res) => {
     try {
         const workflow = await InterviewWorkflow.findOne({ _id: req.params.id, companyId: req.companyId })
             .populate('rounds.role', 'name description')
+            .populate('rounds.emailTemplateId', 'name subject category')
             .populate('createdBy', 'firstName lastName email');
 
         if (!workflow) {
@@ -93,6 +95,7 @@ exports.updateInterviewWorkflow = async (req, res) => {
         // Populate to match GET outputs
         const updatedWorkflow = await InterviewWorkflow.findOne({ _id: workflow._id, companyId: req.companyId })
             .populate('rounds.role', 'name description')
+            .populate('rounds.emailTemplateId', 'name subject category')
             .populate('createdBy', 'firstName lastName email');
 
         res.json(updatedWorkflow);
