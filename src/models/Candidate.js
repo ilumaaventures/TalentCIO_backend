@@ -292,7 +292,19 @@ const candidateSchema = new mongoose.Schema({
         },
         emailAccountId: { type: String, trim: true, default: null },
         cc: { type: String, trim: true, default: '' },
-        bcc: { type: String, trim: true, default: '' }
+        bcc: { type: String, trim: true, default: '' },
+        mailSent: { type: Boolean, default: false },
+        mailSentAt: { type: Date, default: null },
+        lastMailDetails: {
+            sentAt: Date,
+            subject: String,
+            htmlBody: String,
+            senderEmail: String,
+            candidateEmail: String,
+            cc: String,
+            bcc: String,
+            interviewers: [{ name: String, email: String }]
+        }
     }],
 
     // Hiring Decision

@@ -1,45 +1,30 @@
+// Clean, deduplicated list of supported placeholders
 const TEMPLATE_PLACEHOLDERS = [
     'candidateName',
     'firstName',
     'lastName',
-    'fullName',
     'email',
     'phone',
-    'workEmail',
-    'mobile',
-    'phoneNumber',
     'jobTitle',
     'designation',
-    'client',
+    'clientName',
+    'companyName',
     'department',
-    'offerDate',
-    'dateOfOffer',
-    'workLocation',
-    'employmentDetails',
     'location',
     'managerName',
     'managerEmail',
     'recruiterName',
-    'companyName',
     'requestId',
     'currentStatus',
     'interviewDate',
+    'interviewTime',
+    'roundName',
+    'interviewerName',
     'interviewLink',
     'customFields',
     'additionalDetails',
-    'customFieldsTable',
     'customNote',
-    'employeeCode',
-    'exitType',
-    'lastWorkingDay',
-    'documentList',
-    'documentListBlock',
-    'personalNote',
-    'offboardingStatus',
-    'hrRemarks',
-    'employeeFirstName',
-    'employeeFullName',
-    'employeeId',
+    'offerDate',
     'joiningDate',
     'submissionDeadline',
     'portalLink',
@@ -49,9 +34,37 @@ const TEMPLATE_PLACEHOLDERS = [
     'sharedFilesBlock',
     'deadlineBlock',
     'portalButton',
+    'employeeCode',
+    'employeeId',
+    'exitType',
+    'lastWorkingDay',
+    'documentList',
+    'documentListBlock',
+    'personalNote',
+    'offboardingStatus',
+    'hrRemarks',
     'currentYear',
     'currentDate',
     'JD'
+];
+
+// Backwards-compatible aliases accepted in template validation
+const PLACEHOLDER_ALIASES = [
+    ...TEMPLATE_PLACEHOLDERS,
+    'fullName',
+    'candidateEmail',
+    'workEmail',
+    'mobile',
+    'phoneNumber',
+    'roleTitle',
+    'client',
+    'dateOfOffer',
+    'workLocation',
+    'scheduledDate',
+    'interviewRound',
+    'employeeFirstName',
+    'employeeFullName',
+    'customFieldsTable'
 ];
 
 const GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS = [
@@ -122,7 +135,7 @@ const OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS = [
 ];
 
 const getSupportedPlaceholderTokens = (placeholders = TEMPLATE_PLACEHOLDERS) => placeholders.map((placeholder) => `{{${placeholder}}}`);
-const SUPPORTED_PLACEHOLDER_PATTERN = TEMPLATE_PLACEHOLDERS.join('|');
+const SUPPORTED_PLACEHOLDER_PATTERN = PLACEHOLDER_ALIASES.join('|');
 
 const PLACEHOLDER_REGEX = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 const HTML_TAG_REGEX = /<\/?[a-z][\s\S]*>/i;
@@ -181,7 +194,8 @@ const validateTemplateSyntax = (template, allowedPlaceholders = TEMPLATE_PLACEHO
                 };
             }
 
-            if (Array.isArray(allowedPlaceholders) && allowedPlaceholders.length && !allowedPlaceholders.includes(token)) {
+            const checkList = allowedPlaceholders === TEMPLATE_PLACEHOLDERS ? PLACEHOLDER_ALIASES : allowedPlaceholders;
+            if (Array.isArray(checkList) && checkList.length && !checkList.includes(token)) {
                 const { line, column } = getLineAndColumn(content, index);
                 return {
                     valid: false,
