@@ -409,6 +409,8 @@ const sendCompanyEmailWithFallback = async ({
     companyId,
     emailAccountId,
     to,
+    cc,
+    bcc,
     subject,
     html,
     text,
@@ -418,6 +420,8 @@ const sendCompanyEmailWithFallback = async ({
         companyId,
         emailAccountId,
         to,
+        cc,
+        bcc,
         subject,
         html,
         text,
@@ -431,6 +435,8 @@ const sendCompanyEmailWithFallback = async ({
     return sendEmail({
         companyId,
         to,
+        cc,
+        bcc,
         subject,
         html,
         text,
@@ -767,10 +773,15 @@ exports.sendOffboardingEmail = async (req, res) => {
             contentType: file.mimetype
         }));
 
-        const sent = await sendEmailForCompany({
+        const cc = String(req.body?.cc || '').trim();
+        const bcc = String(req.body?.bcc || '').trim();
+
+        const sent = await sendCompanyEmailWithFallback({
             companyId: req.companyId,
             emailAccountId: req.body?.emailAccountId || undefined,
             to: recipientEmail,
+            cc: cc || undefined,
+            bcc: bcc || undefined,
             subject: resolvedSubject,
             html: resolvedHtml,
             attachments
@@ -856,6 +867,8 @@ exports.sendOffboardingEmail = async (req, res) => {
                 sentBy: req.user?._id,
                 recipientUserId: record.userId || null,
                 recipientEmail: recipientEmail,
+                cc,
+                bcc,
                 subject: resolvedSubject,
                 body: resolvedHtml,
                 type: 'offboarding',

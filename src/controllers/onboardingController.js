@@ -816,10 +816,16 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         if (!delivery.shouldSendEmail) {
             return res.status(400).json({ message: 'Pre-onboarding email delivery is disabled in notification settings.' });
         }
+
+        const cc = String(req.body?.cc || '').trim();
+        const bcc = String(req.body?.bcc || '').trim();
+
         await sendEmailForCompany({
             companyId: employee.companyId,
             emailAccountId: delivery.emailAccountId,
             to: employee.email,
+            cc: cc || undefined,
+            bcc: bcc || undefined,
             html: emailHtml,
             subject: resolvedSubject,
             text: emailText,
@@ -832,6 +838,8 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             sentBy: req.user?._id,
             recipientUserId: employee.transferredToUserId || null,
             recipientEmail: employee.email,
+            cc,
+            bcc,
             subject: resolvedSubject,
             body: emailHtml,
             type: 'onboarding',
