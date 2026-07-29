@@ -4092,28 +4092,34 @@ exports.globalSearchCandidates = async (req, res) => {
                 { email: searchRegex },
                 { mobile: searchRegex },
                 { currentLocation: searchRegex },
-                { currentCompany: searchRegex }
+                { preferredLocation: searchRegex },
+                { currentCompany: searchRegex },
+                { qualification: searchRegex },
+                { remark: searchRegex },
+                { internalRemark: searchRegex },
+                { 'mustHaveSkills.skill': searchRegex },
+                { 'niceToHaveSkills.skill': searchRegex },
+                { 'skillRatings.skill': searchRegex },
+                { 'pastExperience.role': searchRegex },
+                { 'pastExperience.companyName': searchRegex }
             ];
         }
 
-        if (req.query.minExperience !== undefined || req.query.maxExperience !== undefined) {
-            filterQuery.totalExperience = {};
-            if (req.query.minExperience !== undefined && req.query.minExperience !== '') {
-                const minExp = Number(req.query.minExperience);
-                if (Number.isFinite(minExp)) {
-                    filterQuery.totalExperience.$gte = minExp;
-                }
+        const buildNumericRange = (minVal, maxVal) => {
+            const range = {};
+            if (minVal !== undefined && minVal !== '') {
+                const min = Number(minVal);
+                if (Number.isFinite(min)) range.$gte = min;
             }
-            if (req.query.maxExperience !== undefined && req.query.maxExperience !== '') {
-                const maxExp = Number(req.query.maxExperience);
-                if (Number.isFinite(maxExp)) {
-                    filterQuery.totalExperience.$lte = maxExp;
-                }
+            if (maxVal !== undefined && maxVal !== '') {
+                const max = Number(maxVal);
+                if (Number.isFinite(max)) range.$lte = max;
             }
-            if (Object.keys(filterQuery.totalExperience).length === 0) {
-                delete filterQuery.totalExperience;
-            }
-        }
+            return Object.keys(range).length > 0 ? range : null;
+        };
+
+        const totalExpRange = buildNumericRange(req.query.minExperience, req.query.maxExperience);
+        if (totalExpRange) filterQuery.totalExperience = totalExpRange;
 
         if (req.query.skills) {
             const skillsList = parseStringArrayQuery(req.query.skills);
@@ -4158,43 +4164,11 @@ exports.globalSearchCandidates = async (req, res) => {
             }
         }
 
-        if (req.query.minCurrentCTC !== undefined || req.query.maxCurrentCTC !== undefined) {
-            filterQuery.currentCTC = {};
-            if (req.query.minCurrentCTC !== undefined && req.query.minCurrentCTC !== '') {
-                const minCTC = Number(req.query.minCurrentCTC);
-                if (Number.isFinite(minCTC)) {
-                    filterQuery.currentCTC.$gte = minCTC;
-                }
-            }
-            if (req.query.maxCurrentCTC !== undefined && req.query.maxCurrentCTC !== '') {
-                const maxCTC = Number(req.query.maxCurrentCTC);
-                if (Number.isFinite(maxCTC)) {
-                    filterQuery.currentCTC.$lte = maxCTC;
-                }
-            }
-            if (Object.keys(filterQuery.currentCTC).length === 0) {
-                delete filterQuery.currentCTC;
-            }
-        }
+        const currentCTCRange = buildNumericRange(req.query.minCurrentCTC, req.query.maxCurrentCTC);
+        if (currentCTCRange) filterQuery.currentCTC = currentCTCRange;
 
-        if (req.query.minExpectedCTC !== undefined || req.query.maxExpectedCTC !== undefined) {
-            filterQuery.expectedCTC = {};
-            if (req.query.minExpectedCTC !== undefined && req.query.minExpectedCTC !== '') {
-                const minCTC = Number(req.query.minExpectedCTC);
-                if (Number.isFinite(minCTC)) {
-                    filterQuery.expectedCTC.$gte = minCTC;
-                }
-            }
-            if (req.query.maxExpectedCTC !== undefined && req.query.maxExpectedCTC !== '') {
-                const maxCTC = Number(req.query.maxExpectedCTC);
-                if (Number.isFinite(maxCTC)) {
-                    filterQuery.expectedCTC.$lte = maxCTC;
-                }
-            }
-            if (Object.keys(filterQuery.expectedCTC).length === 0) {
-                delete filterQuery.expectedCTC;
-            }
-        }
+        const expectedCTCRange = buildNumericRange(req.query.minExpectedCTC, req.query.maxExpectedCTC);
+        if (expectedCTCRange) filterQuery.expectedCTC = expectedCTCRange;
 
         if (req.query.inHandOffer !== undefined && req.query.inHandOffer !== '') {
             filterQuery.inHandOffer = req.query.inHandOffer === 'true';
@@ -4220,7 +4194,9 @@ exports.globalSearchCandidates = async (req, res) => {
             publicAppFilterQuery.$or = [
                 { candidateName: searchRegex },
                 { email: searchRegex },
-                { mobile: searchRegex }
+                { mobile: searchRegex },
+                { coverNote: searchRegex },
+                { reviewNote: searchRegex }
             ];
         }
 
@@ -4239,31 +4215,8 @@ exports.globalSearchCandidates = async (req, res) => {
             }
         }
 
-        if (req.query.minCurrentCTC !== undefined || req.query.maxCurrentCTC !== undefined) {
-            publicAppFilterQuery.currentCTC = {};
-            if (req.query.minCurrentCTC !== undefined && req.query.minCurrentCTC !== '') {
-                const minCTC = Number(req.query.minCurrentCTC);
-                if (Number.isFinite(minCTC)) publicAppFilterQuery.currentCTC.$gte = minCTC;
-            }
-            if (req.query.maxCurrentCTC !== undefined && req.query.maxCurrentCTC !== '') {
-                const maxCTC = Number(req.query.maxCurrentCTC);
-                if (Number.isFinite(maxCTC)) publicAppFilterQuery.currentCTC.$lte = maxCTC;
-            }
-            if (Object.keys(publicAppFilterQuery.currentCTC).length === 0) delete publicAppFilterQuery.currentCTC;
-        }
-
-        if (req.query.minExpectedCTC !== undefined || req.query.maxExpectedCTC !== undefined) {
-            publicAppFilterQuery.expectedCTC = {};
-            if (req.query.minExpectedCTC !== undefined && req.query.minExpectedCTC !== '') {
-                const minCTC = Number(req.query.minExpectedCTC);
-                if (Number.isFinite(minCTC)) publicAppFilterQuery.expectedCTC.$gte = minCTC;
-            }
-            if (req.query.maxExpectedCTC !== undefined && req.query.maxExpectedCTC !== '') {
-                const maxCTC = Number(req.query.maxExpectedCTC);
-                if (Number.isFinite(maxCTC)) publicAppFilterQuery.expectedCTC.$lte = maxCTC;
-            }
-            if (Object.keys(publicAppFilterQuery.expectedCTC).length === 0) delete publicAppFilterQuery.expectedCTC;
-        }
+        if (currentCTCRange) publicAppFilterQuery.currentCTC = currentCTCRange;
+        if (expectedCTCRange) publicAppFilterQuery.expectedCTC = expectedCTCRange;
 
         if (req.query.decision) {
             publicAppFilterQuery.reviewStatus = req.query.decision.trim();
@@ -4662,13 +4615,15 @@ exports.globalSearchPublicApplications = async (req, res) => {
     try {
         const filterQuery = { companyId: req.companyId };
 
-        // Full-text search on name, email, mobile
+        // Full-text search on name, email, mobile, cover note, review note
         if (req.query.search) {
             const searchRegex = new RegExp(req.query.search.trim(), 'i');
             filterQuery.$or = [
                 { candidateName: searchRegex },
                 { email: searchRegex },
-                { mobile: searchRegex }
+                { mobile: searchRegex },
+                { coverNote: searchRegex },
+                { reviewNote: searchRegex }
             ];
         }
 
