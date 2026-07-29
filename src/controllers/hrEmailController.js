@@ -288,6 +288,8 @@ exports.sendHREmail = async (req, res) => {
         }
         const dossierCategory = String(req.body?.dossierCategory || '').trim();
         const notes = String(req.body?.notes || '').trim();
+        const cc = String(req.body?.cc || '').trim();
+        const bcc = String(req.body?.bcc || '').trim();
         const totalAttachmentCount = requestedFiles.length + cloudinaryUrls.length;
 
         if (recipientUserIds.length === 0) {
@@ -406,6 +408,8 @@ exports.sendHREmail = async (req, res) => {
                     companyId: req.companyId,
                     emailAccountId: emailAccountSnapshot.emailAccountId,
                     to: resolvedEmail,
+                    cc: cc || undefined,
+                    bcc: bcc || undefined,
                     subject: resolvedSubject,
                     html: resolvedHtml,
                     attachments: emailAttachments
@@ -511,6 +515,8 @@ exports.sendHREmail = async (req, res) => {
                     sentBy: req.user._id,
                     recipientUserId: user._id,
                     recipientEmail: resolvedEmail,
+                    cc,
+                    bcc,
                     subject: resolvedSubject,
                     body: resolvedHtml,
                     type: 'general',

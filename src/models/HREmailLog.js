@@ -30,6 +30,16 @@ const hrEmailLogSchema = new mongoose.Schema({
         trim: true,
         default: ''
     },
+    cc: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    bcc: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     subject: {
         type: String,
         trim: true,
