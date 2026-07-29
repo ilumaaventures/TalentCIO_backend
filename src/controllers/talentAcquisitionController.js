@@ -3160,7 +3160,11 @@ exports.getInterviewAnalytics = async (req, res) => {
                         phase: r.phase || targetPhase,
                         status: r.status === 'Passed' ? 'Pass' : r.status === 'Failed' ? 'Fail' : r.status || 'Pending',
                         rating: r.rating ? `${r.rating}/5` : 'N/A',
+                        rawRating: r.rating || null,
                         feedback: r.feedback || 'No feedback provided',
+                        scheduledDate: r.scheduledDate || null,
+                        evaluatedAt: r.evaluatedAt || null,
+                        skillRatings: Array.isArray(r.skillRatings) ? r.skillRatings : [],
                         interviewer: Array.isArray(r.assignedTo) && r.assignedTo.length > 0
                             ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim()).filter(Boolean).join(', ')
                             : (r.evaluatedBy ? `${r.evaluatedBy.firstName || ''} ${r.evaluatedBy.lastName || ''}`.trim() : 'Unassigned')
@@ -3171,6 +3175,9 @@ exports.getInterviewAnalytics = async (req, res) => {
                         candidateName: c.candidateName,
                         email: c.email,
                         mobile: c.mobile,
+                        noticePeriod: c.noticePeriod ?? null,
+                        currentCTC: c.currentCTC ?? null,
+                        expectedCTC: c.expectedCTC ?? null,
                         hiringRequestId: c.hiringRequestId?._id,
                         roleTitle: c.hiringRequestId?.roleDetails?.title || 'N/A',
                         clientName: c.hiringRequestId?.client || 'N/A',

@@ -69,6 +69,9 @@ router.post('/:id/rounds', protect, authorizeAny(interviewSchedulingPermissions)
 router.put('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.updateInterviewRound);
 router.delete('/:id/rounds/:roundId', protect, authorizeAny(interviewSchedulingPermissions), candidateController.deleteInterviewRound);
 router.patch('/:id/rounds/:roundId/evaluate', protect, candidateController.evaluateInterviewRound);
+router.post('/:id/rounds/:roundId/send-mail', protect, authorizeAny(interviewSchedulingPermissions), candidateController.sendInterviewRoundEmail);
+router.get('/:id/rounds/:roundId/mail-preview', protect, candidateController.previewInterviewRoundEmail);
+router.post('/:id/rounds/:roundId/mail-preview', protect, candidateController.previewInterviewRoundEmail);
 
 // Skill Ratings
 router.put('/:id/skill-ratings', protect, authorizeAny(candidateEditPermissions), candidateController.updateSkillRatings);

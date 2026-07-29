@@ -2481,34 +2481,59 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
 
         const processTemplate = (text, isBody = false) => {
             if (!text) return '';
+            const candFirstName = candidate.candidateName ? candidate.candidateName.split(' ')[0] : '';
+            const candLastName = candidate.candidateName ? candidate.candidateName.split(' ').slice(1).join(' ') : '';
+
             let processed = text
                 .replace(/\{\{?candidateName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?fullName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?firstName\}\}?/gi, candFirstName)
+                .replace(/\{\{?lastName\}\}?/gi, candLastName)
                 .replace(/\{\{?candidateEmail\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?workEmail\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?email\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?phone\}\}?/gi, candidate.phone || candidate.mobile || '')
+                .replace(/\{\{?mobile\}\}?/gi, candidate.phone || candidate.mobile || '')
+                .replace(/\{\{?phoneNumber\}\}?/gi, candidate.phone || candidate.mobile || '')
                 .replace(/\{\{?roleTitle\}\}?/gi, roleTitle)
+                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle)
+                .replace(/\{\{?designation\}\}?/gi, roleTitle)
                 .replace(/\{\{?roundName\}\}?/gi, round.levelName || 'Interview Round')
+                .replace(/\{\{?interviewRound\}\}?/gi, round.levelName || 'Interview Round')
                 .replace(/\{\{?scheduledDate\}\}?/gi, scheduledDateFormatted)
+                .replace(/\{\{?interviewDate\}\}?/gi, scheduledDateFormatted)
+                .replace(/\{\{?interviewTime\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewerName\}\}?/gi, interviewersList)
                 .replace(/\{\{?clientName\}\}?/gi, clientName)
                 .replace(/\{\{?client\}\}?/gi, clientName)
                 .replace(/\{\{?companyName\}\}?/gi, clientName)
-                .replace(/\{\{?company\}\}?/gi, clientName);
+                .replace(/\{\{?company\}\}?/gi, clientName)
+                .replace(/\{\{?location\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?workLocation\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?currentDate\}\}?/gi, new Date().toLocaleDateString('en-US', { dateStyle: 'medium' }))
+                .replace(/\{\{?currentYear\}\}?/gi, String(new Date().getFullYear()));
+
+            const isOriginalHtml = /<(p|div|table|tr|td|h[1-6]|ul|ol|li|br|strong|b|em|i)\b[^>]*>/i.test(text);
 
             if (isBody) {
-                // Handle custom fields placement ONLY in body
+                if (!isOriginalHtml) {
+                    processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                    processed = processed.replace(/^(\s*)[\*\-]\s+(.+)$/gm, '$1&bull; $2');
+                    processed = processed.replace(/\r\n|\r|\n/g, '<br />');
+                }
+
                 const hasCustomFieldsTag = /\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/i.test(processed);
                 if (hasCustomFieldsTag) {
                     processed = processed.replace(/\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/gi, customFieldsHtml);
                 } else if (customFieldsHtml) {
-                    // Smart placement before closing signature (e.g. regards, best regards, thanks, warm regards)
                     const signatureRegex = /(<p[^>]*>\s*)?\b(regards|best regards|kind regards|warm regards|thanks\s*&\s*regards|thanks|sincerely)\b([\s\S]*)/i;
                     if (signatureRegex.test(processed)) {
-                        processed = processed.replace(signatureRegex, `${customFieldsHtml}\n$1$2$3`);
+                        processed = processed.replace(signatureRegex, `${customFieldsHtml}<br />$1$2$3`);
                     } else {
-                        processed += customFieldsHtml;
+                        processed += `<br />${customFieldsHtml}`;
                     }
                 }
             } else {
-                // Clean any customFields tag from subject line
                 processed = processed.replace(/\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/gi, '');
             }
             return processed;
@@ -2577,6 +2602,23 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
                     status: 'Sent',
                     sentAt: new Date()
                 });
+
+                round.mailSent = true;
+                round.mailSentAt = new Date();
+                round.lastMailDetails = {
+                    sentAt: new Date(),
+                    subject,
+                    htmlBody,
+                    senderEmail: user?.email || '',
+                    candidateEmail: candidate.email,
+                    cc: String(effectiveCc || ''),
+                    bcc: String(effectiveBcc || ''),
+                    interviewers: Array.isArray(round.assignedTo) ? round.assignedTo.map(u => ({
+                        name: typeof u === 'object' ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : String(u),
+                        email: typeof u === 'object' ? u.email || '' : ''
+                    })) : []
+                };
+                await candidate.save();
             } catch (candEmailErr) {
                 console.error('Error sending interview schedule email to candidate:', candEmailErr);
                 try {
@@ -2734,13 +2776,18 @@ exports.addInterviewRound = async (req, res) => {
             });
         }
 
-        // Send email notifications to Candidate and Interviewer(s)
-        sendInterviewScheduleEmails({
-            companyId: req.companyId,
-            candidate: updatedCandidate,
-            round: populatedRound,
-            user: req.user
-        });
+        // Send email notifications to Candidate and Interviewer(s) ONLY if explicitly requested
+        if (req.body.sendEmail) {
+            sendInterviewScheduleEmails({
+                companyId: req.companyId,
+                candidate: updatedCandidate,
+                round: populatedRound,
+                user: req.user,
+                cc,
+                bcc,
+                emailAccountId
+            });
+        }
 
         res.status(201).json({
             message: 'Interview round added successfully',
@@ -2757,7 +2804,7 @@ exports.addInterviewRound = async (req, res) => {
 exports.updateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId } = req.body;
+        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -2807,13 +2854,16 @@ exports.updateInterviewRound = async (req, res) => {
             });
         }
 
-        // Send email notifications to Candidate and Interviewer(s) on update
-        if (updatedRound) {
+        // Send email notifications ONLY if explicitly requested via sendEmail flag
+        if (sendEmail && updatedRound) {
             sendInterviewScheduleEmails({
                 companyId: req.companyId,
                 candidate: updatedCandidate,
                 round: updatedRound,
-                user: req.user
+                user: req.user,
+                cc,
+                bcc,
+                emailAccountId
             });
         }
 
@@ -2825,6 +2875,217 @@ exports.updateInterviewRound = async (req, res) => {
     } catch (error) {
         console.error('Error updating interview round:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// Send mail explicitly per interview round with template, CC, BCC, customFields and emailAccountId selection
+exports.sendInterviewRoundEmail = async (req, res) => {
+    try {
+        const { id, roundId } = req.params;
+        const { emailTemplateId, emailAccountId, cc, bcc, customFields } = req.body;
+
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.SCHEDULE_INTERVIEW);
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden: You do not have permission to send emails for this candidate' });
+        }
+
+        const round = candidate.interviewRounds.id(roundId);
+        if (!round) {
+            return res.status(404).json({ message: 'Interview round not found' });
+        }
+
+        if (emailTemplateId !== undefined) round.emailTemplateId = emailTemplateId || null;
+        if (emailAccountId !== undefined) round.emailAccountId = emailAccountId || null;
+        if (cc !== undefined) round.cc = cc || '';
+        if (bcc !== undefined) round.bcc = bcc || '';
+        if (Array.isArray(customFields)) {
+            round.customFields = customFields.filter(f => f.key && String(f.key).trim());
+        }
+        await candidate.save();
+
+        const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+            .populate('hiringRequestId', 'requestId client roleDetails')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+        const updatedRound = updatedCandidate.interviewRounds.id(roundId);
+
+        await sendInterviewScheduleEmails({
+            companyId: req.companyId,
+            candidate: updatedCandidate,
+            round: updatedRound,
+            user: req.user,
+            cc: cc !== undefined ? cc : round.cc,
+            bcc: bcc !== undefined ? bcc : round.bcc,
+            emailAccountId: emailAccountId || round.emailAccountId
+        });
+
+        res.status(200).json({
+            message: 'Interview round email sent successfully',
+            round: updatedRound
+        });
+    } catch (error) {
+        console.error('Error sending interview round email:', error);
+        res.status(500).json({ message: 'Failed to send interview round email', error: error.message });
+    }
+};
+
+// Get preview details of the email for an interview round
+exports.previewInterviewRoundEmail = async (req, res) => {
+    try {
+        const { id, roundId } = req.params;
+        const emailTemplateId = req.query.emailTemplateId || req.body?.emailTemplateId;
+        const customFieldsInput = req.body?.customFields || (req.query.customFields ? JSON.parse(req.query.customFields) : null);
+
+        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+            .populate('hiringRequestId', 'requestId client roleDetails')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email');
+
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const round = candidate.interviewRounds.id(roundId);
+        if (!round) {
+            return res.status(404).json({ message: 'Interview round not found' });
+        }
+
+        const effectiveTemplateId = emailTemplateId || round.emailTemplateId;
+        let template = null;
+        if (effectiveTemplateId) {
+            template = await EmailTemplate.findOne({ _id: effectiveTemplateId, companyId: req.companyId }).lean();
+        }
+
+        const roleTitle = candidate.hiringRequestId?.roleDetails?.title || candidate.roleTitle || candidate.position || '';
+        const clientName = candidate.hiringRequestId?.client || candidate.companyName || '';
+
+        const scheduledDateFormatted = round.scheduledDate
+            ? new Date(round.scheduledDate).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })
+            : 'To Be Confirmed';
+
+        const assignedInterviewers = Array.isArray(round.assignedTo) ? round.assignedTo : [];
+        const interviewersList = assignedInterviewers.length > 0
+            ? assignedInterviewers.map(u => typeof u === 'object' ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : u).filter(Boolean).join(', ')
+            : 'Unassigned';
+
+        let customFieldsHtml = '';
+        const fieldsToUse = Array.isArray(customFieldsInput) ? customFieldsInput : round.customFields;
+        const validFields = Array.isArray(fieldsToUse) ? fieldsToUse.filter(f => f.key && String(f.key).trim()) : [];
+        if (validFields.length > 0) {
+            const rowsHtml = validFields.map(f => `
+                <tr>
+                    <td style="padding: 8px 12px; font-weight: bold; color: #334155; border-bottom: 1px solid #e2e8f0; width: 35%;">${f.key}:</td>
+                    <td style="padding: 8px 12px; color: #0f172a; border-bottom: 1px solid #e2e8f0;">${f.value || 'N/A'}</td>
+                </tr>
+            `).join('');
+
+            customFieldsHtml = `
+                <div style="margin-top: 20px; padding: 16px; background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1;">
+                    <h4 style="margin: 0 0 12px 0; color: #1e293b; font-size: 14px; font-weight: bold;">Interview Details & Additional Information:</h4>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        ${rowsHtml}
+                    </table>
+                </div>
+            `;
+        }
+
+        const processTemplate = (text, isBody = false) => {
+            if (!text) return '';
+            const candFirstName = candidate.candidateName ? candidate.candidateName.split(' ')[0] : '';
+            const candLastName = candidate.candidateName ? candidate.candidateName.split(' ').slice(1).join(' ') : '';
+
+            let processed = text
+                .replace(/\{\{?candidateName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?fullName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?firstName\}\}?/gi, candFirstName)
+                .replace(/\{\{?lastName\}\}?/gi, candLastName)
+                .replace(/\{\{?candidateEmail\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?workEmail\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?email\}\}?/gi, candidate.email || '')
+                .replace(/\{\{?phone\}\}?/gi, candidate.phone || candidate.mobile || '')
+                .replace(/\{\{?mobile\}\}?/gi, candidate.phone || candidate.mobile || '')
+                .replace(/\{\{?phoneNumber\}\}?/gi, candidate.phone || candidate.mobile || '')
+                .replace(/\{\{?roleTitle\}\}?/gi, roleTitle)
+                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle)
+                .replace(/\{\{?designation\}\}?/gi, roleTitle)
+                .replace(/\{\{?roundName\}\}?/gi, round.levelName || 'Interview Round')
+                .replace(/\{\{?interviewRound\}\}?/gi, round.levelName || 'Interview Round')
+                .replace(/\{\{?scheduledDate\}\}?/gi, scheduledDateFormatted)
+                .replace(/\{\{?interviewDate\}\}?/gi, scheduledDateFormatted)
+                .replace(/\{\{?interviewTime\}\}?/gi, scheduledDateFormatted)
+                .replace(/\{\{?interviewerName\}\}?/gi, interviewersList)
+                .replace(/\{\{?clientName\}\}?/gi, clientName)
+                .replace(/\{\{?client\}\}?/gi, clientName)
+                .replace(/\{\{?companyName\}\}?/gi, clientName)
+                .replace(/\{\{?company\}\}?/gi, clientName)
+                .replace(/\{\{?location\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?workLocation\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?currentDate\}\}?/gi, new Date().toLocaleDateString('en-US', { dateStyle: 'medium' }))
+                .replace(/\{\{?currentYear\}\}?/gi, String(new Date().getFullYear()));
+
+            const isOriginalHtml = /<(p|div|table|tr|td|h[1-6]|ul|ol|li|br|strong|b|em|i)\b[^>]*>/i.test(text);
+
+            if (isBody) {
+                if (!isOriginalHtml) {
+                    processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                    processed = processed.replace(/^(\s*)[\*\-]\s+(.+)$/gm, '$1&bull; $2');
+                    processed = processed.replace(/\r\n|\r|\n/g, '<br />');
+                }
+
+                const hasCustomFieldsTag = /\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/i.test(processed);
+                if (hasCustomFieldsTag) {
+                    processed = processed.replace(/\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/gi, customFieldsHtml);
+                } else if (customFieldsHtml) {
+                    const signatureRegex = /(<p[^>]*>\s*)?\b(regards|best regards|kind regards|warm regards|thanks\s*&\s*regards|thanks|sincerely)\b([\s\S]*)/i;
+                    if (signatureRegex.test(processed)) {
+                        processed = processed.replace(signatureRegex, `${customFieldsHtml}<br />$1$2$3`);
+                    } else {
+                        processed += `<br />${customFieldsHtml}`;
+                    }
+                }
+            } else {
+                processed = processed.replace(/\{{1,2}(customFields|customFieldsTable|additionalDetails|custom_fields)\}{1,2}/gi, '');
+            }
+            return processed;
+        };
+
+        const defaultSubject = `Interview Scheduled: ${round.levelName || 'Interview Round'} - ${candidate.candidateName}`;
+        const defaultCandidateBody = `
+            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #2563eb; margin-top: 0;">Interview Scheduled</h2>
+                <p>Hello <strong>${candidate.candidateName}</strong>,</p>
+                <p>Your interview for <strong>${round.levelName}</strong> (${roleTitle}) has been scheduled.</p>
+                <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
+                    <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
+                    <p style="margin: 4px 0;"><strong>Interviewer(s):</strong> ${interviewersList}</p>
+                </div>
+                ${customFieldsHtml}
+                <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Thank you,<br/>Talent Acquisition Team</p>
+            </div>
+        `;
+
+        const subject = template?.subject ? processTemplate(template.subject, false) : defaultSubject;
+        const htmlBody = template?.htmlBody ? processTemplate(template.htmlBody, true) : defaultCandidateBody;
+
+        res.status(200).json({
+            candidateName: candidate.candidateName,
+            candidateEmail: candidate.email,
+            interviewers: assignedInterviewers.map(u => ({ name: `${u.firstName || ''} ${u.lastName || ''}`.trim(), email: u.email })),
+            subject,
+            htmlBody,
+            customFields: validFields,
+            scheduledDateFormatted,
+            cc: round.cc || '',
+            bcc: round.bcc || ''
+        });
+    } catch (error) {
+        console.error('Error previewing interview round email:', error);
+        res.status(500).json({ message: 'Failed to preview email', error: error.message });
     }
 };
 
