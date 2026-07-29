@@ -326,14 +326,16 @@ const getAttendanceSummary = async (req, res) => {
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                // Bug 6 fix: paidDays must only count paid working days (present + paid leaves).
-                // The old formula added weeklyOffDays + holidayDays + workedOffDays which inflated
-                // paidDays to near-total-month values, causing salary over-payment if payroll uses
-                // paidDays as the salary multiplier.
-                const calculatedPaidDays = Math.min(
-                    presentDays + paidLeaves,
-                    totalDaysInMonth
-                );
+                // paidDays is dynamic:
+                //   - presentDays: days the employee actually worked (or was marked present)
+                //   - paidLeaves: approved paid leave days
+                //   - weeklyOffDays: company weekly-off days *or* per-user flexible-off days
+                //     (the loop already uses userWeeklyOffs which prefers customFlexibleOffDays
+                //     over the company default, so this is automatically per-user correct)
+                //   - holidayDays: company holidays (always paid)
+                // workedOffDays is intentionally excluded here — those are tracked separately
+                // for overtime/comp-off purposes and must not inflate the base salary days.
+                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays + holidayDays;
 
                 if (workingDaysTillDate > elapsedDays) {
                     console.warn(`[Validation Warning] user ${user._id}: workingDaysTillDate (${workingDaysTillDate}) > elapsedDays (${elapsedDays})`);
