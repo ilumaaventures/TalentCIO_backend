@@ -407,11 +407,23 @@ const receivePayrollResult = async (req, res) => {
         }
 
         const rawBody = req.rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
-        const computedSig = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+        const tsHeader = req.headers['x-hrms-timestamp'];
+        const hmacInput = tsHeader ? `${tsHeader}.${rawBody}` : rawBody;
+        const computedSig = crypto.createHmac('sha256', webhookSecret).update(hmacInput).digest('hex');
 
-        const provided = Buffer.from(signature,   'hex');
+        const provided = Buffer.from(signature, 'hex');
         const computed  = Buffer.from(computedSig, 'hex');
-        if (provided.length !== computed.length || !crypto.timingSafeEqual(provided, computed)) {
+        let isValid = provided.length === computed.length && crypto.timingSafeEqual(provided, computed);
+
+        if (!isValid && tsHeader) {
+            const fallbackSig = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+            const fallbackBuf = Buffer.from(fallbackSig, 'hex');
+            if (provided.length === fallbackBuf.length && crypto.timingSafeEqual(provided, fallbackBuf)) {
+                isValid = true;
+            }
+        }
+
+        if (!isValid) {
             return res.status(401).json({ message: 'Signature mismatch: HMAC verification failed.' });
         }
 

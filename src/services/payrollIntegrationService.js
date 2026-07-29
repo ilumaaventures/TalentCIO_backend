@@ -133,6 +133,13 @@ const buildEmployeePayload = (user, profile = null) => {
         return val !== null && val !== undefined ? String(val) : def;
     };
 
+    const resolveDeptName = (dept) => {
+        if (!dept) return '';
+        if (typeof dept === 'string') return dept;
+        if (typeof dept === 'object' && dept.name) return String(dept.name);
+        return String(dept);
+    };
+
     return {
         employeeId: user?.employeeCode || String(user?._id || ''),
         userId: String(user?._id || ''),
@@ -143,7 +150,7 @@ const buildEmployeePayload = (user, profile = null) => {
         lastName: user?.lastName || personal.lastName || '',
         fullName,
         email: user?.email || contact.workEmail || '',
-        department: employment.department || user?.department || '',
+        department: resolveDeptName(employment.department) || resolveDeptName(user?.department) || '',
         designation: employment.designation || '',
         employmentType: employment.employmentType || user?.employmentType || '',
         workLocation: employment.branch || user?.workLocation || '',
@@ -239,6 +246,8 @@ const withRetry = async (fn, maxAttempts = 3, baseDelayMs = 500) => {
     throw lastError;
 };
 
+const crypto = require('crypto');
+
 const dispatchEmployeeWebhook = async ({
     companyId,
     company = null,
@@ -266,7 +275,12 @@ const dispatchEmployeeWebhook = async ({
         timestamp: new Date().toISOString(),
         employee
     };
-    const signature = signWebhookPayload(payload, config.webhookSecret);
+    const payloadStr = JSON.stringify(payload);
+    const tsHeader = String(Math.floor(Date.now() / 1000)); // Unix seconds
+    const signature = crypto
+        .createHmac('sha256', config.webhookSecret)
+        .update(`${tsHeader}.${payloadStr}`)
+        .digest('hex');
 
     let attempts = 0;
     try {
@@ -275,6 +289,8 @@ const dispatchEmployeeWebhook = async ({
             await axios.post(config.webhookUrl, payload, {
                 headers: {
                     'Content-Type': 'application/json',
+                    'x-hrms-tenant-id': config.externalTenantId,
+                    'x-hrms-timestamp': tsHeader,
                     'x-hrms-signature': signature
                 },
                 timeout: 10000
