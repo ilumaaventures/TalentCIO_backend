@@ -1808,15 +1808,21 @@ exports.proxyPdf = async (req, res) => {
             if (!publicId) return null;
 
             const resourceType = targetUrl.includes('/video/') ? 'video' : (targetUrl.includes('/raw/') ? 'raw' : 'image');
+            const extMatch = targetUrl.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+            const formatExt = extMatch ? extMatch[1].toLowerCase() : undefined;
 
-            return cloudinary.url(publicId, {
+            const signedOptions = {
                 resource_type: resourceType,
                 secure: true,
                 sign_url: true,
                 type: type, // 'authenticated' or 'upload' or 'private'
-                version: version, // Crucial for valid signature if versioned
-                format: 'pdf' // Validate/Force extension
-            });
+                version: version
+            };
+            if (formatExt) {
+                signedOptions.format = formatExt;
+            }
+
+            return cloudinary.url(publicId, signedOptions);
         };
 
 
