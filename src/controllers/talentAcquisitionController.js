@@ -3161,7 +3161,7 @@ exports.getInterviewAnalytics = async (req, res) => {
                         status: r.status === 'Passed' ? 'Pass' : r.status === 'Failed' ? 'Fail' : r.status || 'Pending',
                         rating: r.rating ? `${r.rating}/10` : 'N/A',
                         rawRating: r.rating || null,
-                        mailSent: Boolean(r.mailSent || r.mailSentAt),
+                        mailSent: Boolean(r.mailSent || r.mailSentAt || r.lastMailDetails?.sentAt),
                         customFields: Array.isArray(r.customFields) ? r.customFields.filter(f => f.key || f.value) : [],
                         feedback: r.feedback || 'No feedback provided',
                         scheduledDate: r.scheduledDate || null,
