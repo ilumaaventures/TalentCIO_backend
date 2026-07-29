@@ -79,6 +79,28 @@ const getEmployees = async (req, res) => {
     }
 };
 
+const isDayWeeklyOff = (dayName, offDaysList) => {
+    if (!Array.isArray(offDaysList) || offDaysList.length === 0) return false;
+    const lowerDay = String(dayName || '').toLowerCase();
+    const shortDay = lowerDay.slice(0, 3);
+
+    const dayNumberMap = {
+        sunday: '0',
+        monday: '1',
+        tuesday: '2',
+        wednesday: '3',
+        thursday: '4',
+        friday: '5',
+        saturday: '6'
+    };
+    const dayNum = dayNumberMap[lowerDay];
+
+    return offDaysList.some((off) => {
+        const str = String(off || '').trim().toLowerCase();
+        return str === lowerDay || str === shortDay || (dayNum && str === dayNum);
+    });
+};
+
 const getAttendanceSummary = async (req, res) => {
     try {
         const { month, year } = req.query;
@@ -192,7 +214,7 @@ const getAttendanceSummary = async (req, res) => {
                     const hasLeft = dateOfLeavingStr && dateStr > dateOfLeavingStr;
 
                     if (hasJoined && !hasLeft) {
-                        const isWeeklyOffDay = userWeeklyOffs.includes(dayName);
+                        const isWeeklyOffDay = isDayWeeklyOff(dayName, userWeeklyOffs);
                         const holidayObj = holidayMap.get(dateStr);
                         const isHolidayDay = !!holidayObj;
                         const isOffDay = isWeeklyOffDay || isHolidayDay;
