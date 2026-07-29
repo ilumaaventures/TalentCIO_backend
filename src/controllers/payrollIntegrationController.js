@@ -351,6 +351,13 @@ const getAttendanceSummary = async (req, res) => {
                     employeeNumber: user.employeeCode,
                     totalDaysInMonth,
                     elapsedDays,
+                    // workingDays = elapsedDays: this is the correct prorate DENOMINATOR for payrollMath.
+                    // It must equal the total days the employee was employed in the period
+                    // (working days + weekoffs + holidays), so that paidDays/workingDays gives the
+                    // correct salary fraction.
+                    // e.g. employee worked 19 days, 8 weekoffs, 1 holiday:
+                    //   paidDays = 19+8+1 = 28, workingDays = 28 → prorate = 1.0 (full month)
+                    workingDays: elapsedDays,
                     workingDaysTillDate,
                     weeklyOffDays,
                     holidayDays,

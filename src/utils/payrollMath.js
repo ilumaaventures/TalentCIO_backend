@@ -879,8 +879,18 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
 
   const requestedWorkingDays = Number(attendance?.workingDays);
   const workingDays = Math.max(requestedWorkingDays || config.defaultWorkingDays, 1);
-  const rawPaidDays = isHourly ? workingDays : Number(attendance?.paidDays ?? attendance?.presentDays ?? workingDays);
-  const paidDays = isHourly ? workingDays : roundAmount(clamp(rawPaidDays || workingDays, 0, workingDays));
+  // If the sync payload provides paidDays (which now includes weekoffs + holidays), use it.
+  // If only presentDays is available (manual entry), compute paidDays by adding weekoffs and
+  // holidays so that those off-days are correctly treated as paid days.
+  const rawPaidDays = isHourly ? workingDays : (() => {
+    if (attendance?.paidDays != null) return Number(attendance.paidDays);
+    const present = Number(attendance?.presentDays ?? 0);
+    const weeklyOffs = Number(attendance?.weeklyOffDays ?? 0);
+    const holidays = Number(attendance?.holidayDays ?? 0);
+    const paidLeaves = Number(attendance?.paidLeaves ?? 0);
+    return present + weeklyOffs + holidays + paidLeaves || workingDays;
+  })();
+  const paidDays = isHourly ? workingDays : roundAmount(clamp(rawPaidDays, 0, workingDays));
   const prorate = isHourly ? 1.0 : Math.min(paidDays / workingDays, 1);
   const lop = isHourly ? 0 : roundAmount(Math.max(workingDays - paidDays, 0));
 
