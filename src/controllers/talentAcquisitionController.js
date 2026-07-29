@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const { HiringRequest, HRRAuditLog } = require('../models/HiringRequest');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const User = require('../models/User');
@@ -6,10 +8,16 @@ const Company = require('../models/Company');
 const EmailTemplate = require('../models/EmailTemplate');
 const PublicApplication = require('../models/PublicApplication');
 const PhaseTemplate = require('../models/PhaseTemplate');
+const TAEmailLog = require('../models/TAEmailLog');
 const mongoose = require('mongoose');
 const SequenceCounter = require('../models/SequenceCounter');
 const NotificationService = require('../services/notificationService');
 const { sendEmailForCompany } = require('../services/companyEmailService');
+const {
+    uploadBufferToCloudinary,
+    uploadFilePathToCloudinary,
+    cloudinary
+} = require('../config/cloudinary');
 const {
     TEMPLATE_PLACEHOLDERS,
     hasHtmlMarkup,
@@ -221,6 +229,7 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
         .populate('roleDetails.reportingManager', 'firstName lastName')
         .populate('createdBy', 'firstName lastName')
         .populate('workflowId', 'name description')
+        .populate('previousRequestId', 'requestId roleDetails.title isPublic isResourceGatewayPublic status')
         .populate({
             path: 'approvalChain.role',
             select: 'name'
@@ -559,43 +568,123 @@ const sendMassMailForHiringRequest = async ({
     );
 
     for (const [index, candidate] of candidates.entries()) {
-        const dataMap = buildCandidateDataMap(
-            candidate,
-            hiringRequest,
-            company?.name,
-            { customNote }
-        );
+        try {
+            const dataMap = buildCandidateDataMap(
+                candidate,
+                hiringRequest,
+                company?.name,
+                { customNote }
+            );
 
-        const resolvedSubject = resolveTemplate(subject, dataMap);
-        const resolvedBody = resolveTemplate(htmlBody, dataMap);
-        const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
-        const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
+            const resolvedSubject = resolveTemplate(subject, dataMap);
+            const resolvedBody = resolveTemplate(htmlBody, dataMap);
+            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+            const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
 
-        const delivered = await sendEmailForCompany({
-            companyId,
-            emailAccountId: delivery.emailAccountId,
-            to: candidate.email,
-            cc: cc || undefined,
-            bcc: bcc || undefined,
-            subject: resolvedSubject,
-            html: resolvedHtml,
-            text: resolvedText,
-            attachments
-        });
+            const delivered = await sendEmailForCompany({
+                companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: candidate.email,
+                cc: cc || undefined,
+                bcc: bcc || undefined,
+                subject: resolvedSubject,
+                html: resolvedHtml,
+                text: resolvedText,
+                attachments
+            });
 
-        if (delivered) {
-            sent += 1;
-        } else {
+            if (delivered) {
+                sent += 1;
+            } else {
+                failed += 1;
+                failedEmails.push({
+                    candidateId: candidate._id,
+                    email: candidate.email
+                });
+            }
+        } catch (candidateEmailError) {
+            console.error(`[MASS MAIL] Exception sending email to ${candidate?.email}:`, candidateEmailError);
             failed += 1;
             failedEmails.push({
-                candidateId: candidate._id,
-                email: candidate.email
+                candidateId: candidate?._id,
+                email: candidate?.email,
+                reason: candidateEmailError.message || 'Send error'
             });
         }
 
         if (candidates.length > 20 && index < candidates.length - 1) {
             await wait(150);
         }
+    }
+
+    try {
+        const batchId = new mongoose.Types.ObjectId();
+        const senderName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter';
+        const resolvedTemplateName = template?.name || template?.category || (customSubject ? 'Custom Email' : 'JD Sharing');
+
+        const formattedAttachments = (attachments || []).map(att => {
+            const filename = att.originalname || att.filename || att.name || 'Attachment';
+            const storedName = att.storedFilename || (att.path ? path.basename(att.path) : '');
+            let relativeUrl = att.url || '';
+            if (storedName) {
+                relativeUrl = `uploads/mass-mail/${storedName}`;
+            } else if (att.path) {
+                const normalized = String(att.path).replace(/\\/g, '/');
+                const idx = normalized.indexOf('uploads/');
+                relativeUrl = idx !== -1 ? normalized.substring(idx) : normalized;
+            }
+
+            return {
+                filename,
+                path: att.path || relativeUrl,
+                url: relativeUrl,
+                contentType: att.mimetype || att.contentType || '',
+                size: att.size || (att.buffer ? att.buffer.length : 0)
+            };
+        });
+
+        const logEntries = candidates.map((candidate) => {
+            const dataMap = buildCandidateDataMap(candidate, hiringRequest, company?.name, { customNote });
+            const resolvedSubject = resolveTemplate(subject, dataMap);
+            const resolvedBody = resolveTemplate(htmlBody, dataMap);
+            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+            const isFailed = failedEmails.some(f => String(f.candidateId) === String(candidate._id));
+
+            const candidateDisplayName = (candidate?.candidateName && !candidate.candidateName.includes('@'))
+                ? candidate.candidateName.trim()
+                : `${candidate?.firstName || ''} ${candidate?.lastName || ''}`.trim()
+                || (candidate?.email ? candidate.email.split('@')[0].replace(/[._\-+]/g, ' ').split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '')
+                || 'Candidate';
+
+            return {
+                companyId,
+                sentBy: user?._id || null,
+                senderEmail: user?.email || '',
+                senderName,
+                hiringRequestId: hiringRequest._id,
+                hiringRequestTitle: hiringRequest?.roleDetails?.title || '',
+                candidateId: candidate._id,
+                recipientName: candidateDisplayName,
+                recipientEmail: candidate.email || '',
+                cc: String(cc || ''),
+                bcc: String(bcc || ''),
+                templateId: template?._id || null,
+                templateName: resolvedTemplateName,
+                subject: resolvedSubject || customSubject || '',
+                body: resolvedHtml || resolvedBody || '',
+                attachments: formattedAttachments,
+                status: isFailed ? 'Failed' : 'Sent',
+                batchId,
+                batchTotalCount: candidates.length,
+                sentAt: new Date()
+            };
+        });
+
+        if (logEntries.length > 0) {
+            await TAEmailLog.insertMany(logEntries);
+        }
+    } catch (logErr) {
+        console.error('Failed to create candidate TAEmailLog records:', logErr);
     }
 
     await HRRAuditLog.create({
@@ -762,11 +851,20 @@ exports.createHiringRequest = async (req, res) => {
             details: { status: newRequest.status, workflowId: workflow?._id, previousRequestId }
         });
 
-        // Update the previous request to point to this new one
+        // Update the previous request to point to this new one and inherit visibility if published
         if (previousRequestId) {
-            await HiringRequest.findByIdAndUpdate(previousRequestId, {
-                reopenedToId: newRequest._id
-            });
+            const prevReq = await HiringRequest.findOne({ _id: previousRequestId, companyId: req.companyId });
+            if (prevReq) {
+                if (prevReq.isPublic) {
+                    newRequest.isPublic = true;
+                    newRequest.wasEverPublished = true;
+                }
+                if (prevReq.isResourceGatewayPublic) {
+                    newRequest.isResourceGatewayPublic = true;
+                }
+                prevReq.reopenedToId = newRequest._id;
+                await prevReq.save();
+            }
         }
 
         res.status(201).json(normalizeHiringRequestResponse(newRequest.toObject()));
@@ -1406,8 +1504,15 @@ exports.closeHiringRequest = async (req, res) => {
             )
         };
 
+        const unpublishFromJobBoard = req.body?.unpublishFromJobBoard === true || req.body?.unpublishFromJobBoard === 'true';
+
         existingRequest.status = shouldFullyClose ? 'Closed' : existingRequest.status;
         existingRequest.closedAt = shouldFullyClose ? new Date() : undefined;
+
+        if (unpublishFromJobBoard) {
+            existingRequest.isPublic = false;
+            existingRequest.isResourceGatewayPublic = false;
+        }
 
         await existingRequest.save();
 
@@ -1488,8 +1593,12 @@ exports.toggleJobVisibility = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
         }
 
-        if (request.status !== 'Approved') {
-            return res.status(400).json({ message: 'Only approved jobs can be published to external job boards.' });
+        if (request.status !== 'Approved' && request.status !== 'Closed') {
+            return res.status(400).json({ message: 'Only approved or closed jobs can update job board visibility.' });
+        }
+
+        if (request.status === 'Closed' && req.body.isPublic === true && !request.isPublic) {
+            return res.status(400).json({ message: 'Cannot publish a closed job. Please approve or reopen the requisition first.' });
         }
 
         const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
@@ -1820,25 +1929,136 @@ exports.transferCandidatesBulk = async (req, res) => {
     }
 };
 
-const parseMassMailAttachmentsFromReq = (req) => {
-    const attachments = [];
+const resolveAttachmentContent = (att) => {
+    if (!att) return null;
+    const filename = att.originalname || att.filename || att.name || 'Attachment';
+    const contentType = att.mimetype || att.contentType || 'application/octet-stream';
+
+    // 1. If content buffer is already loaded
+    if (att.content) {
+        const buffer = Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content, 'base64');
+        return {
+            filename,
+            content: buffer,
+            contentType,
+            size: buffer.length
+        };
+    }
+
+    // 2. If local path or url is provided, attempt multi-candidate fallback lookup on disk
+    const targetPath = att.path || att.url || '';
+    if (targetPath && !targetPath.startsWith('http://') && !targetPath.startsWith('https://')) {
+        const candidatePaths = [];
+
+        if (path.isAbsolute(targetPath)) {
+            candidatePaths.push(targetPath);
+        }
+
+        const normalized = String(targetPath).replace(/\\/g, '/');
+        const cleanRelative = normalized.startsWith('/') ? normalized.substring(1) : normalized;
+        const filenameStem = path.basename(cleanRelative);
+
+        candidatePaths.push(path.join(process.cwd(), cleanRelative));
+        candidatePaths.push(path.join(process.cwd(), 'uploads', 'mass-mail', filenameStem));
+        candidatePaths.push(path.resolve(__dirname, '../', cleanRelative));
+        candidatePaths.push(path.resolve(__dirname, '../../', cleanRelative));
+        candidatePaths.push(path.resolve(__dirname, '../../uploads/mass-mail', filenameStem));
+
+        const massMailDir = path.join(process.cwd(), 'uploads', 'mass-mail');
+        if (fs.existsSync(massMailDir)) {
+            try {
+                const files = fs.readdirSync(massMailDir);
+                const stem = filenameStem.split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                const matchedFile = files.find(f => f.includes(stem) || f === filenameStem);
+                if (matchedFile) {
+                    candidatePaths.push(path.join(massMailDir, matchedFile));
+                }
+            } catch (err) {
+                console.warn('[MASS MAIL ATTACHMENT] Error reading massMailDir:', err.message);
+            }
+        }
+
+        const foundPath = candidatePaths.find(p => p && fs.existsSync(p));
+        if (foundPath) {
+            try {
+                const buffer = fs.readFileSync(foundPath);
+                return {
+                    filename,
+                    content: buffer,
+                    contentType,
+                    path: foundPath,
+                    size: buffer.length
+                };
+            } catch (readError) {
+                console.error(`[MASS MAIL ATTACHMENT] Error reading file ${foundPath}:`, readError.message);
+            }
+        }
+    }
+
+    // 3. Remote HTTP/HTTPS URL
+    if (typeof targetPath === 'string' && (targetPath.startsWith('http://') || targetPath.startsWith('https://'))) {
+        return {
+            filename,
+            path: targetPath,
+            url: targetPath,
+            contentType
+        };
+    }
+
+    console.warn(`[MASS MAIL ATTACHMENT] Could not resolve attachment "${filename}" (path: ${targetPath}). Omitting this attachment safely.`);
+    return null;
+};
+
+const parseMassMailAttachmentsFromReq = async (req) => {
+    const rawAttachments = [];
     if (Array.isArray(req.files) && req.files.length > 0) {
-        req.files.forEach((file) => {
-            attachments.push({
-                filename: file.originalname,
-                content: file.buffer,
-                contentType: file.mimetype || 'application/octet-stream'
-            });
-        });
+        for (const file of req.files) {
+            let cloudinaryUrl = file.path || file.secure_url || file.url || '';
+
+            if (!cloudinaryUrl.startsWith('http://') && !cloudinaryUrl.startsWith('https://')) {
+                try {
+                    if (file.buffer) {
+                        cloudinaryUrl = await uploadBufferToCloudinary(file.buffer, file.originalname || 'attachment');
+                    } else if (file.path && fs.existsSync(file.path)) {
+                        cloudinaryUrl = await uploadFilePathToCloudinary(file.path);
+                    }
+                } catch (cErr) {
+                    console.error('[MASS MAIL ATTACHMENT CLOUDINARY UPLOAD ERROR]:', cErr);
+                }
+            }
+
+            if (cloudinaryUrl) {
+                rawAttachments.push({
+                    filename: file.originalname || file.filename || 'Attachment',
+                    originalname: file.originalname || file.filename,
+                    storedFilename: file.filename,
+                    path: cloudinaryUrl,
+                    url: cloudinaryUrl,
+                    content: file.buffer,
+                    contentType: file.mimetype || 'application/octet-stream',
+                    size: file.size || (file.buffer ? file.buffer.length : 0)
+                });
+            }
+        }
     }
     if (Array.isArray(req.body?.attachments)) {
         req.body.attachments.forEach((att) => {
-            if (att && att.filename) {
-                attachments.push(att);
+            if (att && (att.filename || att.name)) {
+                const cUrl = att.url || att.path || '';
+                rawAttachments.push({
+                    ...att,
+                    path: cUrl,
+                    url: cUrl
+                });
             }
         });
     }
-    return attachments;
+
+    const resolved = rawAttachments
+        .map((att) => resolveAttachmentContent(att))
+        .filter(Boolean);
+
+    return resolved;
 };
 
 const parseJsonIfNeeded = (val, fallback = null) => {
@@ -1852,7 +2072,7 @@ exports.sendMassMail = async (req, res) => {
     try {
         const candidateIds = parseJsonIfNeeded(req.body?.candidateIds, []);
         const filters = parseJsonIfNeeded(req.body?.filters, {});
-        const attachments = parseMassMailAttachmentsFromReq(req);
+        const attachments = await parseMassMailAttachmentsFromReq(req);
 
         const result = await sendMassMailForHiringRequest({
             companyId: req.companyId,
@@ -1892,7 +2112,7 @@ exports.sendMassMailBulk = async (req, res) => {
         );
 
         const filters = parseJsonIfNeeded(req.body?.filters, {});
-        const attachments = parseMassMailAttachmentsFromReq(req);
+        const attachments = await parseMassMailAttachmentsFromReq(req);
 
         const results = [];
         let sent = 0;
@@ -3073,5 +3293,206 @@ exports.getTAClients = async (req, res) => {
     } catch (error) {
         console.error('getTAClients error:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
+// --- getTAEmailHistory ---
+exports.getTAEmailHistory = async (req, res) => {
+    try {
+        setNoCache(res);
+        const { companyId } = req;
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const reqLimit = Number(req.query.limit) || 50;
+        const limit = [50, 100, 150].includes(reqLimit) ? reqLimit : 50;
+        const search = String(req.query.search || '').trim();
+        const hiringRequestId = req.query.hiringRequestId;
+        const status = req.query.status;
+        const templateName = req.query.templateName;
+
+        const query = { companyId };
+
+        if (hiringRequestId && mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            query.hiringRequestId = hiringRequestId;
+        }
+
+        if (status && status !== 'All' && ['Sent', 'Failed', 'Pending'].includes(status)) {
+            query.status = status;
+        }
+
+        if (templateName && templateName !== 'All') {
+            query.templateName = templateName;
+        }
+
+        if (search) {
+            const regex = new RegExp(search, 'i');
+            query.$or = [
+                { recipientName: regex },
+                { recipientEmail: regex },
+                { subject: regex },
+                { templateName: regex },
+                { senderName: regex },
+                { senderEmail: regex },
+                { hiringRequestTitle: regex }
+            ];
+        }
+
+        const total = await TAEmailLog.countDocuments(query);
+        // Exclude heavy 'body' HTML string from list view for ultra-fast server response
+        const logs = await TAEmailLog.find(query)
+            .select('-body')
+            .populate('sentBy', 'firstName lastName email')
+            .populate('candidateId', 'firstName lastName candidateName email mobile')
+            .populate('hiringRequestId', 'requestId roleDetails.title client')
+            .sort({ sentAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean();
+
+        res.status(200).json({
+            logs,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+    } catch (error) {
+        console.error('getTAEmailHistory error:', error);
+        res.status(500).json({ message: 'Failed to fetch TA email history', error: error.message });
+    }
+};
+
+// --- getTAEmailHistoryById ---
+exports.getTAEmailHistoryById = async (req, res) => {
+    try {
+        setNoCache(res);
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid email history log ID' });
+        }
+
+        const log = await TAEmailLog.findOne({ _id: id, companyId: req.companyId })
+            .populate('sentBy', 'firstName lastName email')
+            .populate('candidateId', 'firstName lastName candidateName email mobile')
+            .populate('hiringRequestId', 'requestId roleDetails.title client')
+            .lean();
+
+        if (!log) {
+            return res.status(404).json({ message: 'Email log not found' });
+        }
+
+        res.status(200).json(log);
+    } catch (error) {
+        console.error('getTAEmailHistoryById error:', error);
+        res.status(500).json({ message: 'Failed to fetch email details', error: error.message });
+    }
+};
+
+// --- downloadTAEmailAttachment ---
+exports.downloadTAEmailAttachment = async (req, res) => {
+    try {
+        const { id, attachmentIndex } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid email history log ID' });
+        }
+
+        const log = await TAEmailLog.findOne({ _id: id, companyId: req.companyId }).lean();
+        if (!log || !Array.isArray(log.attachments) || !log.attachments[attachmentIndex]) {
+            return res.status(404).json({ message: 'Attachment not found in log record' });
+        }
+
+        const att = log.attachments[attachmentIndex];
+        const filePath = att.url || att.path;
+
+        // 1. Direct Cloudinary / HTTP redirect
+        if (filePath && (filePath.startsWith('http://') || filePath.startsWith('https://'))) {
+            return res.redirect(filePath);
+        }
+
+        // 2. Legacy local file fallback -> auto-upload to Cloudinary to heal legacy record
+        const candidatePaths = [];
+
+        if (filePath) {
+            if (path.isAbsolute(filePath)) {
+                candidatePaths.push(filePath);
+            }
+            const normalized = filePath.replace(/\\/g, '/');
+            const cleanRelative = normalized.startsWith('/') ? normalized.substring(1) : normalized;
+
+            candidatePaths.push(path.join(process.cwd(), cleanRelative));
+            candidatePaths.push(path.resolve(__dirname, '../', cleanRelative));
+            candidatePaths.push(path.resolve(__dirname, '../../', cleanRelative));
+        }
+
+        if (att.path) {
+            candidatePaths.push(att.path);
+        }
+
+        const massMailDir = path.join(process.cwd(), 'uploads', 'mass-mail');
+        if (fs.existsSync(massMailDir)) {
+            try {
+                const files = fs.readdirSync(massMailDir);
+                if (att.filename) {
+                    const stem = att.filename.split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                    const matchedFile = files.find(f => f.includes(stem) || f === att.filename);
+                    if (matchedFile) {
+                        candidatePaths.push(path.join(massMailDir, matchedFile));
+                    }
+                }
+            } catch (dirErr) {
+                // ignore
+            }
+        }
+
+        const foundPath = candidatePaths.find(p => p && fs.existsSync(p));
+
+        if (foundPath) {
+            try {
+                const cUrl = await uploadFilePathToCloudinary(foundPath);
+                if (cUrl) {
+                    await TAEmailLog.updateOne(
+                        { _id: id },
+                        { $set: { [`attachments.${attachmentIndex}.url`]: cUrl, [`attachments.${attachmentIndex}.path`]: cUrl } }
+                    ).catch(() => {});
+                    return res.redirect(cUrl);
+                }
+            } catch (upErr) {
+                console.error('[LEGACY ATTACHMENT CLOUDINARY UPLOAD ERROR]:', upErr);
+            }
+            return res.download(foundPath, att.filename || 'attachment');
+        }
+
+        // 3. Search Cloudinary resources for matching legacy file stem
+        try {
+            if (att.filename || filePath) {
+                const stem = (att.filename || path.basename(filePath)).split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                for (const resType of ['raw', 'image', 'video']) {
+                    const searchRes = await cloudinary.api.resources({
+                        type: 'upload',
+                        prefix: `mass_mail_attachments/${stem}`,
+                        resource_type: resType,
+                        max_results: 5
+                    });
+                    if (searchRes.resources && searchRes.resources.length > 0) {
+                        const foundUrl = searchRes.resources[0].secure_url || searchRes.resources[0].url;
+                        await TAEmailLog.updateOne(
+                            { _id: id },
+                            { $set: { [`attachments.${attachmentIndex}.url`]: foundUrl, [`attachments.${attachmentIndex}.path`]: foundUrl } }
+                        ).catch(() => {});
+                        return res.redirect(foundUrl);
+                    }
+                }
+            }
+        } catch (cSearchErr) {
+            console.warn('[CLOUDINARY FALLBACK SEARCH ERROR]:', cSearchErr.message);
+        }
+
+        return res.status(404).json({
+            message: 'This attachment is no longer available on Cloudinary or server.'
+        });
+    } catch (error) {
+        console.error('downloadTAEmailAttachment error:', error);
+        return res.status(500).json({ message: 'Failed to download attachment', error: error.message });
     }
 };

@@ -5,6 +5,7 @@ const Company = require('../models/Company');
 const { sendEmail } = require('../services/emailService');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const EmailTemplate = require('../models/EmailTemplate');
+const TAEmailLog = require('../models/TAEmailLog');
 const NotificationService = require('../services/notificationService');
 const OnboardingEmployee = require('../models/OnboardingEmployee');
 const CandidateSource = require('../models/CandidateSource');
@@ -2436,6 +2437,8 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
     try {
         if (!candidate) return;
 
+        const roleTitle = candidate.hiringRequestId?.roleDetails?.title || candidate.roleTitle || candidate.position || '';
+
         let template = null;
         if (round.emailTemplateId) {
             template = await EmailTemplate.findOne({ _id: round.emailTemplateId, companyId }).lean();
@@ -2543,36 +2546,109 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
         if (candidate.email) {
             const subject = template?.subject ? processTemplate(template.subject, false) : defaultSubject;
             const htmlBody = template?.htmlBody ? processTemplate(template.htmlBody, true) : defaultCandidateBody;
-            await sendEmailForCompany({
-                companyId,
-                emailAccountId: effectiveEmailAccountId,
-                to: candidate.email,
-                cc: effectiveCc || undefined,
-                bcc: effectiveBcc || undefined,
-                subject,
-                html: htmlBody,
-                user
-            });
+            try {
+                await sendEmailForCompany({
+                    companyId,
+                    emailAccountId: effectiveEmailAccountId,
+                    to: candidate.email,
+                    cc: effectiveCc || undefined,
+                    bcc: effectiveBcc || undefined,
+                    subject,
+                    html: htmlBody,
+                    user
+                });
+
+                await TAEmailLog.create({
+                    companyId,
+                    sentBy: user?._id || null,
+                    senderEmail: user?.email || '',
+                    senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                    hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
+                    hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
+                    candidateId: candidate._id,
+                    recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                    recipientEmail: candidate.email,
+                    cc: String(effectiveCc || ''),
+                    bcc: String(effectiveBcc || ''),
+                    templateId: template?._id || null,
+                    templateName: template?.name || 'Interview Invitation',
+                    subject,
+                    body: htmlBody,
+                    status: 'Sent',
+                    sentAt: new Date()
+                });
+            } catch (candEmailErr) {
+                console.error('Error sending interview schedule email to candidate:', candEmailErr);
+                try {
+                    await TAEmailLog.create({
+                        companyId,
+                        sentBy: user?._id || null,
+                        senderEmail: user?.email || '',
+                        senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                        hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
+                        hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
+                        candidateId: candidate._id,
+                        recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                        recipientEmail: candidate.email,
+                        cc: String(effectiveCc || ''),
+                        bcc: String(effectiveBcc || ''),
+                        templateId: template?._id || null,
+                        templateName: template?.name || 'Interview Invitation',
+                        subject,
+                        body: htmlBody,
+                        status: 'Failed',
+                        errorReason: candEmailErr.message,
+                        sentAt: new Date()
+                    });
+                } catch (logErr) {}
+            }
         }
 
         if (Array.isArray(round.assignedTo) && round.assignedTo.length > 0) {
             for (const interviewerObj of round.assignedTo) {
                 const email = typeof interviewerObj === 'object' ? interviewerObj.email : null;
+                const interviewerName = typeof interviewerObj === 'object'
+                    ? `${interviewerObj.firstName || ''} ${interviewerObj.lastName || ''}`.trim()
+                    : 'Interviewer';
                 if (email) {
                     const subject = `[Interviewer Notice] Interview Scheduled: ${round.levelName} - ${candidate.candidateName}`;
                     const htmlBody = template?.htmlBody
                         ? processTemplate(template.htmlBody, true)
                         : defaultInterviewerBody;
-                    await sendEmailForCompany({
-                        companyId,
-                        emailAccountId: effectiveEmailAccountId,
-                        to: email,
-                        cc: effectiveCc || undefined,
-                        bcc: effectiveBcc || undefined,
-                        subject,
-                        html: htmlBody,
-                        user
-                    });
+                    try {
+                        await sendEmailForCompany({
+                            companyId,
+                            emailAccountId: effectiveEmailAccountId,
+                            to: email,
+                            cc: effectiveCc || undefined,
+                            bcc: effectiveBcc || undefined,
+                            subject,
+                            html: htmlBody,
+                            user
+                        });
+
+                        await TAEmailLog.create({
+                            companyId,
+                            sentBy: user?._id || null,
+                            senderEmail: user?.email || '',
+                            senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                            hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
+                            hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
+                            candidateId: candidate._id,
+                            recipientName: interviewerName ? `[Interviewer] ${interviewerName}` : '[Interviewer]',
+                            recipientEmail: email,
+                            cc: String(effectiveCc || ''),
+                            bcc: String(effectiveBcc || ''),
+                            templateId: template?._id || null,
+                            templateName: 'Interviewer Notice',
+                            subject,
+                            body: htmlBody,
+                            status: 'Sent',
+                            sentAt: new Date()
+                        });
+                    } catch (intErr) {
+                        console.error('Error sending interviewer schedule email:', intErr);
+                    }
                 }
             }
         }

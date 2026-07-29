@@ -172,11 +172,23 @@ const sendEmail = async ({
             console.log(`[EMAIL] Attempting to send via Brevo API: ${to}`);
 
             // Format attachments for Brevo API if they exist
-            const brevoAttachments = attachments.map(att => ({
-                name: att.filename || att.name,
-                content: att.content ? att.content.toString('base64') : undefined,
-                url: att.path && att.path.startsWith('http') ? att.path : undefined
-            })).filter(att => att.content || att.url);
+            const brevoAttachments = attachments.map(att => {
+                let contentBase64 = undefined;
+                if (att.content) {
+                    contentBase64 = Buffer.isBuffer(att.content)
+                        ? att.content.toString('base64')
+                        : String(att.content);
+                }
+                const url = (att.path && att.path.startsWith('http'))
+                    ? att.path
+                    : (att.url && att.url.startsWith('http') ? att.url : undefined);
+
+                return {
+                    name: att.filename || att.name,
+                    content: contentBase64,
+                    url
+                };
+            }).filter(att => att.name && (att.content || att.url));
 
             const parseEmailListForBrevo = (emails) => {
                 if (!emails) return undefined;

@@ -5,7 +5,7 @@ const taController = require('../controllers/talentAcquisitionController');
 const taAccessSettingsController = require('../controllers/taAccessSettingsController');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorizeAny } = require('../middlewares/authorize');
-const { upload } = require('../config/cloudinary');
+const { upload, uploadMassMailAttachments } = require('../config/cloudinary');
 const PublicApplication = require('../models/PublicApplication');
 const Candidate = require('../models/Candidate');
 const { HiringRequest: HiringRequestModel } = require('../models/HiringRequest');
@@ -94,14 +94,11 @@ router.get('/hiring-request/:id/previous-candidates', protect, taController.getP
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
 router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
-const multer = require('multer');
-const massMailUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 15 * 1024 * 1024 }
-});
-
-router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), massMailUpload.array('attachments', 10), taController.sendMassMail);
-router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), massMailUpload.array('attachments', 10), taController.sendMassMailBulk);
+router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), uploadMassMailAttachments.array('attachments', 10), taController.sendMassMail);
+router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), uploadMassMailAttachments.array('attachments', 10), taController.sendMassMailBulk);
+router.get('/email-history', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistory);
+router.get('/email-history/:id', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistoryById);
+router.get('/email-history/:id/attachment/:attachmentIndex', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.downloadTAEmailAttachment);
 
 // Analytics
 router.get('/analytics/global', protect, requireTAAnalyticsAccess, taController.getGlobalAnalytics);

@@ -231,13 +231,23 @@ const resolveEmailConfig = async (companyId, emailAccountId = null) => {
 };
 
 const mapBrevoAttachments = (attachments = []) => (
-    attachments.map((attachment) => ({
-        name: attachment.filename || attachment.name,
-        content: attachment.content ? Buffer.from(attachment.content).toString('base64') : undefined,
-        url: typeof attachment.path === 'string' && attachment.path.startsWith('http')
+    attachments.map((attachment) => {
+        let contentBase64 = undefined;
+        if (attachment.content) {
+            contentBase64 = Buffer.isBuffer(attachment.content)
+                ? attachment.content.toString('base64')
+                : String(attachment.content);
+        }
+        const url = (typeof attachment.path === 'string' && attachment.path.startsWith('http'))
             ? attachment.path
-            : undefined
-    })).filter((attachment) => attachment.name && (attachment.content || attachment.url))
+            : (typeof attachment.url === 'string' && attachment.url.startsWith('http') ? attachment.url : undefined);
+
+        return {
+            name: attachment.filename || attachment.name,
+            content: contentBase64,
+            url
+        };
+    }).filter((attachment) => attachment.name && (attachment.content || attachment.url))
 );
 
 const parseEmailListForBrevo = (emails) => {
