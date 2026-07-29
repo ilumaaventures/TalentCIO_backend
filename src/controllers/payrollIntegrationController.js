@@ -79,10 +79,11 @@ const getEmployees = async (req, res) => {
     }
 };
 
-const isDayWeeklyOff = (dayName, offDaysList) => {
+const isDayWeeklyOff = (dayName, dateStr, offDaysList) => {
     if (!Array.isArray(offDaysList) || offDaysList.length === 0) return false;
     const lowerDay = String(dayName || '').toLowerCase();
     const shortDay = lowerDay.slice(0, 3);
+    const targetDateStr = String(dateStr || '').trim().toLowerCase();
 
     const dayNumberMap = {
         sunday: '0',
@@ -97,6 +98,7 @@ const isDayWeeklyOff = (dayName, offDaysList) => {
 
     return offDaysList.some((off) => {
         const str = String(off || '').trim().toLowerCase();
+        if (targetDateStr && str === targetDateStr) return true;
         return str === lowerDay || str === shortDay || (dayNum && str === dayNum);
     });
 };
@@ -196,9 +198,10 @@ const getAttendanceSummary = async (req, res) => {
                 let workedOffDays = 0;
                 let totalWorkingHours = 0;
 
-                const userWeeklyOffs = Array.isArray(user.customFlexibleOffDays) && user.customFlexibleOffDays.length > 0
-                    ? user.customFlexibleOffDays
-                    : weeklyOffs;
+                const userWeeklyOffs = [
+                    ...(Array.isArray(weeklyOffs) ? weeklyOffs : []),
+                    ...(Array.isArray(user.customFlexibleOffDays) ? user.customFlexibleOffDays : [])
+                ];
 
                 const joiningDateStr = user.joiningDate ? format(toLocalTimezoneRep(user.joiningDate), 'yyyy-MM-dd') : null;
                 const dateOfLeavingStr = user.dateOfLeaving ? format(toLocalTimezoneRep(user.dateOfLeaving), 'yyyy-MM-dd') : null;
@@ -215,7 +218,7 @@ const getAttendanceSummary = async (req, res) => {
                     const hasLeft = dateOfLeavingStr && dateStr > dateOfLeavingStr;
 
                     if (hasJoined && !hasLeft) {
-                        const isWeeklyOffDay = isDayWeeklyOff(dayName, userWeeklyOffs);
+                        const isWeeklyOffDay = isDayWeeklyOff(dayName, dateStr, userWeeklyOffs);
                         const holidayObj = holidayMap.get(dateStr);
                         const isHolidayDay = !!holidayObj;
                         const isOffDay = isWeeklyOffDay || isHolidayDay;
