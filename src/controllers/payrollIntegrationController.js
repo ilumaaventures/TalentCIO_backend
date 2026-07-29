@@ -118,6 +118,9 @@ const getAttendanceSummary = async (req, res) => {
                 ? req.company.settings.attendance.weeklyOff
                 : ['Sunday'];
 
+        // Bug 7 fix: used to assign working hours for present_only employees who have no clock times
+        const companyWorkingHours = req.company?.settings?.attendance?.workingHours || 8;
+
         const [attendanceRecords, approvedLeaves, leaveConfigs, holidays, users] = await Promise.all([
             Attendance.find({
                 companyId: req.companyId,
@@ -239,11 +242,18 @@ const getAttendanceSummary = async (req, res) => {
                         let approvalStatus = null;
 
                         if (attendanceRec) {
-                            clockIn = attendanceRec.clockInIST || (attendanceRec.clockIn ? format(toLocalTimezoneRep(attendanceRec.clockIn), 'hh:mm a') : null);
-                            clockOut = attendanceRec.clockOutIST || (attendanceRec.clockOut ? format(toLocalTimezoneRep(attendanceRec.clockOut), 'hh:mm a') : null);
+                            // Bug 2 fix: always derive from raw Date fields for a consistent 'hh:mm a' format.
+                            // clockInIST is a full locale string ("7/29/2026, 9:15:30 AM") which is a different
+                            // format from the format() fallback, causing inconsistent data in the sync payload.
+                            clockIn = attendanceRec.clockIn ? format(toLocalTimezoneRep(attendanceRec.clockIn), 'hh:mm a') : null;
+                            clockOut = attendanceRec.clockOut ? format(toLocalTimezoneRep(attendanceRec.clockOut), 'hh:mm a') : null;
                             shiftName = attendanceRec.shiftName || null;
                             approvalStatus = attendanceRec.approvalStatus || null;
-                            if (attendanceRec.clockIn && attendanceRec.clockOut) {
+                            if (attendanceRec.attendanceMode === 'present_only' && status === 'PRESENT') {
+                                // Bug 7 fix: present_only mode has no clock times — assign company default
+                                // working hours so totalWorkingHours is not always 0 for these employees.
+                                workingHours = companyWorkingHours;
+                            } else if (attendanceRec.clockIn && attendanceRec.clockOut) {
                                 const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
                                 if (diffMs > 0) {
                                     workingHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
@@ -270,6 +280,9 @@ const getAttendanceSummary = async (req, res) => {
                                 const credit = status === 'HALF_DAY' ? 0.5 : 1;
                                 workedOffDays += credit;
                                 totalWorkingHours += workingHours;
+                                // Bug 1 fix: employee actually worked on this off-day, so override
+                                // dayStatus to reflect actual work instead of WEEKLY_OFF / HOLIDAY.
+                                dayStatus = status === 'HALF_DAY' ? 'HALF_DAY' : 'PRESENT';
                             }
 
                             if (matchingLeave) {
@@ -300,14 +313,17 @@ const getAttendanceSummary = async (req, res) => {
                                         absentDays += 0.5;
                                     }
                                 } else if (status === 'LEAVE') {
-                                    dayStatus = 'LEAVE';
                                     if (matchingLeave) {
+                                        dayStatus = 'LEAVE';
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (isPaidLeave) paidLeaves += leaveDays;
                                         else unpaidLeaves += leaveDays;
                                         if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
-                                        paidLeaves += 1;
+                                        // Bug 3 fix: attendance record says LEAVE but no approved LeaveRequest
+                                        // exists — treat as absent instead of giving a free paid leave day.
+                                        dayStatus = 'ABSENT';
+                                        absentDays += 1;
                                     }
                                 } else if (status === 'ABSENT') {
                                     if (matchingLeave) {
@@ -337,9 +353,9 @@ const getAttendanceSummary = async (req, res) => {
 
                         dailyDetails.push({
                             date: dateStr,
-                            dayName,
+                            // dayName removed: trivially derivable from `date` by any consumer
                             status: dayStatus,
-                            isOffDay,
+                            // isOffDay removed: exact duplicate of (isWeeklyOff || isHoliday)
                             isWeeklyOff: isWeeklyOffDay,
                             isHoliday: isHolidayDay,
                             holidayName: holidayObj?.name || null,
@@ -349,15 +365,20 @@ const getAttendanceSummary = async (req, res) => {
                             clockOut,
                             workingHours,
                             shiftName,
-                            approvalStatus
+                            // approvalStatus removed: HRMS-internal approval workflow,
+                            // not relevant to payroll calculation
                         });
                     }
 
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
+                // Bug 6 fix: paidDays must only count paid working days (present + paid leaves).
+                // The old formula added weeklyOffDays + holidayDays + workedOffDays which inflated
+                // paidDays to near-total-month values, causing salary over-payment if payroll uses
+                // paidDays as the salary multiplier.
                 const calculatedPaidDays = Math.min(
-                    presentDays + paidLeaves + weeklyOffDays + holidayDays + workedOffDays,
+                    presentDays + paidLeaves,
                     totalDaysInMonth
                 );
 
@@ -370,7 +391,8 @@ const getAttendanceSummary = async (req, res) => {
                 }
 
                 return {
-                    employeeId: String(user._id),
+                    // employeeId removed: exposes internal MongoDB _id to an external system.
+                    // employeeNumber (employeeCode) is the correct external identifier.
                     employeeNumber: user.employeeCode,
                     totalDaysInMonth,
                     elapsedDays,
@@ -386,10 +408,13 @@ const getAttendanceSummary = async (req, res) => {
                     paidDays: calculatedPaidDays,
                     totalWorkingHours: Number(totalWorkingHours.toFixed(2)),
                     dailyDetails,
-                    workingDays: totalDaysInMonth,
+                    // workingDays removed: after Bug 5 fix it was identical to workingDaysTillDate
+                    // — a pure duplicate field that added confusion.
                 };
             })
-            .sort((left, right) => left.employeeNumber.localeCompare(right.employeeNumber));
+            // Bug 8 fix: guard against null/undefined employeeCode to prevent TypeError crash
+            // (even though the filter above should prevent it, defensive code avoids a full 500).
+            .sort((left, right) => (left.employeeNumber || '').localeCompare(right.employeeNumber || ''));
 
         const responsePayload = buildEncryptedResponseIfNeeded(response, req.payrollIntegration);
         res.json(responsePayload);
