@@ -115,20 +115,23 @@ const getAttendanceSummary = async (req, res) => {
             User.find({ companyId: req.companyId }, null, { includeDeleted: true }).lean()
         ]);
 
-        const holidayDateSet = new Set(
-            holidays.map((holiday) => toLocalTimezoneRep(holiday.date).toDateString())
-        );
+        const holidayMap = new Map();
+        holidays.forEach((holiday) => {
+            const dateStr = format(toLocalTimezoneRep(holiday.date), 'yyyy-MM-dd');
+            holidayMap.set(dateStr, holiday);
+        });
+
         const leaveConfigMap = new Map(
             leaveConfigs.map((config) => [config.leaveType, config])
         );
 
-        // Build attendance map: userId_dateStr -> status
+        // Build attendance map: userId_dateStr -> attendanceRecord
         const attendanceMap = new Map();
         attendanceRecords.forEach((rec) => {
             const uid = String(rec.user?._id || rec.user || '');
             if (uid && rec.date) {
                 const dateStr = format(toLocalTimezoneRep(rec.date), 'yyyy-MM-dd');
-                attendanceMap.set(`${uid}_${dateStr}`, rec.status || 'PRESENT');
+                attendanceMap.set(`${uid}_${dateStr}`, rec);
             }
         });
 
@@ -143,9 +146,6 @@ const getAttendanceSummary = async (req, res) => {
             ? Math.min(Number.parseInt(toLocalTimezoneRep(now).getDate(), 10), totalDaysInMonth)
             : totalDaysInMonth;
 
-        // Build evalEnd as IST end-of-day for elapsedDays so it is not affected
-        // by the server's local timezone. parseDateAsIST returns a UTC Date that
-        // represents IST midnight; adding 23:59:59 gives IST end-of-day.
         const evalEndPadded = String(elapsedDays).padStart(2, '0');
         const evalEndMonthPadded = String(parsedMonth).padStart(2, '0');
         const evalEnd = parseDateAsIST(`${parsedYear}-${evalEndMonthPadded}-${evalEndPadded}`);
@@ -153,8 +153,6 @@ const getAttendanceSummary = async (req, res) => {
 
         const response = users
             .filter((user) => {
-                // Employees without an employeeCode cannot be matched by MyBill;
-                // omit them rather than emitting a raw ObjectId as employeeNumber.
                 if (!user.employeeCode) return false;
                 return user.isActive
                     || attendanceRecords.some(r => String(r.user?._id || r.user) === String(user._id))
@@ -163,119 +161,184 @@ const getAttendanceSummary = async (req, res) => {
             .map((user) => {
                 const userIdStr = String(user._id);
                 let workingDaysTillDate = 0;
-                let weeklyOffDays = 0;      // paid rest days (weekly offs within active period)
-                let holidayDays = 0;        // paid company holidays (within active period)
+                let weeklyOffDays = 0;
+                let holidayDays = 0;
                 let presentDays = 0;
                 let absentDays = 0;
+                let halfDays = 0;
                 let paidLeaves = 0;
                 let unpaidLeaves = 0;
+                let workedOffDays = 0;
+                let totalWorkingHours = 0;
 
-                // Resolve weekly off days per employee: use customFlexibleOffDays if set, otherwise company setting
                 const userWeeklyOffs = Array.isArray(user.customFlexibleOffDays) && user.customFlexibleOffDays.length > 0
                     ? user.customFlexibleOffDays
                     : weeklyOffs;
 
-                const joiningTime = user.joiningDate ? new Date(user.joiningDate).getTime() : 0;
-                const leavingTime = user.dateOfLeaving ? new Date(user.dateOfLeaving).getTime() : Infinity;
+                const joiningDateStr = user.joiningDate ? format(toLocalTimezoneRep(user.joiningDate), 'yyyy-MM-dd') : null;
+                const dateOfLeavingStr = user.dateOfLeaving ? format(toLocalTimezoneRep(user.dateOfLeaving), 'yyyy-MM-dd') : null;
 
-                // Loop through days from 1st of month up to elapsedDays (no future dates)
+                const userApprovedLeaves = approvedLeaves.filter(l => String(l.user?._id || l.user || '') === userIdStr);
+
+                const dailyDetails = [];
+
                 const cursor = new Date(start);
                 while (cursor <= evalEnd && cursor < end) {
-                    const cursorTime = cursor.getTime();
-                    const hasJoined = cursorTime >= joiningTime;
-                    const hasLeft = cursorTime > leavingTime;
+                    const localCursor = toLocalTimezoneRep(cursor);
+                    const dateStr = format(localCursor, 'yyyy-MM-dd');
+                    const dayName = format(localCursor, 'EEEE');
+
+                    const hasJoined = !joiningDateStr || dateStr >= joiningDateStr;
+                    const hasLeft = dateOfLeavingStr && dateStr > dateOfLeavingStr;
 
                     if (hasJoined && !hasLeft) {
-                        const localCursor = toLocalTimezoneRep(cursor);
-                        const dateStr = format(localCursor, 'yyyy-MM-dd');
-                        const dayName = format(localCursor, 'EEEE');
-                        const isWeeklyOff = userWeeklyOffs.includes(dayName);
-                        // holidayDateSet keys are IST toDateString() values (built at line 118);
-                        // use the already-converted localCursor here to match the same timezone.
-                        const isHoliday = holidayDateSet.has(localCursor.toDateString());
-                        const isOffDay = isWeeklyOff || isHoliday;
+                        const isWeeklyOffDay = userWeeklyOffs.includes(dayName);
+                        const holidayObj = holidayMap.get(dateStr);
+                        const isHolidayDay = !!holidayObj;
+                        const isOffDay = isWeeklyOffDay || isHolidayDay;
 
-                        const attendanceKey = `${userIdStr}_${dateStr}`;
-                        const status = attendanceMap.get(attendanceKey);
-                        const hasEntry = attendanceMap.has(attendanceKey);
+                        const attendanceRec = attendanceMap.get(`${userIdStr}_${dateStr}`);
+                        const status = attendanceRec?.status;
+                        const hasEntry = !!attendanceRec;
 
-                        const matchingLeave = approvedLeaves.find(l => {
-                            const lUserId = String(l.user?._id || l.user || '');
-                            if (lUserId !== userIdStr) return false;
-                            const lStart = toLocalTimezoneRep(l.startDate).setHours(0, 0, 0, 0);
-                            const lEnd   = toLocalTimezoneRep(l.endDate).setHours(23, 59, 59, 999);
-                            return cursorTime >= lStart && cursorTime <= lEnd;
+                        const matchingLeave = userApprovedLeaves.find(l => {
+                            const lStartStr = format(toLocalTimezoneRep(l.startDate), 'yyyy-MM-dd');
+                            const lEndStr = format(toLocalTimezoneRep(l.endDate), 'yyyy-MM-dd');
+                            return dateStr >= lStartStr && dateStr <= lEndStr;
                         });
 
+                        let dayStatus = 'ABSENT';
+                        let leaveType = null;
+                        let isPaidLeave = null;
+                        let clockIn = null;
+                        let clockOut = null;
+                        let workingHours = 0;
+                        let shiftName = null;
+                        let approvalStatus = null;
+
+                        if (attendanceRec) {
+                            clockIn = attendanceRec.clockInIST || (attendanceRec.clockIn ? format(toLocalTimezoneRep(attendanceRec.clockIn), 'hh:mm a') : null);
+                            clockOut = attendanceRec.clockOutIST || (attendanceRec.clockOut ? format(toLocalTimezoneRep(attendanceRec.clockOut), 'hh:mm a') : null);
+                            shiftName = attendanceRec.shiftName || null;
+                            approvalStatus = attendanceRec.approvalStatus || null;
+                            if (attendanceRec.clockIn && attendanceRec.clockOut) {
+                                const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
+                                if (diffMs > 0) {
+                                    workingHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
+                                }
+                            }
+                        }
+
+                        if (matchingLeave) {
+                            leaveType = matchingLeave.leaveType;
+                            const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
+                            isPaidLeave = leaveConfig?.isPaid !== false;
+                        }
+
                         if (isOffDay) {
-                            // Weekly offs and company holidays are paid rest/off days — count them toward paidDays
-                            // regardless of whether the employee clocked in.
-                            if (isWeeklyOff) {
+                            if (isWeeklyOffDay) {
                                 weeklyOffDays += 1;
-                            } else if (isHoliday) {
+                                dayStatus = 'WEEKLY_OFF';
+                            } else if (isHolidayDay) {
                                 holidayDays += 1;
+                                dayStatus = 'HOLIDAY';
                             }
-                            // If the employee voluntarily clocked in on an off day, credit presence.
-                            if (hasEntry) {
-                                if (status === 'PRESENT') presentDays += 1;
-                                else if (status === 'HALF_DAY') presentDays += 0.5;
+
+                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY' || clockIn)) {
+                                const credit = status === 'HALF_DAY' ? 0.5 : 1;
+                                workedOffDays += credit;
+                                totalWorkingHours += workingHours;
                             }
+
                             if (matchingLeave) {
                                 const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
                                 if (leaveConfig?.sandwichRule) {
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
-                                    if (leaveConfig.isPaid === false) unpaidLeaves += leaveDays;
-                                    else paidLeaves += leaveDays;
+                                    if (isPaidLeave) paidLeaves += leaveDays;
+                                    else unpaidLeaves += leaveDays;
+                                    dayStatus = 'LEAVE';
                                 }
                             }
                         } else {
                             workingDaysTillDate += 1;
+                            totalWorkingHours += workingHours;
 
                             if (hasEntry) {
                                 if (status === 'PRESENT') {
                                     presentDays += 1;
+                                    dayStatus = 'PRESENT';
                                 } else if (status === 'HALF_DAY') {
                                     presentDays += 0.5;
+                                    halfDays += 1;
+                                    dayStatus = 'HALF_DAY';
                                     if (matchingLeave) {
-                                        const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
-                                        if (leaveConfig?.isPaid === false) unpaidLeaves += 0.5;
-                                        else paidLeaves += 0.5;
+                                        if (isPaidLeave) paidLeaves += 0.5;
+                                        else unpaidLeaves += 0.5;
                                     } else {
                                         absentDays += 0.5;
                                     }
-                                } else if (status === 'ABSENT') {
-                                    absentDays += 1;
                                 } else if (status === 'LEAVE') {
+                                    dayStatus = 'LEAVE';
                                     if (matchingLeave) {
-                                        const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
-                                        if (leaveConfig?.isPaid === false) unpaidLeaves += leaveDays;
-                                        else paidLeaves += leaveDays;
+                                        if (isPaidLeave) paidLeaves += leaveDays;
+                                        else unpaidLeaves += leaveDays;
+                                        if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
+                                        paidLeaves += 1;
+                                    }
+                                } else if (status === 'ABSENT') {
+                                    if (matchingLeave) {
+                                        dayStatus = 'LEAVE';
+                                        const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
+                                        if (isPaidLeave) paidLeaves += leaveDays;
+                                        else unpaidLeaves += leaveDays;
+                                        if (matchingLeave.isHalfDay) absentDays += 0.5;
+                                    } else {
+                                        dayStatus = 'ABSENT';
                                         absentDays += 1;
                                     }
                                 }
                             } else {
                                 if (matchingLeave) {
-                                    const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
+                                    dayStatus = 'LEAVE';
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
-                                    if (leaveConfig?.isPaid === false) unpaidLeaves += leaveDays;
-                                    else paidLeaves += leaveDays;
+                                    if (isPaidLeave) paidLeaves += leaveDays;
+                                    else unpaidLeaves += leaveDays;
                                     if (matchingLeave.isHalfDay) absentDays += 0.5;
                                 } else {
+                                    dayStatus = 'ABSENT';
                                     absentDays += 1;
                                 }
                             }
                         }
+
+                        dailyDetails.push({
+                            date: dateStr,
+                            dayName,
+                            status: dayStatus,
+                            isOffDay,
+                            isWeeklyOff: isWeeklyOffDay,
+                            isHoliday: isHolidayDay,
+                            holidayName: holidayObj?.name || null,
+                            leaveType,
+                            isPaidLeave,
+                            clockIn,
+                            clockOut,
+                            workingHours,
+                            shiftName,
+                            approvalStatus
+                        });
                     }
 
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                // paidDays = working days present + paid leave days + weekly off days + company holidays.
-                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays + holidayDays;
+                const calculatedPaidDays = Math.min(
+                    presentDays + paidLeaves + weeklyOffDays + holidayDays + workedOffDays,
+                    totalDaysInMonth
+                );
 
-                // Validation invariant checks (working-day tally only — weekly offs are excluded).
                 if (workingDaysTillDate > elapsedDays) {
                     console.warn(`[Validation Warning] user ${user._id}: workingDaysTillDate (${workingDaysTillDate}) > elapsedDays (${elapsedDays})`);
                 }
@@ -286,7 +349,7 @@ const getAttendanceSummary = async (req, res) => {
 
                 return {
                     employeeId: String(user._id),
-                    employeeNumber: user.employeeCode, // always present — filtered above
+                    employeeNumber: user.employeeCode,
                     totalDaysInMonth,
                     elapsedDays,
                     workingDaysTillDate,
@@ -294,10 +357,13 @@ const getAttendanceSummary = async (req, res) => {
                     holidayDays,
                     presentDays,
                     absentDays,
+                    halfDays,
                     paidLeaves,
                     unpaidLeaves,
+                    workedOffDays,
                     paidDays: calculatedPaidDays,
-                    // Legacy compatibility aliases
+                    totalWorkingHours: Number(totalWorkingHours.toFixed(2)),
+                    dailyDetails,
                     workingDays: totalDaysInMonth,
                 };
             })
