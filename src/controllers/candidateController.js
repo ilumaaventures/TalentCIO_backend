@@ -3813,15 +3813,25 @@ const calculateCandidateMatchScore = (candidate, query) => {
         const mobile = String(candidate.mobile || '');
         const currentCompany = String(candidate.currentCompany || '').toLowerCase();
         const currentLocation = String(candidate.currentLocation || '').toLowerCase();
+        const qualification = String(candidate.qualification || '').toLowerCase();
+        const remark = String(candidate.remark || '').toLowerCase();
+
+        const candidateSkills = [
+            ...(candidate.mustHaveSkills || []).map(s => (typeof s?.skill === 'object' ? s.skill?.name : s?.skill) || s),
+            ...(candidate.niceToHaveSkills || []).map(s => (typeof s?.skill === 'object' ? s.skill?.name : s?.skill) || s),
+            ...(candidate.skillRatings || []).map(s => s?.skill)
+        ].filter(Boolean).map(s => String(s).toLowerCase());
 
         if (name === term || email === term || mobile === term) {
             scorePercent = 1.0;
         } else if (name.includes(term) || email.includes(term) || mobile.includes(term)) {
-            scorePercent = 0.9;
-        } else if (currentCompany.includes(term)) {
-            scorePercent = 0.7;
-        } else if (currentLocation.includes(term)) {
-            scorePercent = 0.7;
+            scorePercent = 0.95;
+        } else if (candidateSkills.some(cs => cs.includes(term) || term.includes(cs))) {
+            scorePercent = 0.85;
+        } else if (currentCompany.includes(term) || qualification.includes(term)) {
+            scorePercent = 0.75;
+        } else if (currentLocation.includes(term) || remark.includes(term)) {
+            scorePercent = 0.70;
         }
 
         earnedWeight += scorePercent * weight;
