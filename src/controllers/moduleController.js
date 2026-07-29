@@ -23,7 +23,7 @@ const getModules = async (req, res) => {
 const updateModules = async (req, res) => {
     try {
         const enabledModules = normalizeEnabledModules(req.body?.enabledModules);
-        
+
         // Find current state first for logging
         const existing = await Company.findById(req.params.id).select('enabledModules');
         if (!existing) return res.status(404).json({ message: 'Company not found' });

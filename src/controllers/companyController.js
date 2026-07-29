@@ -268,6 +268,7 @@ const sanitizePayrollIntegrationSettings = (incoming = {}, current = {}) => ({
 
 const sanitizeAttendanceSelfService = (incoming = {}, current = {}) => ({
     weeklyOff: toBoolean(incoming?.weeklyOff, current?.weeklyOff ?? true),
+    flexWeeklyOff: toBoolean(incoming?.flexWeeklyOff, current?.flexWeeklyOff ?? true),
     workingHours: toBoolean(incoming?.workingHours, current?.workingHours ?? true),
     defaultAttendanceMode: toBoolean(incoming?.defaultAttendanceMode, current?.defaultAttendanceMode ?? true),
     attendanceShifts: toBoolean(incoming?.attendanceShifts, current?.attendanceShifts ?? true),
@@ -343,7 +344,7 @@ const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
                     roleId: String(rp.roleId || rp.roleName || ''),
                     roleName: String(rp.roleName || rp.roleId || ''),
                     enabled: Boolean(rp.enabled),
-                    isCustom: Boolean(rp.isCustom),
+                    isCustom: rp.isCustom !== undefined ? Boolean(rp.isCustom) : true,
                     allowedCount: Math.max(1, Number(rp.allowedCount) || 2),
                     allowedDay: String(rp.allowedDay || 'Custom (Employee Chooses)'),
                     allowedDays: normalizeStringArray(rp.allowedDays || [rp.allowedDay || 'Custom (Employee Chooses)'])
@@ -353,12 +354,24 @@ const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
                 ? base.flexWeeklyOff.employmentTypePolicies.map((ep) => ({
                     employmentType: String(ep.employmentType || ''),
                     enabled: Boolean(ep.enabled),
-                    isCustom: Boolean(ep.isCustom),
+                    isCustom: ep.isCustom !== undefined ? Boolean(ep.isCustom) : true,
                     allowedCount: Math.max(1, Number(ep.allowedCount) || 2),
                     allowedDay: String(ep.allowedDay || 'Custom (Employee Chooses)'),
                     allowedDays: normalizeStringArray(ep.allowedDays || [ep.allowedDay || 'Custom (Employee Chooses)'])
                 }))
-                : (current?.flexWeeklyOff?.employmentTypePolicies || [])
+                : (current?.flexWeeklyOff?.employmentTypePolicies || []),
+            combinedPolicies: Array.isArray(base.flexWeeklyOff?.combinedPolicies)
+                ? base.flexWeeklyOff.combinedPolicies.map((cp) => ({
+                    roleId: String(cp.roleId || cp.roleName || ''),
+                    roleName: String(cp.roleName || cp.roleId || ''),
+                    employmentType: String(cp.employmentType || ''),
+                    enabled: Boolean(cp.enabled),
+                    isCustom: cp.isCustom !== undefined ? Boolean(cp.isCustom) : true,
+                    allowedCount: Math.max(1, Number(cp.allowedCount) || 2),
+                    allowedDay: String(cp.allowedDay || 'Custom (Employee Chooses)'),
+                    allowedDays: normalizeStringArray(cp.allowedDays || [cp.allowedDay || 'Custom (Employee Chooses)'])
+                }))
+                : (current?.flexWeeklyOff?.combinedPolicies || [])
         }
     };
 };
@@ -370,8 +383,9 @@ const buildCompanyEditableAttendanceInput = (incoming = {}, current = {}) => {
     if (controls.weeklyOff && incoming.weeklyOff !== undefined) {
         editable.weeklyOff = incoming.weeklyOff;
     }
+    const isFlexWeeklyOffAllowedBySuperAdmin = controls.weeklyOff !== false && controls.flexWeeklyOff !== false;
     if (incoming.flexWeeklyOff !== undefined) {
-        if (current?.flexWeeklyOff?.enabled === false) {
+        if (!isFlexWeeklyOffAllowedBySuperAdmin) {
             editable.flexWeeklyOff = {
                 ...(incoming.flexWeeklyOff || {}),
                 enabled: false
