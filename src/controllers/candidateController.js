@@ -2433,7 +2433,7 @@ exports.deleteCandidateSource = async (req, res) => {
 
 // --- INTERVIEW ROUNDS MANAGEMENT ---
 
-const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, cc, bcc, emailAccountId }) => {
+const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, cc, bcc, emailAccountId, customSubject, customHtmlBody }) => {
     try {
         if (!candidate) return;
 
@@ -2447,6 +2447,8 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
         const effectiveCc = cc !== undefined ? cc : (round.cc || '');
         const effectiveBcc = bcc !== undefined ? bcc : (round.bcc || '');
         const effectiveEmailAccountId = emailAccountId || round.emailAccountId || undefined;
+        const effectiveCustomSubject = customSubject || round.customSubject || undefined;
+        const effectiveCustomHtmlBody = customHtmlBody || round.customHtmlBody || undefined;
 
         let customFieldsHtml = '';
         if (Array.isArray(round.customFields) && round.customFields.length > 0) {
@@ -2569,8 +2571,11 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
         `;
 
         if (candidate.email) {
-            const subject = template?.subject ? processTemplate(template.subject, false) : defaultSubject;
-            const htmlBody = template?.htmlBody ? processTemplate(template.htmlBody, true) : defaultCandidateBody;
+            const rawSubjectText = effectiveCustomSubject || template?.subject;
+            const rawBodyText = effectiveCustomHtmlBody || template?.htmlBody;
+
+            const subject = rawSubjectText ? processTemplate(rawSubjectText, false) : defaultSubject;
+            const htmlBody = rawBodyText ? processTemplate(rawBodyText, true) : defaultCandidateBody;
             try {
                 await sendEmailForCompany({
                     companyId,
@@ -3653,7 +3658,7 @@ exports.transferToOnboarding = async (req, res) => {
 
 exports.bulkScheduleInterview = async (req, res) => {
     try {
-        const { candidateIds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
+        const { candidateIds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody } = req.body;
 
         if (!levelName || typeof levelName !== 'string' || !levelName.trim()) {
             return res.status(400).json({ message: 'Level name (round name) is required' });
@@ -3714,7 +3719,9 @@ exports.bulkScheduleInterview = async (req, res) => {
                     emailTemplateId: emailTemplateId || null,
                     emailAccountId: emailAccountId || null,
                     cc: cc || '',
-                    bcc: bcc || ''
+                    bcc: bcc || '',
+                    customSubject: customSubject || '',
+                    customHtmlBody: customHtmlBody || ''
                 };
 
                 candidate.interviewRounds.push(newRound);
@@ -3733,7 +3740,9 @@ exports.bulkScheduleInterview = async (req, res) => {
                     user: req.user,
                     cc,
                     bcc,
-                    emailAccountId
+                    emailAccountId,
+                    customSubject,
+                    customHtmlBody
                 });
 
                 scheduled += 1;
