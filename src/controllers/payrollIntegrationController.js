@@ -205,8 +205,6 @@ const getAttendanceSummary = async (req, res) => {
 
                 const userApprovedLeaves = approvedLeaves.filter(l => String(l.user?._id || l.user || '') === userIdStr);
 
-                const dailyDetails = [];
-
                 const cursor = new Date(start);
                 while (cursor <= evalEnd && cursor < end) {
                     const localCursor = toLocalTimezoneRep(cursor);
@@ -232,23 +230,9 @@ const getAttendanceSummary = async (req, res) => {
                             return dateStr >= lStartStr && dateStr <= lEndStr;
                         });
 
-                        let dayStatus = 'ABSENT';
-                        let leaveType = null;
-                        let isPaidLeave = null;
-                        let clockIn = null;
-                        let clockOut = null;
                         let workingHours = 0;
-                        let shiftName = null;
-                        let approvalStatus = null;
 
                         if (attendanceRec) {
-                            // Bug 2 fix: always derive from raw Date fields for a consistent 'hh:mm a' format.
-                            // clockInIST is a full locale string ("7/29/2026, 9:15:30 AM") which is a different
-                            // format from the format() fallback, causing inconsistent data in the sync payload.
-                            clockIn = attendanceRec.clockIn ? format(toLocalTimezoneRep(attendanceRec.clockIn), 'hh:mm a') : null;
-                            clockOut = attendanceRec.clockOut ? format(toLocalTimezoneRep(attendanceRec.clockOut), 'hh:mm a') : null;
-                            shiftName = attendanceRec.shiftName || null;
-                            approvalStatus = attendanceRec.approvalStatus || null;
                             if (attendanceRec.attendanceMode === 'present_only' && status === 'PRESENT') {
                                 // Bug 7 fix: present_only mode has no clock times — assign company default
                                 // working hours so totalWorkingHours is not always 0 for these employees.
@@ -261,8 +245,8 @@ const getAttendanceSummary = async (req, res) => {
                             }
                         }
 
+                        let isPaidLeave = null;
                         if (matchingLeave) {
-                            leaveType = matchingLeave.leaveType;
                             const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
                             isPaidLeave = leaveConfig?.isPaid !== false;
                         }
@@ -270,19 +254,14 @@ const getAttendanceSummary = async (req, res) => {
                         if (isOffDay) {
                             if (isWeeklyOffDay) {
                                 weeklyOffDays += 1;
-                                dayStatus = 'WEEKLY_OFF';
                             } else if (isHolidayDay) {
                                 holidayDays += 1;
-                                dayStatus = 'HOLIDAY';
                             }
 
-                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY' || clockIn)) {
+                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY')) {
                                 const credit = status === 'HALF_DAY' ? 0.5 : 1;
                                 workedOffDays += credit;
                                 totalWorkingHours += workingHours;
-                                // Bug 1 fix: employee actually worked on this off-day, so override
-                                // dayStatus to reflect actual work instead of WEEKLY_OFF / HOLIDAY.
-                                dayStatus = status === 'HALF_DAY' ? 'HALF_DAY' : 'PRESENT';
                             }
 
                             if (matchingLeave) {
@@ -291,7 +270,6 @@ const getAttendanceSummary = async (req, res) => {
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                     if (isPaidLeave) paidLeaves += leaveDays;
                                     else unpaidLeaves += leaveDays;
-                                    dayStatus = 'LEAVE';
                                 }
                             }
                         } else {
@@ -301,11 +279,9 @@ const getAttendanceSummary = async (req, res) => {
                             if (hasEntry) {
                                 if (status === 'PRESENT') {
                                     presentDays += 1;
-                                    dayStatus = 'PRESENT';
                                 } else if (status === 'HALF_DAY') {
                                     presentDays += 0.5;
                                     halfDays += 1;
-                                    dayStatus = 'HALF_DAY';
                                     if (matchingLeave) {
                                         if (isPaidLeave) paidLeaves += 0.5;
                                         else unpaidLeaves += 0.5;
@@ -314,7 +290,6 @@ const getAttendanceSummary = async (req, res) => {
                                     }
                                 } else if (status === 'LEAVE') {
                                     if (matchingLeave) {
-                                        dayStatus = 'LEAVE';
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (isPaidLeave) paidLeaves += leaveDays;
                                         else unpaidLeaves += leaveDays;
@@ -322,52 +297,30 @@ const getAttendanceSummary = async (req, res) => {
                                     } else {
                                         // Bug 3 fix: attendance record says LEAVE but no approved LeaveRequest
                                         // exists — treat as absent instead of giving a free paid leave day.
-                                        dayStatus = 'ABSENT';
                                         absentDays += 1;
                                     }
                                 } else if (status === 'ABSENT') {
                                     if (matchingLeave) {
-                                        dayStatus = 'LEAVE';
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (isPaidLeave) paidLeaves += leaveDays;
                                         else unpaidLeaves += leaveDays;
                                         if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
-                                        dayStatus = 'ABSENT';
                                         absentDays += 1;
                                     }
                                 }
                             } else {
                                 if (matchingLeave) {
-                                    dayStatus = 'LEAVE';
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                     if (isPaidLeave) paidLeaves += leaveDays;
                                     else unpaidLeaves += leaveDays;
                                     if (matchingLeave.isHalfDay) absentDays += 0.5;
                                 } else {
-                                    dayStatus = 'ABSENT';
                                     absentDays += 1;
                                 }
                             }
                         }
 
-                        dailyDetails.push({
-                            date: dateStr,
-                            // dayName removed: trivially derivable from `date` by any consumer
-                            status: dayStatus,
-                            // isOffDay removed: exact duplicate of (isWeeklyOff || isHoliday)
-                            isWeeklyOff: isWeeklyOffDay,
-                            isHoliday: isHolidayDay,
-                            holidayName: holidayObj?.name || null,
-                            leaveType,
-                            isPaidLeave,
-                            clockIn,
-                            clockOut,
-                            workingHours,
-                            shiftName,
-                            // approvalStatus removed: HRMS-internal approval workflow,
-                            // not relevant to payroll calculation
-                        });
                     }
 
                     cursor.setDate(cursor.getDate() + 1);
@@ -407,9 +360,6 @@ const getAttendanceSummary = async (req, res) => {
                     workedOffDays,
                     paidDays: calculatedPaidDays,
                     totalWorkingHours: Number(totalWorkingHours.toFixed(2)),
-                    dailyDetails,
-                    // workingDays removed: after Bug 5 fix it was identical to workingDaysTillDate
-                    // — a pure duplicate field that added confusion.
                 };
             })
             // Bug 8 fix: guard against null/undefined employeeCode to prevent TypeError crash
