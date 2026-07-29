@@ -88,11 +88,14 @@ const getSocketClientIp = (socket) => {
     return socket.handshake.address || 'unknown';
 };
 
+const path = require('path');
+
 app.use(cors(corsOptions));
 app.use(helmet({
     crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
 }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MED-7: Gzip compression — reduces JSON response payloads by 50-80%
 app.use(compression({

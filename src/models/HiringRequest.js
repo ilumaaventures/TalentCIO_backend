@@ -150,6 +150,7 @@ const HiringRequestSchema = new mongoose.Schema({
     },
     isPublic: { type: Boolean, default: false },
     isResourceGatewayPublic: { type: Boolean, default: false },
+    wasEverPublished: { type: Boolean, default: false },
     publicJobTitle: { type: String, trim: true },
     publicJobDescription: { type: String },
 

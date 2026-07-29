@@ -231,17 +231,48 @@ const resolveEmailConfig = async (companyId, emailAccountId = null) => {
 };
 
 const mapBrevoAttachments = (attachments = []) => (
-    attachments.map((attachment) => ({
-        name: attachment.filename || attachment.name,
-        content: attachment.content ? Buffer.from(attachment.content).toString('base64') : undefined,
-        url: typeof attachment.path === 'string' && attachment.path.startsWith('http')
+    attachments.map((attachment) => {
+        let contentBase64 = undefined;
+        if (attachment.content) {
+            contentBase64 = Buffer.isBuffer(attachment.content)
+                ? attachment.content.toString('base64')
+                : String(attachment.content);
+        }
+        const url = (typeof attachment.path === 'string' && attachment.path.startsWith('http'))
             ? attachment.path
-            : undefined
-    })).filter((attachment) => attachment.name && (attachment.content || attachment.url))
+            : (typeof attachment.url === 'string' && attachment.url.startsWith('http') ? attachment.url : undefined);
+
+        return {
+            name: attachment.filename || attachment.name,
+            content: contentBase64,
+            url
+        };
+    }).filter((attachment) => attachment.name && (attachment.content || attachment.url))
 );
+
+const parseEmailListForBrevo = (emails) => {
+    if (!emails) return undefined;
+    if (Array.isArray(emails)) {
+        return emails
+            .flatMap(e => (typeof e === 'string' ? e.split(/[,;\s]+/) : [(e && (e.email || e.value)) || '']))
+            .map(e => (typeof e === 'string' ? e.trim() : ''))
+            .filter(e => e && e.includes('@'))
+            .map(email => ({ email }));
+    }
+    if (typeof emails === 'string') {
+        return emails
+            .split(/[,;\s]+/)
+            .map(e => e.trim())
+            .filter(e => e && e.includes('@'))
+            .map(email => ({ email }));
+    }
+    return undefined;
+};
 
 const sendViaBrevoApi = async ({
     to,
+    cc,
+    bcc,
     subject,
     htmlContent,
     textContent,
@@ -253,11 +284,17 @@ const sendViaBrevoApi = async ({
 }) => {
     const payload = {
         sender: { name: fromName, email: fromAddress },
-        to: [{ email: to }],
+        to: Array.isArray(to) ? to.map(e => typeof e === 'object' ? e : { email: e }) : [{ email: to }],
         subject,
         htmlContent,
         textContent
     };
+
+    const parsedCc = parseEmailListForBrevo(cc);
+    if (parsedCc && parsedCc.length > 0) payload.cc = parsedCc;
+
+    const parsedBcc = parseEmailListForBrevo(bcc);
+    if (parsedBcc && parsedBcc.length > 0) payload.bcc = parsedBcc;
 
     if (replyTo) {
         payload.replyTo = { email: replyTo };
@@ -286,6 +323,8 @@ const formatFromHeader = (fromName, fromAddress) => {
 
 const sendViaSmtp = async ({
     to,
+    cc,
+    bcc,
     subject,
     html,
     text,
@@ -299,6 +338,8 @@ const sendViaSmtp = async ({
     const info = await transporter.sendMail({
         from: formatFromHeader(fromName, fromAddress),
         to,
+        ...(cc ? { cc } : {}),
+        ...(bcc ? { bcc } : {}),
         subject,
         html,
         text,
@@ -313,6 +354,8 @@ const sendEmailForCompany = async ({
     companyId,
     emailAccountId,
     to,
+    cc,
+    bcc,
     subject,
     html,
     text,
@@ -354,6 +397,8 @@ const sendEmailForCompany = async ({
         try {
             const messageId = await sendViaBrevoApi({
                 to,
+                cc,
+                bcc,
                 subject,
                 htmlContent: brandedHtml,
                 textContent: text,
@@ -378,6 +423,8 @@ const sendEmailForCompany = async ({
         try {
             const messageId = await sendViaSmtp({
                 to,
+                cc,
+                bcc,
                 subject,
                 html: brandedHtml,
                 text,
@@ -398,6 +445,8 @@ const sendEmailForCompany = async ({
     return sendEmail({
         companyId,
         to,
+        cc,
+        bcc,
         subject,
         html: brandedHtml,
         text,

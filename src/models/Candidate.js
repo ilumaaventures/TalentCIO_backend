@@ -261,7 +261,7 @@ const candidateSchema = new mongoose.Schema({
         }],
         status: { // State of this specific round
             type: String,
-            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped'],
+            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between'],
             default: 'Pending'
         },
         scheduledDate: Date,
@@ -280,13 +280,25 @@ const candidateSchema = new mongoose.Schema({
             skill: { type: String, required: true },
             rating: { type: Number, min: 0, max: 10, default: 0 },
             category: { type: String, enum: ['Must-Have', 'Nice-To-Have', 'Additional'], default: 'Additional' }
-        }]
+        }],
+        customFields: [{
+            key: { type: String, trim: true },
+            value: { type: String, trim: true }
+        }],
+        emailTemplateId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'EmailTemplate',
+            default: null
+        },
+        emailAccountId: { type: String, trim: true, default: null },
+        cc: { type: String, trim: true, default: '' },
+        bcc: { type: String, trim: true, default: '' }
     }],
 
     // Hiring Decision
     decision: {
         type: String,
-        enum: ['Shortlisted', 'Profile Shared', 'Rejected', 'On Hold', 'Did Not Turn Up', 'None', '']
+        enum: ['Shortlisted', 'Profile Shared', 'Rejected', 'On Hold', 'Did Not Turn Up', 'Left in between', 'None', '']
     },
 
     profileShared: {
@@ -297,7 +309,7 @@ const candidateSchema = new mongoose.Schema({
     // Phase 2 Client Decision
     phase2Decision: {
         type: String,
-        enum: ['Shortlisted', 'Selected', 'Rejected', 'On Hold', 'None', '']
+        enum: ['Shortlisted', 'Selected', 'Rejected', 'On Hold', 'Left in between', 'None', '']
     },
 
     phase2InterviewerFeedback: {
@@ -307,7 +319,7 @@ const candidateSchema = new mongoose.Schema({
 
     phase2InterviewStatus: {
         type: String,
-        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'None', ''],
+        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'Left in between', 'None', ''],
         default: 'None'
     },
 

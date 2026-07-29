@@ -60,7 +60,8 @@ router.post('/:id/transfer-to-onboarding', protect, authorizeAny(candidateTransf
 // Current User's Scheduled Interviews
 router.get('/my/interviews', protect, authorizeAny(['ta.interview.evaluate', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all']), candidateController.getMyScheduledInterviews);
 
-// Bulk Interview Scheduling (must be before /:id routes)
+// Bulk Candidate Actions (must be before /:id routes)
+router.post('/bulk-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.bulkUpdateDecision);
 router.post('/bulk-schedule-interview', protect, authorizeAny(interviewSchedulingPermissions), candidateController.bulkScheduleInterview);
 
 // Interview Rounds

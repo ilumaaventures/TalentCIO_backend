@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const { HiringRequest, HRRAuditLog } = require('../models/HiringRequest');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const User = require('../models/User');
@@ -6,10 +8,16 @@ const Company = require('../models/Company');
 const EmailTemplate = require('../models/EmailTemplate');
 const PublicApplication = require('../models/PublicApplication');
 const PhaseTemplate = require('../models/PhaseTemplate');
+const TAEmailLog = require('../models/TAEmailLog');
 const mongoose = require('mongoose');
 const SequenceCounter = require('../models/SequenceCounter');
 const NotificationService = require('../services/notificationService');
 const { sendEmailForCompany } = require('../services/companyEmailService');
+const {
+    uploadBufferToCloudinary,
+    uploadFilePathToCloudinary,
+    cloudinary
+} = require('../config/cloudinary');
 const {
     TEMPLATE_PLACEHOLDERS,
     hasHtmlMarkup,
@@ -173,6 +181,12 @@ const serializeHiringRequestResponseWithCount = async (request, user, companyId)
             hiringRequestId: serialized._id,
             companyId
         });
+        serialized.wasEverPublished = Boolean(
+            request.wasEverPublished ||
+            request.isPublic ||
+            request.isResourceGatewayPublic ||
+            (serialized.publicApplicationsCount > 0)
+        );
     }
     return serialized;
 };
@@ -215,6 +229,7 @@ const buildHiringRequestDetailsQuery = (companyId, requestId) => (
         .populate('roleDetails.reportingManager', 'firstName lastName')
         .populate('createdBy', 'firstName lastName')
         .populate('workflowId', 'name description')
+        .populate('previousRequestId', 'requestId roleDetails.title isPublic isResourceGatewayPublic status')
         .populate({
             path: 'approvalChain.role',
             select: 'name'
@@ -261,6 +276,8 @@ const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {
         ? `${taOwner.firstName || ''} ${taOwner.lastName || ''}`.trim()
         : '';
 
+    const clientName = hiringRequest?.client || candidate?.companyName || '';
+
     return {
         candidateName: fullName,
         firstName,
@@ -272,13 +289,15 @@ const buildCandidateDataMap = (candidate, hiringRequest, companyName, extras = {
         phoneNumber: candidate.mobile || '',
         jobTitle: hiringRequest?.roleDetails?.title || '',
         designation: hiringRequest?.roleDetails?.title || '',
-        client: hiringRequest?.client || '',
+        client: clientName,
+        clientName,
         department: hiringRequest?.roleDetails?.department || '',
         location: hiringRequest?.location || '',
         managerName: '',
         managerEmail: '',
         recruiterName: candidate.profilePulledBy || taOwnerName || 'Talent Acquisition Team',
-        companyName: companyName || '',
+        companyName: clientName || companyName || '',
+        tenantCompanyName: companyName || '',
         requestId: hiringRequest?.requestId || '',
         currentStatus: candidate.status || '',
         interviewDate: extras.interviewDate || '',
@@ -498,7 +517,10 @@ const sendMassMailForHiringRequest = async ({
     customHtmlBody,
     candidateIds = [],
     filters = {},
-    customNote = ''
+    customNote = '',
+    cc,
+    bcc,
+    attachments = []
 }) => {
     if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
         const error = new Error('Invalid hiring request ID.');
@@ -546,40 +568,123 @@ const sendMassMailForHiringRequest = async ({
     );
 
     for (const [index, candidate] of candidates.entries()) {
-        const dataMap = buildCandidateDataMap(
-            candidate,
-            hiringRequest,
-            company?.name,
-            { customNote }
-        );
+        try {
+            const dataMap = buildCandidateDataMap(
+                candidate,
+                hiringRequest,
+                company?.name,
+                { customNote }
+            );
 
-        const resolvedSubject = resolveTemplate(subject, dataMap);
-        const resolvedBody = resolveTemplate(htmlBody, dataMap);
-        const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
-        const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
+            const resolvedSubject = resolveTemplate(subject, dataMap);
+            const resolvedBody = resolveTemplate(htmlBody, dataMap);
+            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+            const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
 
-        const delivered = await sendEmailForCompany({
-            companyId,
-            emailAccountId: delivery.emailAccountId,
-            to: candidate.email,
-            subject: resolvedSubject,
-            html: resolvedHtml,
-            text: resolvedText
-        });
+            const delivered = await sendEmailForCompany({
+                companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: candidate.email,
+                cc: cc || undefined,
+                bcc: bcc || undefined,
+                subject: resolvedSubject,
+                html: resolvedHtml,
+                text: resolvedText,
+                attachments
+            });
 
-        if (delivered) {
-            sent += 1;
-        } else {
+            if (delivered) {
+                sent += 1;
+            } else {
+                failed += 1;
+                failedEmails.push({
+                    candidateId: candidate._id,
+                    email: candidate.email
+                });
+            }
+        } catch (candidateEmailError) {
+            console.error(`[MASS MAIL] Exception sending email to ${candidate?.email}:`, candidateEmailError);
             failed += 1;
             failedEmails.push({
-                candidateId: candidate._id,
-                email: candidate.email
+                candidateId: candidate?._id,
+                email: candidate?.email,
+                reason: candidateEmailError.message || 'Send error'
             });
         }
 
         if (candidates.length > 20 && index < candidates.length - 1) {
             await wait(150);
         }
+    }
+
+    try {
+        const batchId = new mongoose.Types.ObjectId();
+        const senderName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter';
+        const resolvedTemplateName = template?.name || template?.category || (customSubject ? 'Custom Email' : 'JD Sharing');
+
+        const formattedAttachments = (attachments || []).map(att => {
+            const filename = att.originalname || att.filename || att.name || 'Attachment';
+            const storedName = att.storedFilename || (att.path ? path.basename(att.path) : '');
+            let relativeUrl = att.url || '';
+            if (storedName) {
+                relativeUrl = `uploads/mass-mail/${storedName}`;
+            } else if (att.path) {
+                const normalized = String(att.path).replace(/\\/g, '/');
+                const idx = normalized.indexOf('uploads/');
+                relativeUrl = idx !== -1 ? normalized.substring(idx) : normalized;
+            }
+
+            return {
+                filename,
+                path: att.path || relativeUrl,
+                url: relativeUrl,
+                contentType: att.mimetype || att.contentType || '',
+                size: att.size || (att.buffer ? att.buffer.length : 0)
+            };
+        });
+
+        const logEntries = candidates.map((candidate) => {
+            const dataMap = buildCandidateDataMap(candidate, hiringRequest, company?.name, { customNote });
+            const resolvedSubject = resolveTemplate(subject, dataMap);
+            const resolvedBody = resolveTemplate(htmlBody, dataMap);
+            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+            const isFailed = failedEmails.some(f => String(f.candidateId) === String(candidate._id));
+
+            const candidateDisplayName = (candidate?.candidateName && !candidate.candidateName.includes('@'))
+                ? candidate.candidateName.trim()
+                : `${candidate?.firstName || ''} ${candidate?.lastName || ''}`.trim()
+                || (candidate?.email ? candidate.email.split('@')[0].replace(/[._\-+]/g, ' ').split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '')
+                || 'Candidate';
+
+            return {
+                companyId,
+                sentBy: user?._id || null,
+                senderEmail: user?.email || '',
+                senderName,
+                hiringRequestId: hiringRequest._id,
+                hiringRequestTitle: hiringRequest?.roleDetails?.title || '',
+                candidateId: candidate._id,
+                recipientName: candidateDisplayName,
+                recipientEmail: candidate.email || '',
+                cc: String(cc || ''),
+                bcc: String(bcc || ''),
+                templateId: template?._id || null,
+                templateName: resolvedTemplateName,
+                subject: resolvedSubject || customSubject || '',
+                body: resolvedHtml || resolvedBody || '',
+                attachments: formattedAttachments,
+                status: isFailed ? 'Failed' : 'Sent',
+                batchId,
+                batchTotalCount: candidates.length,
+                sentAt: new Date()
+            };
+        });
+
+        if (logEntries.length > 0) {
+            await TAEmailLog.insertMany(logEntries);
+        }
+    } catch (logErr) {
+        console.error('Failed to create candidate TAEmailLog records:', logErr);
     }
 
     await HRRAuditLog.create({
@@ -746,11 +851,20 @@ exports.createHiringRequest = async (req, res) => {
             details: { status: newRequest.status, workflowId: workflow?._id, previousRequestId }
         });
 
-        // Update the previous request to point to this new one
+        // Update the previous request to point to this new one and inherit visibility if published
         if (previousRequestId) {
-            await HiringRequest.findByIdAndUpdate(previousRequestId, {
-                reopenedToId: newRequest._id
-            });
+            const prevReq = await HiringRequest.findOne({ _id: previousRequestId, companyId: req.companyId });
+            if (prevReq) {
+                if (prevReq.isPublic) {
+                    newRequest.isPublic = true;
+                    newRequest.wasEverPublished = true;
+                }
+                if (prevReq.isResourceGatewayPublic) {
+                    newRequest.isResourceGatewayPublic = true;
+                }
+                prevReq.reopenedToId = newRequest._id;
+                await prevReq.save();
+            }
         }
 
         res.status(201).json(normalizeHiringRequestResponse(newRequest.toObject()));
@@ -1390,8 +1504,15 @@ exports.closeHiringRequest = async (req, res) => {
             )
         };
 
+        const unpublishFromJobBoard = req.body?.unpublishFromJobBoard === true || req.body?.unpublishFromJobBoard === 'true';
+
         existingRequest.status = shouldFullyClose ? 'Closed' : existingRequest.status;
         existingRequest.closedAt = shouldFullyClose ? new Date() : undefined;
+
+        if (unpublishFromJobBoard) {
+            existingRequest.isPublic = false;
+            existingRequest.isResourceGatewayPublic = false;
+        }
 
         await existingRequest.save();
 
@@ -1472,8 +1593,12 @@ exports.toggleJobVisibility = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this request' });
         }
 
-        if (request.status !== 'Approved') {
-            return res.status(400).json({ message: 'Only approved jobs can be published to external job boards.' });
+        if (request.status !== 'Approved' && request.status !== 'Closed') {
+            return res.status(400).json({ message: 'Only approved or closed jobs can update job board visibility.' });
+        }
+
+        if (request.status === 'Closed' && req.body.isPublic === true && !request.isPublic) {
+            return res.status(400).json({ message: 'Cannot publish a closed job. Please approve or reopen the requisition first.' });
         }
 
         const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
@@ -1523,6 +1648,10 @@ exports.toggleJobVisibility = async (req, res) => {
 
         if (req.body.publicJobDescription !== undefined) {
             request.publicJobDescription = req.body.publicJobDescription;
+        }
+
+        if (request.isPublic || request.isResourceGatewayPublic) {
+            request.wasEverPublished = true;
         }
 
         await request.save();
@@ -1800,8 +1929,151 @@ exports.transferCandidatesBulk = async (req, res) => {
     }
 };
 
+const resolveAttachmentContent = (att) => {
+    if (!att) return null;
+    const filename = att.originalname || att.filename || att.name || 'Attachment';
+    const contentType = att.mimetype || att.contentType || 'application/octet-stream';
+
+    // 1. If content buffer is already loaded
+    if (att.content) {
+        const buffer = Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content, 'base64');
+        return {
+            filename,
+            content: buffer,
+            contentType,
+            size: buffer.length
+        };
+    }
+
+    // 2. If local path or url is provided, attempt multi-candidate fallback lookup on disk
+    const targetPath = att.path || att.url || '';
+    if (targetPath && !targetPath.startsWith('http://') && !targetPath.startsWith('https://')) {
+        const candidatePaths = [];
+
+        if (path.isAbsolute(targetPath)) {
+            candidatePaths.push(targetPath);
+        }
+
+        const normalized = String(targetPath).replace(/\\/g, '/');
+        const cleanRelative = normalized.startsWith('/') ? normalized.substring(1) : normalized;
+        const filenameStem = path.basename(cleanRelative);
+
+        candidatePaths.push(path.join(process.cwd(), cleanRelative));
+        candidatePaths.push(path.join(process.cwd(), 'uploads', 'mass-mail', filenameStem));
+        candidatePaths.push(path.resolve(__dirname, '../', cleanRelative));
+        candidatePaths.push(path.resolve(__dirname, '../../', cleanRelative));
+        candidatePaths.push(path.resolve(__dirname, '../../uploads/mass-mail', filenameStem));
+
+        const massMailDir = path.join(process.cwd(), 'uploads', 'mass-mail');
+        if (fs.existsSync(massMailDir)) {
+            try {
+                const files = fs.readdirSync(massMailDir);
+                const stem = filenameStem.split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                const matchedFile = files.find(f => f.includes(stem) || f === filenameStem);
+                if (matchedFile) {
+                    candidatePaths.push(path.join(massMailDir, matchedFile));
+                }
+            } catch (err) {
+                console.warn('[MASS MAIL ATTACHMENT] Error reading massMailDir:', err.message);
+            }
+        }
+
+        const foundPath = candidatePaths.find(p => p && fs.existsSync(p));
+        if (foundPath) {
+            try {
+                const buffer = fs.readFileSync(foundPath);
+                return {
+                    filename,
+                    content: buffer,
+                    contentType,
+                    path: foundPath,
+                    size: buffer.length
+                };
+            } catch (readError) {
+                console.error(`[MASS MAIL ATTACHMENT] Error reading file ${foundPath}:`, readError.message);
+            }
+        }
+    }
+
+    // 3. Remote HTTP/HTTPS URL
+    if (typeof targetPath === 'string' && (targetPath.startsWith('http://') || targetPath.startsWith('https://'))) {
+        return {
+            filename,
+            path: targetPath,
+            url: targetPath,
+            contentType
+        };
+    }
+
+    console.warn(`[MASS MAIL ATTACHMENT] Could not resolve attachment "${filename}" (path: ${targetPath}). Omitting this attachment safely.`);
+    return null;
+};
+
+const parseMassMailAttachmentsFromReq = async (req) => {
+    const rawAttachments = [];
+    if (Array.isArray(req.files) && req.files.length > 0) {
+        for (const file of req.files) {
+            let cloudinaryUrl = file.path || file.secure_url || file.url || '';
+
+            if (!cloudinaryUrl.startsWith('http://') && !cloudinaryUrl.startsWith('https://')) {
+                try {
+                    if (file.buffer) {
+                        cloudinaryUrl = await uploadBufferToCloudinary(file.buffer, file.originalname || 'attachment');
+                    } else if (file.path && fs.existsSync(file.path)) {
+                        cloudinaryUrl = await uploadFilePathToCloudinary(file.path);
+                    }
+                } catch (cErr) {
+                    console.error('[MASS MAIL ATTACHMENT CLOUDINARY UPLOAD ERROR]:', cErr);
+                }
+            }
+
+            if (cloudinaryUrl) {
+                rawAttachments.push({
+                    filename: file.originalname || file.filename || 'Attachment',
+                    originalname: file.originalname || file.filename,
+                    storedFilename: file.filename,
+                    path: cloudinaryUrl,
+                    url: cloudinaryUrl,
+                    content: file.buffer,
+                    contentType: file.mimetype || 'application/octet-stream',
+                    size: file.size || (file.buffer ? file.buffer.length : 0)
+                });
+            }
+        }
+    }
+    if (Array.isArray(req.body?.attachments)) {
+        req.body.attachments.forEach((att) => {
+            if (att && (att.filename || att.name)) {
+                const cUrl = att.url || att.path || '';
+                rawAttachments.push({
+                    ...att,
+                    path: cUrl,
+                    url: cUrl
+                });
+            }
+        });
+    }
+
+    const resolved = rawAttachments
+        .map((att) => resolveAttachmentContent(att))
+        .filter(Boolean);
+
+    return resolved;
+};
+
+const parseJsonIfNeeded = (val, fallback = null) => {
+    if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch (e) { return fallback !== null ? fallback : val; }
+    }
+    return val || fallback;
+};
+
 exports.sendMassMail = async (req, res) => {
     try {
+        const candidateIds = parseJsonIfNeeded(req.body?.candidateIds, []);
+        const filters = parseJsonIfNeeded(req.body?.filters, {});
+        const attachments = await parseMassMailAttachmentsFromReq(req);
+
         const result = await sendMassMailForHiringRequest({
             companyId: req.companyId,
             user: req.user,
@@ -1810,9 +2082,12 @@ exports.sendMassMail = async (req, res) => {
             templateId: req.body?.templateId,
             customSubject: req.body?.customSubject,
             customHtmlBody: req.body?.customHtmlBody,
-            candidateIds: req.body?.candidateIds,
-            filters: req.body?.filters,
-            customNote: req.body?.customNote
+            candidateIds: Array.isArray(candidateIds) ? candidateIds : [],
+            filters: typeof filters === 'object' ? filters : {},
+            customNote: req.body?.customNote,
+            cc: req.body?.cc || req.body?.ccEmails,
+            bcc: req.body?.bcc || req.body?.bccEmails,
+            attachments
         });
 
         res.status(200).json(result);
@@ -1824,15 +2099,20 @@ exports.sendMassMail = async (req, res) => {
 
 exports.sendMassMailBulk = async (req, res) => {
     try {
-        const hiringRequestIds = Array.isArray(req.body?.hiringRequestIds) ? req.body.hiringRequestIds : [];
+        const rawHiringRequestIds = parseJsonIfNeeded(req.body?.hiringRequestIds, []);
+        const hiringRequestIds = Array.isArray(rawHiringRequestIds) ? rawHiringRequestIds : [];
         if (!hiringRequestIds.length) {
             return res.status(400).json({ message: 'At least one hiring request is required.' });
         }
 
+        const candidateSelections = parseJsonIfNeeded(req.body?.candidateSelections, []);
         const selectionMap = new Map(
-            (Array.isArray(req.body?.candidateSelections) ? req.body.candidateSelections : [])
+            (Array.isArray(candidateSelections) ? candidateSelections : [])
                 .map((item) => [String(item.hiringRequestId), Array.isArray(item.candidateIds) ? item.candidateIds : []])
         );
+
+        const filters = parseJsonIfNeeded(req.body?.filters, {});
+        const attachments = await parseMassMailAttachmentsFromReq(req);
 
         const results = [];
         let sent = 0;
@@ -1850,8 +2130,11 @@ exports.sendMassMailBulk = async (req, res) => {
                     customSubject: req.body?.customSubject,
                     customHtmlBody: req.body?.customHtmlBody,
                     candidateIds: selectionMap.get(String(hiringRequestId)) || [],
-                    filters: req.body?.filters,
-                    customNote: req.body?.customNote
+                    filters: typeof filters === 'object' ? filters : {},
+                    customNote: req.body?.customNote,
+                    cc: req.body?.cc || req.body?.ccEmails,
+                    bcc: req.body?.bcc || req.body?.bccEmails,
+                    attachments
                 });
 
                 results.push(result);
@@ -2753,6 +3036,190 @@ exports.getGlobalAnalytics = async (req, res) => {
     }
 };
 
+exports.getInterviewAnalytics = async (req, res) => {
+    try {
+        const { hiringRequestId, phase } = req.query;
+        const targetPhase = Math.max(parseInt(phase, 10) || 1, 1);
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limitParam = parseInt(req.query.limit, 10);
+        const limit = [50, 100, 150].includes(limitParam) ? limitParam : 50;
+
+        const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user, { action: 'view' });
+        const reqs = await HiringRequest.find(accessibleQuery).select('_id roleDetails client status useDynamicPhases phases').lean();
+
+        let targetReqIds = reqs.map(r => r._id);
+        if (hiringRequestId) {
+            targetReqIds = targetReqIds.filter(id => id.toString() === hiringRequestId.toString());
+        }
+
+        const candidates = await Candidate.find({
+            companyId: req.companyId,
+            hiringRequestId: { $in: targetReqIds }
+        })
+        .populate('hiringRequestId', 'client roleDetails.title roleDetails.department')
+        .populate('interviewRounds.assignedTo', 'firstName lastName email')
+        .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+        .lean();
+
+        const roundStatsMap = {};
+        let totalFinalShortlisted = 0;
+        let phaseCandidatesCount = 0;
+        const scheduledInterviews = [];
+        const candidateTrackersList = [];
+
+        candidates.forEach(c => {
+            let roundsForPhase = (c.interviewRounds || []).filter(r => Number(r.phase || 1) === targetPhase);
+
+            // Legacy Phase 2 fallback check
+            if (targetPhase === 2 && roundsForPhase.length === 0) {
+                const phase2InterviewStatus = String(c.phase2InterviewStatus || '').trim();
+                const phase2Feedback = String(c.phase2InterviewerFeedback || '').trim();
+                if (['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up'].includes(phase2InterviewStatus) || phase2Feedback) {
+                    roundsForPhase = [{
+                        _id: 'phase2-imported-interview-summary',
+                        phase: 2,
+                        status: phase2InterviewStatus === 'Rejected'
+                            ? 'Failed'
+                            : phase2InterviewStatus === 'Shortlisted'
+                                ? 'Passed'
+                                : phase2InterviewStatus === 'Did not Turn up'
+                                    ? 'Skipped'
+                                    : 'Scheduled',
+                        levelName: 'Round 1 (Phase 2)',
+                        feedback: c.phase2InterviewerFeedback || '',
+                        rating: null,
+                        assignedTo: [],
+                        evaluatedBy: null
+                    }];
+                }
+            }
+
+            // Check candidate membership/activity in targeted phase
+            const isCandidateInPhase = targetPhase === 1
+                ? true
+                : (targetPhase === 2
+                    ? (c.profileShared === true ||
+                        Boolean(String(c.phase2Decision || '').trim() && c.phase2Decision !== 'None') ||
+                        Boolean(String(c.phase2InterviewStatus || '').trim() && c.phase2InterviewStatus !== 'None') ||
+                        Boolean(String(c.phase2InterviewerFeedback || '').trim()) ||
+                        roundsForPhase.length > 0 ||
+                        Number(c.currentPhaseOrder || 1) >= 2)
+                    : (roundsForPhase.length > 0 || Number(c.currentPhaseOrder || 1) >= targetPhase));
+
+            if (isCandidateInPhase) {
+                phaseCandidatesCount++;
+
+                // Decision per phase
+                const phaseDecision = targetPhase === 2
+                    ? (c.phase2Decision || 'None')
+                    : (c.decision || 'None');
+
+                if (['Shortlisted', 'Selected'].includes(phaseDecision)) {
+                    totalFinalShortlisted++;
+                }
+
+                // Process interview rounds for stats & scheduled list
+                roundsForPhase.forEach(r => {
+                    const rName = (r.levelName || `Round ${targetPhase}`).trim();
+                    if (!roundStatsMap[rName]) {
+                        roundStatsMap[rName] = { roundName: rName, total: 0, pass: 0, fail: 0, pending: 0, scheduled: 0 };
+                    }
+                    roundStatsMap[rName].total++;
+
+                    if (r.status === 'Passed') roundStatsMap[rName].pass++;
+                    else if (r.status === 'Failed') roundStatsMap[rName].fail++;
+                    else if (r.status === 'Scheduled') roundStatsMap[rName].scheduled++;
+                    else roundStatsMap[rName].pending++;
+
+                    if (r.status === 'Scheduled' || r.scheduledDate || c.status === 'In Interview') {
+                        scheduledInterviews.push({
+                            _id: c._id,
+                            candidateName: c.candidateName,
+                            email: c.email,
+                            mobile: c.mobile,
+                            hiringRequestId: c.hiringRequestId?._id,
+                            roleTitle: c.hiringRequestId?.roleDetails?.title || 'N/A',
+                            clientName: c.hiringRequestId?.client || 'N/A',
+                            roundName: rName,
+                            scheduledDate: r.scheduledDate,
+                            status: r.status || c.status || 'Scheduled',
+                            interviewers: Array.isArray(r.assignedTo)
+                                ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim()).filter(Boolean).join(', ')
+                                : '',
+                            rating: r.rating || null,
+                            feedback: r.feedback || '',
+                            decision: phaseDecision
+                        });
+                    }
+                });
+
+                if (roundsForPhase.length > 0) {
+                    const mappedRounds = roundsForPhase.map(r => ({
+                        roundId: r._id,
+                        levelName: (r.levelName || `Round ${targetPhase}`).trim(),
+                        phase: r.phase || targetPhase,
+                        status: r.status === 'Passed' ? 'Pass' : r.status === 'Failed' ? 'Fail' : r.status || 'Pending',
+                        rating: r.rating ? `${r.rating}/5` : 'N/A',
+                        feedback: r.feedback || 'No feedback provided',
+                        interviewer: Array.isArray(r.assignedTo) && r.assignedTo.length > 0
+                            ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim()).filter(Boolean).join(', ')
+                            : (r.evaluatedBy ? `${r.evaluatedBy.firstName || ''} ${r.evaluatedBy.lastName || ''}`.trim() : 'Unassigned')
+                    }));
+
+                    candidateTrackersList.push({
+                        _id: c._id,
+                        candidateName: c.candidateName,
+                        email: c.email,
+                        mobile: c.mobile,
+                        hiringRequestId: c.hiringRequestId?._id,
+                        roleTitle: c.hiringRequestId?.roleDetails?.title || 'N/A',
+                        clientName: c.hiringRequestId?.client || 'N/A',
+                        totalRounds: mappedRounds.length,
+                        rounds: mappedRounds,
+                        finalDecision: phaseDecision
+                    });
+                }
+            }
+        });
+
+        const roundStats = Object.values(roundStatsMap);
+        const requisitions = reqs.map(r => ({
+            _id: r._id,
+            title: r.roleDetails?.title || 'Requisition',
+            client: r.client || ''
+        }));
+
+        const totalCount = candidateTrackersList.length;
+        const totalPages = Math.max(Math.ceil(totalCount / limit), 1);
+        const startIndex = (page - 1) * limit;
+        const candidateTrackers = candidateTrackersList.slice(startIndex, startIndex + limit);
+
+        res.status(200).json({
+            success: true,
+            phase: targetPhase,
+            summary: {
+                totalCandidates: phaseCandidatesCount,
+                totalShortlisted: totalFinalShortlisted,
+                totalScheduled: scheduledInterviews.length,
+                roundsCount: roundStats.length
+            },
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalCount,
+                limit
+            },
+            roundStats,
+            scheduledInterviews,
+            candidateTrackers,
+            requisitions
+        });
+    } catch (error) {
+        console.error('getInterviewAnalytics error:', error);
+        res.status(500).json({ message: 'Failed to fetch interview analytics', error: error.message });
+    }
+};
+
 // --- uploadJDFile ---
 exports.uploadJDFile = async (req, res) => {
     try {
@@ -2826,5 +3293,206 @@ exports.getTAClients = async (req, res) => {
     } catch (error) {
         console.error('getTAClients error:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
+// --- getTAEmailHistory ---
+exports.getTAEmailHistory = async (req, res) => {
+    try {
+        setNoCache(res);
+        const { companyId } = req;
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const reqLimit = Number(req.query.limit) || 50;
+        const limit = [50, 100, 150].includes(reqLimit) ? reqLimit : 50;
+        const search = String(req.query.search || '').trim();
+        const hiringRequestId = req.query.hiringRequestId;
+        const status = req.query.status;
+        const templateName = req.query.templateName;
+
+        const query = { companyId };
+
+        if (hiringRequestId && mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            query.hiringRequestId = hiringRequestId;
+        }
+
+        if (status && status !== 'All' && ['Sent', 'Failed', 'Pending'].includes(status)) {
+            query.status = status;
+        }
+
+        if (templateName && templateName !== 'All') {
+            query.templateName = templateName;
+        }
+
+        if (search) {
+            const regex = new RegExp(search, 'i');
+            query.$or = [
+                { recipientName: regex },
+                { recipientEmail: regex },
+                { subject: regex },
+                { templateName: regex },
+                { senderName: regex },
+                { senderEmail: regex },
+                { hiringRequestTitle: regex }
+            ];
+        }
+
+        const total = await TAEmailLog.countDocuments(query);
+        // Exclude heavy 'body' HTML string from list view for ultra-fast server response
+        const logs = await TAEmailLog.find(query)
+            .select('-body')
+            .populate('sentBy', 'firstName lastName email')
+            .populate('candidateId', 'firstName lastName candidateName email mobile')
+            .populate('hiringRequestId', 'requestId roleDetails.title client')
+            .sort({ sentAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean();
+
+        res.status(200).json({
+            logs,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+    } catch (error) {
+        console.error('getTAEmailHistory error:', error);
+        res.status(500).json({ message: 'Failed to fetch TA email history', error: error.message });
+    }
+};
+
+// --- getTAEmailHistoryById ---
+exports.getTAEmailHistoryById = async (req, res) => {
+    try {
+        setNoCache(res);
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid email history log ID' });
+        }
+
+        const log = await TAEmailLog.findOne({ _id: id, companyId: req.companyId })
+            .populate('sentBy', 'firstName lastName email')
+            .populate('candidateId', 'firstName lastName candidateName email mobile')
+            .populate('hiringRequestId', 'requestId roleDetails.title client')
+            .lean();
+
+        if (!log) {
+            return res.status(404).json({ message: 'Email log not found' });
+        }
+
+        res.status(200).json(log);
+    } catch (error) {
+        console.error('getTAEmailHistoryById error:', error);
+        res.status(500).json({ message: 'Failed to fetch email details', error: error.message });
+    }
+};
+
+// --- downloadTAEmailAttachment ---
+exports.downloadTAEmailAttachment = async (req, res) => {
+    try {
+        const { id, attachmentIndex } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid email history log ID' });
+        }
+
+        const log = await TAEmailLog.findOne({ _id: id, companyId: req.companyId }).lean();
+        if (!log || !Array.isArray(log.attachments) || !log.attachments[attachmentIndex]) {
+            return res.status(404).json({ message: 'Attachment not found in log record' });
+        }
+
+        const att = log.attachments[attachmentIndex];
+        const filePath = att.url || att.path;
+
+        // 1. Direct Cloudinary / HTTP redirect
+        if (filePath && (filePath.startsWith('http://') || filePath.startsWith('https://'))) {
+            return res.redirect(filePath);
+        }
+
+        // 2. Legacy local file fallback -> auto-upload to Cloudinary to heal legacy record
+        const candidatePaths = [];
+
+        if (filePath) {
+            if (path.isAbsolute(filePath)) {
+                candidatePaths.push(filePath);
+            }
+            const normalized = filePath.replace(/\\/g, '/');
+            const cleanRelative = normalized.startsWith('/') ? normalized.substring(1) : normalized;
+
+            candidatePaths.push(path.join(process.cwd(), cleanRelative));
+            candidatePaths.push(path.resolve(__dirname, '../', cleanRelative));
+            candidatePaths.push(path.resolve(__dirname, '../../', cleanRelative));
+        }
+
+        if (att.path) {
+            candidatePaths.push(att.path);
+        }
+
+        const massMailDir = path.join(process.cwd(), 'uploads', 'mass-mail');
+        if (fs.existsSync(massMailDir)) {
+            try {
+                const files = fs.readdirSync(massMailDir);
+                if (att.filename) {
+                    const stem = att.filename.split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                    const matchedFile = files.find(f => f.includes(stem) || f === att.filename);
+                    if (matchedFile) {
+                        candidatePaths.push(path.join(massMailDir, matchedFile));
+                    }
+                }
+            } catch (dirErr) {
+                // ignore
+            }
+        }
+
+        const foundPath = candidatePaths.find(p => p && fs.existsSync(p));
+
+        if (foundPath) {
+            try {
+                const cUrl = await uploadFilePathToCloudinary(foundPath);
+                if (cUrl) {
+                    await TAEmailLog.updateOne(
+                        { _id: id },
+                        { $set: { [`attachments.${attachmentIndex}.url`]: cUrl, [`attachments.${attachmentIndex}.path`]: cUrl } }
+                    ).catch(() => {});
+                    return res.redirect(cUrl);
+                }
+            } catch (upErr) {
+                console.error('[LEGACY ATTACHMENT CLOUDINARY UPLOAD ERROR]:', upErr);
+            }
+            return res.download(foundPath, att.filename || 'attachment');
+        }
+
+        // 3. Search Cloudinary resources for matching legacy file stem
+        try {
+            if (att.filename || filePath) {
+                const stem = (att.filename || path.basename(filePath)).split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
+                for (const resType of ['raw', 'image', 'video']) {
+                    const searchRes = await cloudinary.api.resources({
+                        type: 'upload',
+                        prefix: `mass_mail_attachments/${stem}`,
+                        resource_type: resType,
+                        max_results: 5
+                    });
+                    if (searchRes.resources && searchRes.resources.length > 0) {
+                        const foundUrl = searchRes.resources[0].secure_url || searchRes.resources[0].url;
+                        await TAEmailLog.updateOne(
+                            { _id: id },
+                            { $set: { [`attachments.${attachmentIndex}.url`]: foundUrl, [`attachments.${attachmentIndex}.path`]: foundUrl } }
+                        ).catch(() => {});
+                        return res.redirect(foundUrl);
+                    }
+                }
+            }
+        } catch (cSearchErr) {
+            console.warn('[CLOUDINARY FALLBACK SEARCH ERROR]:', cSearchErr.message);
+        }
+
+        return res.status(404).json({
+            message: 'This attachment is no longer available on Cloudinary or server.'
+        });
+    } catch (error) {
+        console.error('downloadTAEmailAttachment error:', error);
+        return res.status(500).json({ message: 'Failed to download attachment', error: error.message });
     }
 };
