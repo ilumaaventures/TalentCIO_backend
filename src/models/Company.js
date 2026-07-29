@@ -153,6 +153,7 @@ const companySchema = new mongoose.Schema({
             workingHours: { type: Number, default: 8 },
             selfService: {
                 weeklyOff: { type: Boolean, default: true },
+                flexWeeklyOff: { type: Boolean, default: true },
                 workingHours: { type: Boolean, default: true },
                 defaultAttendanceMode: { type: Boolean, default: true },
                 attendanceShifts: { type: Boolean, default: true },
@@ -230,6 +231,16 @@ const companySchema = new mongoose.Schema({
                     allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] }
                 }],
                 employmentTypePolicies: [{
+                    employmentType: { type: String },
+                    enabled: { type: Boolean, default: false },
+                    isCustom: { type: Boolean, default: false },
+                    allowedCount: { type: Number, default: 2 },
+                    allowedDay: { type: String, default: 'Custom (Employee Chooses)' },
+                    allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] }
+                }],
+                combinedPolicies: [{
+                    roleId: { type: String },
+                    roleName: { type: String },
                     employmentType: { type: String },
                     enabled: { type: Boolean, default: false },
                     isCustom: { type: Boolean, default: false },
