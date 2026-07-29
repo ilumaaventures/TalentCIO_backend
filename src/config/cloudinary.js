@@ -189,6 +189,66 @@ const uploadAttendanceDocuments = multer({
     }
 });
 
+const massMailStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+        const isImage = file.mimetype?.startsWith('image/');
+        const isVideo = file.mimetype?.startsWith('video/');
+        const resourceType = isImage ? 'image' : (isVideo ? 'video' : 'raw');
+        const ext = file.originalname?.includes('.') ? file.originalname.split('.').pop() : '';
+        const name = (file.originalname?.split('.')[0] || 'attachment').replace(/[^a-zA-Z0-9]/g, '_');
+
+        return {
+            folder: 'mass_mail_attachments',
+            resource_type: resourceType,
+            public_id: `${name}_${Date.now()}${ext ? '.' + ext : ''}`
+        };
+    }
+});
+
+const uploadMassMailAttachments = multer({
+    storage: massMailStorage,
+    limits: {
+        fileSize: 15 * 1024 * 1024
+    }
+});
+
+const uploadBufferToCloudinary = (buffer, filename, folder = 'mass_mail_attachments') => {
+    return new Promise((resolve, reject) => {
+        const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(filename);
+        const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(filename);
+        const resourceType = isImage ? 'image' : (isVideo ? 'video' : 'raw');
+        const ext = filename.includes('.') ? filename.split('.').pop() : '';
+        const name = (filename.split('.')[0] || 'attachment').replace(/[^a-zA-Z0-9]/g, '_');
+        const publicId = `${name}_${Date.now()}${ext ? '.' + ext : ''}`;
+
+        const uploadStream = cloudinary.uploader.upload_stream(
+            {
+                folder,
+                resource_type: resourceType,
+                public_id: publicId
+            },
+            (error, result) => {
+                if (error) return reject(error);
+                resolve(result.secure_url || result.url);
+            }
+        );
+        uploadStream.end(buffer);
+    });
+};
+
+const uploadFilePathToCloudinary = async (filePath, folder = 'mass_mail_attachments') => {
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(filePath);
+    const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(filePath);
+    const resourceType = isImage ? 'image' : (isVideo ? 'video' : 'raw');
+
+    const result = await cloudinary.uploader.upload(filePath, {
+        folder,
+        resource_type: resourceType
+    });
+    return result.secure_url || result.url;
+};
+
 module.exports = {
     upload,
     uploadDossierDocuments,
@@ -196,5 +256,8 @@ module.exports = {
     uploadOnboardingCustomFiles,
     uploadAnnouncementAttachment,
     uploadAttendanceDocuments,
+    uploadMassMailAttachments,
+    uploadBufferToCloudinary,
+    uploadFilePathToCloudinary,
     cloudinary
 };

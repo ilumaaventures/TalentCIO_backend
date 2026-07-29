@@ -97,7 +97,7 @@ const verifyGoogleCredential = async (idToken) => {
 const buildPublicJobsQuery = ({ location, type, department, search }) => {
     const query = {
         isPublic: true,
-        status: 'Approved'
+        status: { $in: ['Approved', 'Closed'] }
     };
 
     if (location) {
@@ -537,7 +537,7 @@ exports.getPublicJobById = async (req, res) => {
         const job = await HiringRequest.findOne({
             _id: id,
             isPublic: true,
-            status: 'Approved'
+            status: { $in: ['Approved', 'Closed'] }
         })
             .populate('companyId', 'name settings.logo subdomain industry country')
             .lean();
@@ -565,7 +565,7 @@ exports.getResourceGatewayJobById = async (req, res) => {
             _id: id,
             isPublic: true,
             isResourceGatewayPublic: true,
-            status: 'Approved'
+            status: { $in: ['Approved', 'Closed'] }
         })
             .populate('companyId', 'name settings.logo subdomain industry country settings.careers')
             .lean();
@@ -592,7 +592,7 @@ exports.applyToJob = async (req, res) => {
         const job = await HiringRequest.findOne({
             _id: id,
             isPublic: true,
-            status: 'Approved'
+            status: { $in: ['Approved', 'Closed'] }
         }).select('companyId');
 
         if (!job) {

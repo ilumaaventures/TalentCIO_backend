@@ -331,6 +331,7 @@ const sanitizeAttendanceSettings = (incoming = {}, current = {}) => {
         allowedIps: normalizeStringArray(base.allowedIps),
         flexWeeklyOff: {
             enabled: toBoolean(base.flexWeeklyOff?.enabled, current?.flexWeeklyOff?.enabled ?? false),
+            allowPastDays: toBoolean(base.flexWeeklyOff?.allowPastDays, current?.flexWeeklyOff?.allowPastDays ?? true),
             allowedDay: String(base.flexWeeklyOff?.allowedDay || current?.flexWeeklyOff?.allowedDay || 'Custom (Employee Chooses)'),
             allowedDays: normalizeStringArray(base.flexWeeklyOff?.allowedDays || current?.flexWeeklyOff?.allowedDays || [base.flexWeeklyOff?.allowedDay || 'Custom (Employee Chooses)']),
             allowedCount: Math.max(1, Number(base.flexWeeklyOff?.allowedCount) || Number(current?.flexWeeklyOff?.allowedCount) || 2),

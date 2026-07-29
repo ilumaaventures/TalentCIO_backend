@@ -9,6 +9,7 @@ router.use(protect);
 router.use(requireModule('talentAcquisition'));
 
 router.post('/candidates/dynamic-phase/bulk-status', candidateDynamicPhaseController.bulkUpdateStatus);
+router.post('/candidates/dynamic-phase/bulk-advance', candidateDynamicPhaseController.bulkMoveToNextPhase);
 router.patch('/candidates/:candidateId/dynamic-phase/status', candidateDynamicPhaseController.updatePhaseStatus);
 router.post('/candidates/:candidateId/dynamic-phase/decision', candidateDynamicPhaseController.recordDecision);
 router.post('/candidates/:candidateId/dynamic-phase/advance', candidateDynamicPhaseController.manualAdvance);

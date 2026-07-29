@@ -378,6 +378,15 @@ exports.manualAdvance = async (req, res) => {
         candidate.currentPhaseOrder = nextPhaseEntry.phaseOrder;
         candidate.currentPhaseStatus = nextPhaseEntry.status;
         candidate.currentPhaseName = nextPhaseEntry.phaseName;
+
+        if (Number(targetPhase.order) >= 2) {
+            candidate.profileShared = true;
+        }
+        if (Number(targetPhase.order) >= 3) {
+            candidate.phase2Decision = 'Shortlisted';
+        }
+
+        candidate.markModified('phaseHistory');
         await candidate.save();
 
         await createDynamicPhaseActivity(req, candidate, 'CANDIDATE_DYNAMIC_PHASE_MANUAL_ADVANCE', {
@@ -487,6 +496,7 @@ exports.bulkUpdateStatus = async (req, res) => {
 
                 currentPhaseEntry.status = status;
                 candidate.currentPhaseStatus = status;
+                candidate.markModified('phaseHistory');
                 await candidate.save();
                 success += 1;
             } catch (error) {
@@ -501,5 +511,140 @@ exports.bulkUpdateStatus = async (req, res) => {
     } catch (error) {
         console.error('bulkUpdateStatus error:', error);
         res.status(500).json({ message: 'Failed to bulk update dynamic phase statuses', error: error.message });
+    }
+};
+
+exports.bulkMoveToNextPhase = async (req, res) => {
+    try {
+        const { candidateIds, targetPhaseOrder, targetPhaseId } = req.body;
+
+        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+            return res.status(400).json({ message: 'Candidate IDs array is required' });
+        }
+
+        let successCount = 0;
+        let failedCount = 0;
+
+        for (const candidateId of candidateIds) {
+            try {
+                const candidate = await Candidate.findOne({ _id: candidateId, companyId: req.companyId });
+                if (!candidate) {
+                    failedCount += 1;
+                    continue;
+                }
+
+                const isShortlisted = candidate.decision === 'Shortlisted' ||
+                                      candidate.phase2Decision === 'Shortlisted' ||
+                                      candidate.phase2InterviewStatus === 'Shortlisted' ||
+                                      candidate.profileShared === true;
+
+                if (!isShortlisted) {
+                    failedCount += 1;
+                    continue;
+                }
+
+                const hiringRequest = await HiringRequest.findOne({
+                    _id: candidate.hiringRequestId,
+                    companyId: req.companyId
+                }).select('requestId roleDetails.title useDynamicPhases phases ownership createdBy assignedUsers');
+
+                const currentPhaseEntry = getCurrentPhaseEntry(candidate);
+
+                let targetPhase = null;
+                if (targetPhaseId && hiringRequest?.phases) {
+                    targetPhase = findPhaseById(hiringRequest.phases, targetPhaseId);
+                }
+                if (!targetPhase && targetPhaseOrder && hiringRequest?.phases) {
+                    targetPhase = findPhaseByOrder(hiringRequest.phases, targetPhaseOrder);
+                }
+                if (!targetPhase && currentPhaseEntry && hiringRequest?.phases) {
+                    const sortedPhases = [...(hiringRequest.phases || [])].sort((a, b) => a.order - b.order);
+                    const currentIndex = sortedPhases.findIndex(p => Number(p.order) === Number(currentPhaseEntry.phaseOrder));
+                    if (currentIndex !== -1 && currentIndex < sortedPhases.length - 1) {
+                        targetPhase = sortedPhases[currentIndex + 1];
+                    }
+                }
+
+                const validTargetPhaseId = (targetPhase?.phaseId || targetPhase?._id) && mongoose.Types.ObjectId.isValid(targetPhase?.phaseId || targetPhase?._id)
+                    ? (targetPhase.phaseId || targetPhase._id)
+                    : new mongoose.Types.ObjectId();
+
+                // Fallback for requests without phase config or legacy phases
+                if (!targetPhase) {
+                    const nextOrder = targetPhaseOrder ? Number(targetPhaseOrder) : (Number(candidate.currentPhaseOrder || 1) + 1);
+                    targetPhase = {
+                        phaseId: validTargetPhaseId,
+                        name: `Phase ${nextOrder}`,
+                        order: nextOrder,
+                        statusOptions: [{ value: 'Scheduled', label: 'Scheduled', isDefault: true }],
+                        decisionOptions: [{ value: 'Shortlisted', label: 'Shortlisted', type: 'advance' }]
+                    };
+                }
+
+                if (!candidate.phaseHistory) candidate.phaseHistory = [];
+
+                // Sanitize existing entries and mark active entries in phaseHistory as exited
+                (candidate.phaseHistory || []).forEach(entry => {
+                    if (!entry.phaseId) {
+                        entry.phaseId = new mongoose.Types.ObjectId();
+                    }
+                    if (!entry.exitedAt) {
+                        entry.exitedAt = new Date();
+                    }
+                });
+
+                const defaultStatus = getDefaultStatusOption(targetPhase);
+                const nextPhaseEntry = {
+                    phaseId: validTargetPhaseId,
+                    phaseName: targetPhase.name || `Phase ${targetPhase.order}`,
+                    phaseOrder: targetPhase.order,
+                    status: defaultStatus?.value || 'Scheduled',
+                    decision: 'None',
+                    enteredAt: new Date(),
+                    exitedAt: null,
+                    assignedTo: currentPhaseEntry ? currentPhaseEntry.assignedTo || [] : [],
+                    notes: '',
+                    metadata: { manualAdvance: true, bulkMove: true }
+                };
+
+                candidate.phaseHistory.push(nextPhaseEntry);
+                candidate.currentPhaseId = nextPhaseEntry.phaseId;
+                candidate.currentPhaseOrder = nextPhaseEntry.phaseOrder;
+                candidate.currentPhaseStatus = nextPhaseEntry.status;
+                candidate.currentPhaseName = nextPhaseEntry.phaseName;
+
+                if (Number(targetPhase.order) >= 2) {
+                    candidate.profileShared = true;
+                }
+                if (Number(targetPhase.order) >= 3) {
+                    candidate.phase2Decision = 'Shortlisted';
+                }
+
+                candidate.markModified('phaseHistory');
+                await candidate.save();
+
+                if (hiringRequest) {
+                    await createDynamicPhaseActivity(req, candidate, 'CANDIDATE_DYNAMIC_PHASE_MANUAL_ADVANCE', {
+                        fromPhase: currentPhaseEntry ? currentPhaseEntry.phaseName : 'Phase 1',
+                        toPhase: nextPhaseEntry.phaseName,
+                        notes: 'Bulk moved to next phase'
+                    }).catch(() => {});
+                }
+
+                successCount += 1;
+            } catch (err) {
+                console.error(`Failed to move candidate ${candidateId} to next phase:`, err);
+                failedCount += 1;
+            }
+        }
+
+        res.status(200).json({
+            message: `Moved ${successCount} candidate(s) to next phase`,
+            success: successCount,
+            failed: failedCount
+        });
+    } catch (error) {
+        console.error('bulkMoveToNextPhase error:', error);
+        res.status(500).json({ message: 'Failed to bulk move candidates to next phase', error: error.message });
     }
 };

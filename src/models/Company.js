@@ -213,6 +213,7 @@ const companySchema = new mongoose.Schema({
             allowedIps: { type: [String], default: [] },
             flexWeeklyOff: {
                 enabled: { type: Boolean, default: false },
+                allowPastDays: { type: Boolean, default: true },
                 allowedDay: { type: String, default: 'Custom (Employee Chooses)' },
                 allowedDays: { type: [String], default: ['Custom (Employee Chooses)'] },
                 allowedCount: { type: Number, default: 2 },
