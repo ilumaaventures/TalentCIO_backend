@@ -17,6 +17,8 @@ const DEFAULT_PAYROLL_CONFIG = {
   defaultWorkingDays: 30,
   defaultInsurance: 0,
   ltaMaxPercent: 0.0833,
+  standardMonthlyHours: 160,
+  compensationTypeDefaults: {},
 };
 
 const roundAmount = (value) => Math.round((Number(value) || 0) * 100) / 100;
@@ -114,6 +116,8 @@ const normalizeConfig = (config = {}) => {
     defaultWorkingDays: getNum(cfg.defaultWorkingDays, DEFAULT_PAYROLL_CONFIG.defaultWorkingDays),
     defaultInsurance: getNum(cfg.defaultInsurance, DEFAULT_PAYROLL_CONFIG.defaultInsurance),
     ltaMaxPercent: getNum(cfg.ltaMaxPercent, DEFAULT_PAYROLL_CONFIG.ltaMaxPercent),
+    standardMonthlyHours: getNum(cfg.standardMonthlyHours, DEFAULT_PAYROLL_CONFIG.standardMonthlyHours),
+    compensationTypeDefaults: cfg.compensationTypeDefaults || DEFAULT_PAYROLL_CONFIG.compensationTypeDefaults,
     salaryComponents: cfg.salaryComponents || null,
   };
 };
