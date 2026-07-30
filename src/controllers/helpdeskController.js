@@ -280,12 +280,13 @@ exports.createQuery = async (req, res) => {
             .populate('raisedBy', 'firstName lastName email profilePicture')
             .populate('assignedTo', 'firstName lastName email profilePicture')
             .populate('comments.user', 'firstName lastName roles')
-            .populate('queryType', 'name')
+            .populate('queryType', 'name autoResponse')
             .lean();
 
         res.status(201).json({
             success: true,
-            data: populatedQuery
+            data: populatedQuery,
+            autoResponse: qType.autoResponse ? qType.autoResponse.trim() : ""
         });
 
     } catch (error) {
