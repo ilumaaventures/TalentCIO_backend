@@ -243,20 +243,35 @@ const createUser = async (req, res) => {
 
             const source = {
                 monthlyCTC,
-                payType: calculatedSalary.payType || 'salaried',
+                compensationType: calculatedSalary.compensationType || calculatedSalary.payType || 'monthly_salary',
+                payType: calculatedSalary.payType || calculatedSalary.compensationType || 'salaried',
+                attendanceMode: calculatedSalary.attendanceMode || 'attendance',
                 pfEnabled: calculatedSalary.pfEnabled !== false,
                 esiEnabled: calculatedSalary.esiEnabled !== false,
                 ptEnabled: calculatedSalary.ptEnabled !== false,
                 lwfEnabled: calculatedSalary.lwfEnabled !== false,
                 gratuityEnabled: calculatedSalary.gratuityEnabled !== false,
+                tdsEnabled: calculatedSalary.tdsEnabled !== false,
                 includePfInCTC: !!calculatedSalary.includePfInCTC,
                 includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
                 basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
                 hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                vpfPercent: calculatedSalary.vpfPercent !== undefined && calculatedSalary.vpfPercent !== null ? Number(calculatedSalary.vpfPercent) : null,
                 useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
                 ptState: calculatedSalary.ptState || '',
                 insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                 employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
+                hourlyRate: parseFloat(calculatedSalary.hourlyRate) || 0,
+                hoursWorked: parseFloat(calculatedSalary.hoursWorked) || 160,
+                dailyRate: parseFloat(calculatedSalary.dailyRate) || 0,
+                weeklyRate: parseFloat(calculatedSalary.weeklyRate) || 0,
+                projectFee: parseFloat(calculatedSalary.projectFee) || 0,
+                milestoneAmount: parseFloat(calculatedSalary.milestoneAmount) || 0,
+                commissionNotes: calculatedSalary.commissionNotes || '',
+                joiningBonus: parseFloat(calculatedSalary.joiningBonus) || 0,
+                rateCard: Array.isArray(calculatedSalary.rateCard) ? calculatedSalary.rateCard : [],
+                otherAllowances: Array.isArray(calculatedSalary.customAllowances) ? calculatedSalary.customAllowances : (Array.isArray(calculatedSalary.otherAllowances) ? calculatedSalary.otherAllowances : []),
+                otherDeductions: Array.isArray(calculatedSalary.customDeductions) ? calculatedSalary.customDeductions : (Array.isArray(calculatedSalary.otherDeductions) ? calculatedSalary.otherDeductions : []),
                 deductions: {
                     professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                 }
@@ -466,20 +481,35 @@ const updateUser = async (req, res) => {
 
             const source = {
                 monthlyCTC,
-                payType: calculatedSalary.payType || 'salaried',
+                compensationType: calculatedSalary.compensationType || calculatedSalary.payType || 'monthly_salary',
+                payType: calculatedSalary.payType || calculatedSalary.compensationType || 'salaried',
+                attendanceMode: calculatedSalary.attendanceMode || 'attendance',
                 pfEnabled: parseBoolVal(calculatedSalary.pfEnabled, true),
                 esiEnabled: parseBoolVal(calculatedSalary.esiEnabled, true),
                 ptEnabled: parseBoolVal(calculatedSalary.ptEnabled, true),
                 lwfEnabled: parseBoolVal(calculatedSalary.lwfEnabled, true),
                 gratuityEnabled: parseBoolVal(calculatedSalary.gratuityEnabled, true),
+                tdsEnabled: parseBoolVal(calculatedSalary.tdsEnabled, true),
                 includePfInCTC: parseBoolVal(calculatedSalary.includePfInCTC, false),
                 includeGratuityInCTC: parseBoolVal(calculatedSalary.includeGratuityInCTC, true),
                 basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
                 hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
+                vpfPercent: calculatedSalary.vpfPercent !== undefined && calculatedSalary.vpfPercent !== null ? Number(calculatedSalary.vpfPercent) : null,
                 useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? parseBoolVal(calculatedSalary.useSalaryComponents, true) : true,
                 ptState: calculatedSalary.ptState || '',
                 insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
                 employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
+                hourlyRate: parseFloat(calculatedSalary.hourlyRate) || 0,
+                hoursWorked: parseFloat(calculatedSalary.hoursWorked) || 160,
+                dailyRate: parseFloat(calculatedSalary.dailyRate) || 0,
+                weeklyRate: parseFloat(calculatedSalary.weeklyRate) || 0,
+                projectFee: parseFloat(calculatedSalary.projectFee) || 0,
+                milestoneAmount: parseFloat(calculatedSalary.milestoneAmount) || 0,
+                commissionNotes: calculatedSalary.commissionNotes || '',
+                joiningBonus: parseFloat(calculatedSalary.joiningBonus) || 0,
+                rateCard: Array.isArray(calculatedSalary.rateCard) ? calculatedSalary.rateCard : [],
+                otherAllowances: Array.isArray(calculatedSalary.customAllowances) ? calculatedSalary.customAllowances : (Array.isArray(calculatedSalary.otherAllowances) ? calculatedSalary.otherAllowances : []),
+                otherDeductions: Array.isArray(calculatedSalary.customDeductions) ? calculatedSalary.customDeductions : (Array.isArray(calculatedSalary.otherDeductions) ? calculatedSalary.otherDeductions : []),
                 deductions: {
                     professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
                 }
@@ -492,6 +522,7 @@ const updateUser = async (req, res) => {
             calculatedSalary.ptEnabled = source.ptEnabled;
             calculatedSalary.lwfEnabled = source.lwfEnabled;
             calculatedSalary.gratuityEnabled = source.gratuityEnabled;
+            calculatedSalary.tdsEnabled = source.tdsEnabled;
             calculatedSalary.includePfInCTC = source.includePfInCTC;
             calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
             calculatedSalary.useSalaryComponents = source.useSalaryComponents;
