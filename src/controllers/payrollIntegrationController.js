@@ -62,7 +62,7 @@ const resolveMonthRange = (month, year) => {
     // start = first millisecond of the month at UTC midnight.
     // end   = first millisecond of the *next* month (exclusive upper bound).
     const start = new Date(Date.UTC(parsedYear, parsedMonth - 1, 1));
-    const end   = new Date(Date.UTC(parsedYear, parsedMonth,     1));
+    const end = new Date(Date.UTC(parsedYear, parsedMonth, 1));
 
     return { start, end };
 };
@@ -79,10 +79,11 @@ const getEmployees = async (req, res) => {
     }
 };
 
-const isDayWeeklyOff = (dayName, offDaysList) => {
+const isDayWeeklyOff = (dayName, dateStr, offDaysList) => {
     if (!Array.isArray(offDaysList) || offDaysList.length === 0) return false;
     const lowerDay = String(dayName || '').toLowerCase();
     const shortDay = lowerDay.slice(0, 3);
+    const targetDateStr = String(dateStr || '').trim().toLowerCase();
 
     const dayNumberMap = {
         sunday: '0',
@@ -97,6 +98,7 @@ const isDayWeeklyOff = (dayName, offDaysList) => {
 
     return offDaysList.some((off) => {
         const str = String(off || '').trim().toLowerCase();
+        if (targetDateStr && str === targetDateStr) return true;
         return str === lowerDay || str === shortDay || (dayNum && str === dayNum);
     });
 };
@@ -115,8 +117,11 @@ const getAttendanceSummary = async (req, res) => {
         // Falls back to ['Sunday'] if not configured so the sync never breaks.
         const weeklyOffs = Array.isArray(req.company?.settings?.attendance?.weeklyOff)
             && req.company.settings.attendance.weeklyOff.length > 0
-                ? req.company.settings.attendance.weeklyOff
-                : ['Sunday'];
+            ? req.company.settings.attendance.weeklyOff
+            : ['Sunday'];
+
+        // Bug 7 fix: used to assign working hours for present_only employees who have no clock times
+        const companyWorkingHours = req.company?.settings?.attendance?.workingHours || 8;
 
         const [attendanceRecords, approvedLeaves, leaveConfigs, holidays, users] = await Promise.all([
             Attendance.find({
@@ -193,16 +198,15 @@ const getAttendanceSummary = async (req, res) => {
                 let workedOffDays = 0;
                 let totalWorkingHours = 0;
 
-                const userWeeklyOffs = Array.isArray(user.customFlexibleOffDays) && user.customFlexibleOffDays.length > 0
-                    ? user.customFlexibleOffDays
-                    : weeklyOffs;
+                const userWeeklyOffs = [
+                    ...(Array.isArray(weeklyOffs) ? weeklyOffs : []),
+                    ...(Array.isArray(user.customFlexibleOffDays) ? user.customFlexibleOffDays : [])
+                ];
 
                 const joiningDateStr = user.joiningDate ? format(toLocalTimezoneRep(user.joiningDate), 'yyyy-MM-dd') : null;
                 const dateOfLeavingStr = user.dateOfLeaving ? format(toLocalTimezoneRep(user.dateOfLeaving), 'yyyy-MM-dd') : null;
 
                 const userApprovedLeaves = approvedLeaves.filter(l => String(l.user?._id || l.user || '') === userIdStr);
-
-                const dailyDetails = [];
 
                 const cursor = new Date(start);
                 while (cursor <= evalEnd && cursor < end) {
@@ -214,7 +218,7 @@ const getAttendanceSummary = async (req, res) => {
                     const hasLeft = dateOfLeavingStr && dateStr > dateOfLeavingStr;
 
                     if (hasJoined && !hasLeft) {
-                        const isWeeklyOffDay = isDayWeeklyOff(dayName, userWeeklyOffs);
+                        const isWeeklyOffDay = isDayWeeklyOff(dayName, dateStr, userWeeklyOffs);
                         const holidayObj = holidayMap.get(dateStr);
                         const isHolidayDay = !!holidayObj;
                         const isOffDay = isWeeklyOffDay || isHolidayDay;
@@ -229,21 +233,14 @@ const getAttendanceSummary = async (req, res) => {
                             return dateStr >= lStartStr && dateStr <= lEndStr;
                         });
 
-                        let dayStatus = 'ABSENT';
-                        let leaveType = null;
-                        let isPaidLeave = null;
-                        let clockIn = null;
-                        let clockOut = null;
                         let workingHours = 0;
-                        let shiftName = null;
-                        let approvalStatus = null;
 
                         if (attendanceRec) {
-                            clockIn = attendanceRec.clockInIST || (attendanceRec.clockIn ? format(toLocalTimezoneRep(attendanceRec.clockIn), 'hh:mm a') : null);
-                            clockOut = attendanceRec.clockOutIST || (attendanceRec.clockOut ? format(toLocalTimezoneRep(attendanceRec.clockOut), 'hh:mm a') : null);
-                            shiftName = attendanceRec.shiftName || null;
-                            approvalStatus = attendanceRec.approvalStatus || null;
-                            if (attendanceRec.clockIn && attendanceRec.clockOut) {
+                            if (attendanceRec.attendanceMode === 'present_only' && status === 'PRESENT') {
+                                // Bug 7 fix: present_only mode has no clock times — assign company default
+                                // working hours so totalWorkingHours is not always 0 for these employees.
+                                workingHours = companyWorkingHours;
+                            } else if (attendanceRec.clockIn && attendanceRec.clockOut) {
                                 const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
                                 if (diffMs > 0) {
                                     workingHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
@@ -251,8 +248,8 @@ const getAttendanceSummary = async (req, res) => {
                             }
                         }
 
+                        let isPaidLeave = null;
                         if (matchingLeave) {
-                            leaveType = matchingLeave.leaveType;
                             const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
                             isPaidLeave = leaveConfig?.isPaid !== false;
                         }
@@ -260,13 +257,11 @@ const getAttendanceSummary = async (req, res) => {
                         if (isOffDay) {
                             if (isWeeklyOffDay) {
                                 weeklyOffDays += 1;
-                                dayStatus = 'WEEKLY_OFF';
                             } else if (isHolidayDay) {
                                 holidayDays += 1;
-                                dayStatus = 'HOLIDAY';
                             }
 
-                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY' || clockIn)) {
+                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY')) {
                                 const credit = status === 'HALF_DAY' ? 0.5 : 1;
                                 workedOffDays += credit;
                                 totalWorkingHours += workingHours;
@@ -278,7 +273,6 @@ const getAttendanceSummary = async (req, res) => {
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                     if (isPaidLeave) paidLeaves += leaveDays;
                                     else unpaidLeaves += leaveDays;
-                                    dayStatus = 'LEAVE';
                                 }
                             }
                         } else {
@@ -288,11 +282,9 @@ const getAttendanceSummary = async (req, res) => {
                             if (hasEntry) {
                                 if (status === 'PRESENT') {
                                     presentDays += 1;
-                                    dayStatus = 'PRESENT';
                                 } else if (status === 'HALF_DAY') {
                                     presentDays += 0.5;
                                     halfDays += 1;
-                                    dayStatus = 'HALF_DAY';
                                     if (matchingLeave) {
                                         if (isPaidLeave) paidLeaves += 0.5;
                                         else unpaidLeaves += 0.5;
@@ -300,66 +292,53 @@ const getAttendanceSummary = async (req, res) => {
                                         absentDays += 0.5;
                                     }
                                 } else if (status === 'LEAVE') {
-                                    dayStatus = 'LEAVE';
                                     if (matchingLeave) {
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (isPaidLeave) paidLeaves += leaveDays;
                                         else unpaidLeaves += leaveDays;
                                         if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
-                                        paidLeaves += 1;
+                                        // Bug 3 fix: attendance record says LEAVE but no approved LeaveRequest
+                                        // exists — treat as absent instead of giving a free paid leave day.
+                                        absentDays += 1;
                                     }
                                 } else if (status === 'ABSENT') {
                                     if (matchingLeave) {
-                                        dayStatus = 'LEAVE';
                                         const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                         if (isPaidLeave) paidLeaves += leaveDays;
                                         else unpaidLeaves += leaveDays;
                                         if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
-                                        dayStatus = 'ABSENT';
                                         absentDays += 1;
                                     }
                                 }
                             } else {
                                 if (matchingLeave) {
-                                    dayStatus = 'LEAVE';
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                     if (isPaidLeave) paidLeaves += leaveDays;
                                     else unpaidLeaves += leaveDays;
                                     if (matchingLeave.isHalfDay) absentDays += 0.5;
                                 } else {
-                                    dayStatus = 'ABSENT';
                                     absentDays += 1;
                                 }
                             }
                         }
 
-                        dailyDetails.push({
-                            date: dateStr,
-                            dayName,
-                            status: dayStatus,
-                            isOffDay,
-                            isWeeklyOff: isWeeklyOffDay,
-                            isHoliday: isHolidayDay,
-                            holidayName: holidayObj?.name || null,
-                            leaveType,
-                            isPaidLeave,
-                            clockIn,
-                            clockOut,
-                            workingHours,
-                            shiftName,
-                            approvalStatus
-                        });
                     }
 
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                const calculatedPaidDays = Math.min(
-                    presentDays + paidLeaves + weeklyOffDays + holidayDays + workedOffDays,
-                    totalDaysInMonth
-                );
+                // paidDays is dynamic:
+                //   - presentDays: days the employee actually worked (or was marked present)
+                //   - paidLeaves: approved paid leave days
+                //   - weeklyOffDays: company weekly-off days *or* per-user flexible-off days
+                //     (the loop already uses userWeeklyOffs which prefers customFlexibleOffDays
+                //     over the company default, so this is automatically per-user correct)
+                //   - holidayDays: company holidays (always paid)
+                // workedOffDays is intentionally excluded here — those are tracked separately
+                // for overtime/comp-off purposes and must not inflate the base salary days.
+                const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays + holidayDays;
 
                 if (workingDaysTillDate > elapsedDays) {
                     console.warn(`[Validation Warning] user ${user._id}: workingDaysTillDate (${workingDaysTillDate}) > elapsedDays (${elapsedDays})`);
@@ -370,10 +349,18 @@ const getAttendanceSummary = async (req, res) => {
                 }
 
                 return {
-                    employeeId: String(user._id),
+                    // employeeId removed: exposes internal MongoDB _id to an external system.
+                    // employeeNumber (employeeCode) is the correct external identifier.
                     employeeNumber: user.employeeCode,
                     totalDaysInMonth,
                     elapsedDays,
+                    // workingDays = elapsedDays: this is the correct prorate DENOMINATOR for payrollMath.
+                    // It must equal the total days the employee was employed in the period
+                    // (working days + weekoffs + holidays), so that paidDays/workingDays gives the
+                    // correct salary fraction.
+                    // e.g. employee worked 19 days, 8 weekoffs, 1 holiday:
+                    //   paidDays = 19+8+1 = 28, workingDays = 28 → prorate = 1.0 (full month)
+                    workingDays: elapsedDays,
                     workingDaysTillDate,
                     weeklyOffDays,
                     holidayDays,
@@ -385,11 +372,11 @@ const getAttendanceSummary = async (req, res) => {
                     workedOffDays,
                     paidDays: calculatedPaidDays,
                     totalWorkingHours: Number(totalWorkingHours.toFixed(2)),
-                    dailyDetails,
-                    workingDays: totalDaysInMonth,
                 };
             })
-            .sort((left, right) => left.employeeNumber.localeCompare(right.employeeNumber));
+            // Bug 8 fix: guard against null/undefined employeeCode to prevent TypeError crash
+            // (even though the filter above should prevent it, defensive code avoids a full 500).
+            .sort((left, right) => (left.employeeNumber || '').localeCompare(right.employeeNumber || ''));
 
         const responsePayload = buildEncryptedResponseIfNeeded(response, req.payrollIntegration);
         res.json(responsePayload);
@@ -434,7 +421,7 @@ const receivePayrollResult = async (req, res) => {
         const computedSig = crypto.createHmac('sha256', webhookSecret).update(hmacInput).digest('hex');
 
         const provided = Buffer.from(signature, 'hex');
-        const computed  = Buffer.from(computedSig, 'hex');
+        const computed = Buffer.from(computedSig, 'hex');
         let isValid = provided.length === computed.length && crypto.timingSafeEqual(provided, computed);
 
         if (!isValid && tsHeader) {
@@ -463,20 +450,20 @@ const receivePayrollResult = async (req, res) => {
 
         await PayrollResult.findOneAndUpdate(
             {
-                companyId:    req.companyId,
+                companyId: req.companyId,
                 employeeCode: payrollResult.employeeCode,
-                month:        payrollResult.month,
-                year:         payrollResult.year,
+                month: payrollResult.month,
+                year: payrollResult.year,
             },
             {
                 $set: {
-                    status:          payrollResult.status          || 'paid',
-                    netSalary:       payrollResult.netSalary       || 0,
-                    grossSalary:     payrollResult.grossSalary     || 0,
+                    status: payrollResult.status || 'paid',
+                    netSalary: payrollResult.netSalary || 0,
+                    grossSalary: payrollResult.grossSalary || 0,
                     totalDeductions: payrollResult.totalDeductions || 0,
-                    paidDate:        payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
-                    breakdown:       payrollResult.breakdown       || {},
-                    receivedAt:      new Date(),
+                    paidDate: payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
+                    breakdown: payrollResult.breakdown || {},
+                    receivedAt: new Date(),
                 },
             },
             { upsert: true, new: true }
