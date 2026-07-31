@@ -68,12 +68,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
 
   const useComponents = source.useSalaryComponents !== false && !isIntern && !isHourly && !isFlat && !isNonSalariedType;
 
-  // Toggles integration — non-salaried contractor strategies turn off standard statutory by default unless user toggles on
-  const pfEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.pfEnabled !== false;
-  const esiEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.esiEnabled !== false;
-  const ptEnabled = !isIntern && !isHourly && !isFlat && source.ptEnabled !== false;
-  const lwfEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.lwfEnabled !== false;
-  const gratuityEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.gratuityEnabled !== false;
+  // Toggles integration — non-structured mode & non-salaried contractor strategies turn off standard statutory components (PF, ESI, PT, LWF, Gratuity)
+  const pfEnabled = useComponents && source.pfEnabled !== false;
+  const esiEnabled = useComponents && source.esiEnabled !== false;
+  const ptEnabled = useComponents && source.ptEnabled !== false;
+  const lwfEnabled = useComponents && source.lwfEnabled !== false;
+  const gratuityEnabled = useComponents && source.gratuityEnabled !== false;
   const includePfInCTC = pfEnabled && source.includePfInCTC === true;
   const includeGratuityInCTC = gratuityEnabled && source.includeGratuityInCTC !== false;
 
@@ -302,8 +302,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     declarations
   }, monthlyCTC, config, basicMaster, hraMaster, totalEarnings);
 
+  const tdsEnabled = parseBoolVal(source.tdsEnabled, true);
   const calculatedTdsMonthly = taxDetails[taxRegime === 'old' ? 'oldRegime' : 'newRegime'].monthlyTax;
-  const tds = Number(source.deductions?.tds) > 0 ? Number(source.deductions?.tds) : roundAmount(calculatedTdsMonthly);
+  const tds = tdsEnabled ? (Number(source.deductions?.tds) > 0 ? Number(source.deductions?.tds) : roundAmount(calculatedTdsMonthly)) : 0;
 
   const manualPT = Number(source.deductions?.professionalTax) || 0;
   const computedPT = (ptEnabled && source.ptState)
@@ -535,6 +536,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
     basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : 50,
     hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : 50,
     vpfPercent: calculatedSalary.vpfPercent !== undefined && calculatedSalary.vpfPercent !== null ? Number(calculatedSalary.vpfPercent) : 0,
+    componentFrequencies: calculatedSalary.componentFrequencies || {},
     pfEnabled: parseBoolVal(calculatedSalary.pfEnabled, true),
     esiEnabled: parseBoolVal(calculatedSalary.esiEnabled, true),
     ptEnabled: parseBoolVal(calculatedSalary.ptEnabled, true),
@@ -574,6 +576,9 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
   calculatedSalary.includePfInCTC = source.includePfInCTC;
   calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
   calculatedSalary.useSalaryComponents = source.useSalaryComponents;
+  calculatedSalary.componentFrequencies = source.componentFrequencies;
+  calculatedSalary.customAllowances = source.otherAllowances;
+  calculatedSalary.customDeductions = source.otherDeductions;
 
   if (config.salaryComponents) {
     config.salaryComponents.forEach(c => {
