@@ -26,7 +26,7 @@ const {
     validateTemplateSyntax
 } = require('../utils/templateResolver');
 const { dispatchEmployeeWebhook } = require('../services/payrollIntegrationService');
-const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('../utils/payrollMath');
+const { buildMasterSalaryStructure, buildPayrollSnapshot, processCalculatedSalary } = require('../utils/payrollMath');
 
 
 // ==========================================
@@ -397,69 +397,7 @@ exports.addEmployee = async (req, res) => {
                         annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
                         monthlyCTC = annualCTC / 12;
 
-                        const source = {
-                            monthlyCTC,
-                            payType,
-                            pfEnabled: calculatedSalary.pfEnabled !== undefined ? !!calculatedSalary.pfEnabled : true,
-                            esiEnabled: calculatedSalary.esiEnabled !== undefined ? !!calculatedSalary.esiEnabled : true,
-                            ptEnabled: calculatedSalary.ptEnabled !== undefined ? !!calculatedSalary.ptEnabled : true,
-                            lwfEnabled: calculatedSalary.lwfEnabled !== undefined ? !!calculatedSalary.lwfEnabled : true,
-                            gratuityEnabled: calculatedSalary.gratuityEnabled !== undefined ? !!calculatedSalary.gratuityEnabled : true,
-                            includePfInCTC: !!calculatedSalary.includePfInCTC,
-                            includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
-                            basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
-                            hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
-                            useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
-                            ptState: calculatedSalary.ptState || '',
-                            flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
-                            insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
-                            employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
-                            deductions: {
-                                professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
-                            }
-                        };
-
-                        if (config.salaryComponents) {
-                            config.salaryComponents.forEach(c => {
-                                if (c.linkedTo === 'fixed') {
-                                    let customVal = calculatedSalary[c.id];
-                                    if (customVal === undefined && c.id === 'flexi') {
-                                        customVal = calculatedSalary['flexiAmount'];
-                                    }
-                                    if (customVal === undefined && c.id === 'medical') {
-                                        customVal = calculatedSalary['medicalAllowance'];
-                                    }
-                                    source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
-                                }
-                            });
-                        }
-
-                        const master = buildMasterSalaryStructure(source, config);
-                        if (master) {
-                            calculatedSalary.annualCTC = String(annualCTC);
-                            calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                            calculatedSalary.basic = String(master.basicMaster);
-                            calculatedSalary.hra = String(master.hraMaster);
-                            calculatedSalary.specialAllowance = String(master.specialAllowance);
-                            calculatedSalary.monthlyGross = String(master.totalEarnings);
-
-                            calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
-                            calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
-                            calculatedSalary.gratuity = String(master.gratuity || 0);
-                            calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
-                            calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
-                            calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
-                            calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
-                            calculatedSalary.professionalTax = String(master.professionalTax || 0);
-                            calculatedSalary.tds = String(master.tds || 0);
-                            calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-
-                            if (master.earningsMap) {
-                                Object.entries(master.earningsMap).forEach(([id, val]) => {
-                                    calculatedSalary[id] = String(val);
-                                });
-                            }
-                        }
+                        processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
                     }
                 }
             } catch (err) {
@@ -1346,71 +1284,8 @@ exports.updateEmployee = async (req, res) => {
                     calculatedSalary.basic = String(Math.round(monthlyCTC));
                     calculatedSalary.hra = '0';
                     calculatedSalary.specialAllowance = '0';
-                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
                 } else {
-                    const source = {
-                        monthlyCTC,
-                        payType,
-                        pfEnabled: calculatedSalary.pfEnabled !== false,
-                        esiEnabled: calculatedSalary.esiEnabled !== false,
-                        ptEnabled: calculatedSalary.ptEnabled !== false,
-                        lwfEnabled: calculatedSalary.lwfEnabled !== false,
-                        gratuityEnabled: calculatedSalary.gratuityEnabled !== false,
-                        includePfInCTC: !!calculatedSalary.includePfInCTC,
-                        includeGratuityInCTC: calculatedSalary.includeGratuityInCTC !== undefined ? !!calculatedSalary.includeGratuityInCTC : true,
-                        basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : null,
-                        hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : null,
-                        useSalaryComponents: calculatedSalary.useSalaryComponents !== undefined ? !!calculatedSalary.useSalaryComponents : true,
-                        ptState: calculatedSalary.ptState || '',
-                        flexiAmount: parseFloat(calculatedSalary.flexiAmount) || 0,
-                        insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
-                        employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
-                        deductions: {
-                            professionalTax: calculatedSalary.ptState === 'custom' ? (parseFloat(calculatedSalary.professionalTax) || 0) : 0,
-                        }
-                    };
-
-                    if (config.salaryComponents) {
-                        config.salaryComponents.forEach(c => {
-                            if (c.linkedTo === 'fixed') {
-                                let customVal = calculatedSalary[c.id];
-                                if (customVal === undefined && c.id === 'flexi') {
-                                    customVal = calculatedSalary['flexiAmount'];
-                                }
-                                if (customVal === undefined && c.id === 'medical') {
-                                    customVal = calculatedSalary['medicalAllowance'];
-                                }
-                                source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
-                            }
-                        });
-                    }
-
-                    const master = buildMasterSalaryStructure(source, config);
-                    if (master) {
-                        calculatedSalary.annualCTC = String(annualCTC);
-                        calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                        calculatedSalary.basic = String(master.basicMaster);
-                        calculatedSalary.hra = String(master.hraMaster);
-                        calculatedSalary.specialAllowance = String(master.specialAllowance);
-                        calculatedSalary.monthlyGross = String(master.totalEarnings);
-
-                        calculatedSalary.pfEmployer = String(master.pfEmployer || 0);
-                        calculatedSalary.pfEmployee = String(master.pfEmployee || 0);
-                        calculatedSalary.gratuity = String(master.gratuity || 0);
-                        calculatedSalary.lwfEmployer = String(master.lwfEmployer || 0);
-                        calculatedSalary.lwfEmployee = String(master.lwfEmployee || 0);
-                        calculatedSalary.esiEmployer = String(master.esiEmployer || 0);
-                        calculatedSalary.esiEmployee = String(master.esiEmployee || 0);
-                        calculatedSalary.professionalTax = String(master.professionalTax || 0);
-                        calculatedSalary.tds = String(master.tds || 0);
-                        calculatedSalary.netTakeHome = String(master.netTakeHome || 0);
-
-                        if (master.earningsMap) {
-                            Object.entries(master.earningsMap).forEach(([id, val]) => {
-                                calculatedSalary[id] = String(val);
-                            });
-                        }
-                    }
+                    processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
                 }
             } catch (err) {
                 console.error('Error calculating candidate salary on backend update:', err);
@@ -2892,43 +2767,7 @@ const getSalaryBreakups = async (employee) => {
             const annualCTC = parseFloat(String(employee.salary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
             const monthlyCTC = annualCTC / 12;
 
-            const source = {
-                monthlyCTC,
-                payType: employee.salary?.payType || 'salaried',
-                pfEnabled: employee.salary?.pfEnabled !== undefined ? !!employee.salary.pfEnabled : true,
-                esiEnabled: employee.salary?.esiEnabled !== undefined ? !!employee.salary.esiEnabled : true,
-                ptEnabled: employee.salary?.ptEnabled !== undefined ? !!employee.salary.ptEnabled : true,
-                lwfEnabled: employee.salary?.lwfEnabled !== undefined ? !!employee.salary.lwfEnabled : true,
-                gratuityEnabled: employee.salary?.gratuityEnabled !== undefined ? !!employee.salary.gratuityEnabled : true,
-                includePfInCTC: !!employee.salary?.includePfInCTC,
-                includeGratuityInCTC: employee.salary?.includeGratuityInCTC !== undefined ? !!employee.salary.includeGratuityInCTC : true,
-                basicPercent: employee.salary?.basicPercent !== undefined && employee.salary.basicPercent !== null ? Number(employee.salary.basicPercent) : null,
-                hraPercent: employee.salary?.hraPercent !== undefined && employee.salary.hraPercent !== null ? Number(employee.salary.hraPercent) : null,
-                useSalaryComponents: employee.salary?.useSalaryComponents !== undefined ? !!employee.salary.useSalaryComponents : true,
-                ptState: employee.salary?.ptState || '',
-                insuranceAmount: parseFloat(employee.salary?.insuranceAmount) || 0,
-                employerNPS: parseFloat(employee.salary?.employerNPS) || 0,
-                deductions: {
-                    professionalTax: employee.salary?.ptState === 'custom' ? (parseFloat(employee.salary?.professionalTax) || 0) : 0,
-                }
-            };
-
-            if (config.salaryComponents) {
-                config.salaryComponents.forEach(c => {
-                    if (c.linkedTo === 'fixed') {
-                        let customVal = employee.salary?.[c.id];
-                        if (customVal === undefined && c.id === 'flexi') {
-                            customVal = employee.salary?.['flexiAmount'];
-                        }
-                        if (customVal === undefined && c.id === 'medical') {
-                            customVal = employee.salary?.['medicalAllowance'];
-                        }
-                        source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
-                    }
-                });
-            }
-
-            const master = buildMasterSalaryStructure(source, config);
+            const { master } = processCalculatedSalary(employee.salary || {}, config, annualCTC, monthlyCTC);
             if (master) {
                 // 1. Earnings Breakdown List
                 const earningsList = [];
