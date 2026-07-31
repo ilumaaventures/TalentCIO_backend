@@ -52,6 +52,11 @@ const discussionSchema = new mongoose.Schema({
         type: String,
         enum: ['Urgent', 'High', 'Medium', 'Low'],
         default: 'Medium'
+    },
+    hours: {
+        type: Number,
+        min: 0,
+        default: null
     }
 }, { timestamps: true });
 

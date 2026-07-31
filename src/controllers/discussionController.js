@@ -1,5 +1,6 @@
 const Discussion = require('../models/Discussion');
 const User = require('../models/User');
+const WorkLog = require('../models/WorkLog');
 const NotificationService = require('../services/notificationService');
 const mongoose = require('mongoose');
 const {
@@ -16,9 +17,40 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
 };
 
+const attachWorkLogTotals = async (discussions) => {
+    if (!discussions || discussions.length === 0) return discussions;
+    const objectIds = [];
+    const stringIds = [];
+    discussions.forEach(d => {
+        if (d && d._id) {
+            const strId = String(d._id);
+            stringIds.push(strId);
+            if (mongoose.isValidObjectId(strId)) {
+                objectIds.push(new mongoose.Types.ObjectId(strId));
+            }
+        }
+    });
+
+    const totals = await WorkLog.aggregate([
+        {
+            $match: {
+                discussion: { $in: [...objectIds, ...stringIds] },
+                isDeleted: { $ne: true }
+            }
+        },
+        { $group: { _id: '$discussion', total: { $sum: '$hours' } } }
+    ]);
+
+    const totalsMap = new Map(totals.map(t => [String(t._id), t.total]));
+    return discussions.map(d => ({
+        ...d,
+        totalLoggedHours: totalsMap.get(String(d._id)) || 0
+    }));
+};
+
 exports.createDiscussion = async (req, res) => {
     try {
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, priority } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, priority, hours } = req.body;
         const selectedSupervisorIds = Array.isArray(supervisor)
             ? supervisor
             : (supervisor || participantUserId ? [supervisor || participantUserId] : []);
@@ -44,7 +76,8 @@ exports.createDiscussion = async (req, res) => {
             visibleToUsers: normalizedVisibleTo,
             participants: buildDiscussionParticipants(req.user._id, selectedSupervisorIds, normalizedVisibleTo),
             project: (project && mongoose.isValidObjectId(project)) ? project : null,
-            priority: priority || 'Medium'
+            priority: priority || 'Medium',
+            hours: (hours !== undefined && hours !== null && hours !== '') ? Number(hours) : null
         });
         await newDiscussion.save();
 
@@ -126,6 +159,7 @@ exports.getDiscussions = async (req, res) => {
             { path: 'project', select: 'name' }
         ]);
 
+        discussions = await attachWorkLogTotals(discussions);
         discussions = discussions.map((discussion) => attachDiscussionPermissions(discussion, req.user));
 
         res.status(200).json({
@@ -152,6 +186,16 @@ exports.getDiscussionById = async (req, res) => {
         if (!canAccessDiscussion(discussion, req.user)) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this discussion' });
         }
+        const discIdStr = String(req.params.id);
+        const matchIds = [discIdStr];
+        if (mongoose.isValidObjectId(discIdStr)) {
+            matchIds.push(new mongoose.Types.ObjectId(discIdStr));
+        }
+        const totals = await WorkLog.aggregate([
+            { $match: { discussion: { $in: matchIds }, isDeleted: { $ne: true } } },
+            { $group: { _id: null, total: { $sum: '$hours' } } }
+        ]);
+        discussion.totalLoggedHours = totals[0]?.total || 0;
         res.status(200).json(attachDiscussionPermissions(discussion, req.user));
     } catch (error) {
         console.error('Error fetching discussion:', error);
@@ -162,7 +206,7 @@ exports.getDiscussionById = async (req, res) => {
 exports.updateDiscussion = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project, priority } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project, priority, hours } = req.body;
 
         const existingDiscussion = await Discussion.findOne({ _id: id, companyId: req.companyId });
         if (!existingDiscussion) return res.status(404).json({ message: 'Discussion not found' });
@@ -193,6 +237,9 @@ exports.updateDiscussion = async (req, res) => {
         }
         if (priority !== undefined) {
             updateData.priority = priority;
+        }
+        if (hours !== undefined) {
+            updateData.hours = (hours !== null && hours !== '') ? Number(hours) : null;
         }
 
         // Sanitize: strip empty objects or invalid values — only keep valid 24-char hex ObjectId strings

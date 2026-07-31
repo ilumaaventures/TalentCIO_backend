@@ -20,24 +20,29 @@ const canUpdateFutureRecords = (user) => (
 );
 
 const populateWorkLogHierarchy = (query) => (
-    query.populate({
-        path: 'task',
-        select: 'name module',
-        populate: {
-            path: 'module',
-            select: 'name project',
-            populate: { path: 'project', select: 'name client' }
-        }
-    })
+    query
+        .populate({
+            path: 'task',
+            select: 'name module',
+            populate: {
+                path: 'module',
+                select: 'name project',
+                populate: { path: 'project', select: 'name client' }
+            }
+        })
+        .populate('module', 'name')
+        .populate('project', 'name')
+        .populate('discussion', 'discussion title')
 );
 
 const mapWorkLogToTimesheetEntry = (log) => ({
     _id: log._id,
     date: log.date,
-    project: log.task?.module?.project || { name: 'Unknown Project' },
-    module: log.task?.module,
-    task: log.task,
-    taskName: log.task?.name,
+    project: log.project || log.task?.module?.project || { name: 'Unknown Project' },
+    module: log.module || log.task?.module || null,
+    task: log.task || null,
+    taskName: log.task?.name || null,
+    discussion: log.discussion || null,
     hours: log.hours,
     description: log.description,
     status: log.status,
@@ -123,7 +128,7 @@ const getCurrentTimesheet = async (req, res) => {
 // @route   POST /api/timesheet/entry
 // @access  Private
 const addEntry = async (req, res) => {
-    const { date: entryDate, hours, description, projectId, moduleId, taskId, userId } = req.body;
+    const { date: entryDate, hours, description, projectId, moduleId, taskId, discussionId, userId } = req.body;
 
     try {
         // 1. Resolve Target User
@@ -139,8 +144,8 @@ const addEntry = async (req, res) => {
         }
 
         // Validate Date and other required fields
-        if (!entryDate || !hours || !projectId || !taskId) {
-            return res.status(400).json({ message: 'Date, Project, Task, and Hours are required' });
+        if (!entryDate || !hours || !projectId) {
+            return res.status(400).json({ message: 'Date, Project, and Hours are required' });
         }
 
         // Check for Existing Timesheet Logic
@@ -199,9 +204,10 @@ const addEntry = async (req, res) => {
             user: targetUserId,
             date: normalizedEntryDate,
             companyId: req.companyId,
-            task: taskId, // This implies taskId is required. 
-            // If we support Project-only logs, we'd need a Task to hold it (e.g. "General Task" under project)
-            // But WorkLog schema likely has 'task' as ref. 
+            project: projectId,
+            module: moduleId || null,
+            task: taskId || null,
+            discussion: discussionId || null,
             hours: Number(hours),
             description: description || '',
             status: 'PENDING'
@@ -488,19 +494,11 @@ const getPendingTimesheets = async (req, res) => {
             const { start, end } = buildTimesheetPeriodRange(ts.month, cycle);
 
             const [workLogs, attendanceLog] = await Promise.all([
-                WorkLog.find({
+                populateWorkLogHierarchy(WorkLog.find({
                     user: ts.user._id,
                     companyId: req.companyId,
                     date: { $gte: start, $lte: end }
-                }).populate({
-                    path: 'task',
-                    select: 'name module',
-                    populate: {
-                        path: 'module',
-                        select: 'name project',
-                        populate: { path: 'project', select: 'name' }
-                    }
-                }).sort({ date: 1 }).lean(),
+                })).sort({ date: 1 }).lean(),
                 Attendance.find({
                     user: ts.user._id,
                     companyId: req.companyId,
@@ -511,18 +509,7 @@ const getPendingTimesheets = async (req, res) => {
                     .lean()
             ]);
 
-            const entries = workLogs.map(log => ({
-                _id: log._id,
-                date: log.date,
-                project: log.task?.module?.project || { name: 'Unknown Project' },
-                module: log.task?.module,
-                task: log.task,
-                taskName: log.task?.name,
-                hours: log.hours,
-                description: log.description,
-                status: log.status,
-                rejectionReason: log.rejectionReason
-            }));
+            const entries = workLogs.map(mapWorkLogToTimesheetEntry);
 
             return {
                 ...(ts.toObject ? ts.toObject() : ts),
@@ -754,10 +741,11 @@ const updateEntry = async (req, res) => {
         if (hours !== undefined) workLog.hours = hours;
         if (description !== undefined) workLog.description = description;
 
-        // Support for changing hierarchy (Task/Project)
-        if (req.body.taskId) workLog.task = req.body.taskId;
-        // Project/Module are inferred from Task, but if we track them in future or validation requires checking:
-        // We only really need to update the Task reference in WorkLog.
+        // Support for changing hierarchy (Task/Project/Module/Discussion)
+        if (req.body.projectId !== undefined) workLog.project = req.body.projectId || null;
+        if (req.body.moduleId !== undefined) workLog.module = req.body.moduleId || null;
+        if (req.body.taskId !== undefined) workLog.task = req.body.taskId || null;
+        if (req.body.discussionId !== undefined) workLog.discussion = req.body.discussionId || null;
 
         if (workLog.status === 'REJECTED') {
             workLog.status = 'PENDING';
@@ -777,6 +765,8 @@ const updateEntry = async (req, res) => {
 };
 
 module.exports = {
+    populateWorkLogHierarchy,
+    mapWorkLogToTimesheetEntry,
     getCurrentTimesheet,
     getUserTimesheet,
     addEntry,

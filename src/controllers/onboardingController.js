@@ -33,12 +33,17 @@ const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('../utils/p
 // TA SYNC HELPER — silently update phase3Decision on the sourced candidate
 // ==========================================
 const syncTADecision = async (employee, decision) => {
-    if (!employee.sourcedFromTA || !employee.candidateId) return;
+    if (!employee) return;
     try {
-        await Candidate.findOneAndUpdate(
-            { _id: employee.candidateId, companyId: employee.companyId },
-            { phase3Decision: decision }
-        );
+        let query = null;
+        if (employee.candidateId) {
+            query = { _id: employee.candidateId, companyId: employee.companyId };
+        } else if (employee.email) {
+            query = { email: employee.email, companyId: employee.companyId };
+        }
+        if (query) {
+            await Candidate.findOneAndUpdate(query, { phase3Decision: decision });
+        }
     } catch (err) {
         console.error('[syncTADecision] Failed to sync TA decision:', err.message);
     }
@@ -869,13 +874,12 @@ exports.sendPreOnboardingEmail = async (req, res) => {
             }
         });
 
-        // Sync TA phase3Decision → 'Offer Sent' if offer letter was included in this email
-        const includesOfferLetter = (documents || []).some(d =>
-            /offer\s*letter/i.test(d) || /offer[-_]letter/i.test(d)
-        ) || (sections || []).some(s =>
-            /offer\s*letter/i.test(s) || /offer[-_]letter/i.test(s)
-        );
-        if (includesOfferLetter) {
+        // Sync TA phase3Decision → 'Offer Sent' whenever offer declaration, dynamic templates, offer letter, or onboarding items are sent
+        const includesOfferOrDeclaration = (documents || []).length > 0 || (sections || []).length > 0 ||
+            (sections || []).some(s => /offer|declaration/i.test(s)) ||
+            (documents || []).some(d => /offer|letter|declaration/i.test(d) || companyDynamicTemplates.some(t => t.name === d));
+
+        if (includesOfferOrDeclaration) {
             await syncTADecision(employee, 'Offer Sent');
         }
 
@@ -2176,6 +2180,10 @@ exports.saveSection = async (req, res) => {
             employee.status = 'In Progress';
         }
         await employee.save();
+
+        if (section === 'offerDeclaration' && data.isComplete) {
+            await syncTADecision(employee, 'Offer Accepted');
+        }
 
         res.status(200).json({ message: 'Section saved' });
     } catch (error) {
@@ -4081,6 +4089,9 @@ exports.transferToActiveEmployee = async (req, res) => {
             details: `Transferred to active employee (User: ${newUser._id}) by ${req.user.firstName || 'Admin'}. Temporary Credentials - Email: ${newUser.email}, Password: ${userPassword}`
         });
         await employee.save();
+
+        // Sync TA phase3Decision → 'Joined' when candidate becomes active employee
+        await syncTADecision(employee, 'Joined');
 
         void dispatchEmployeeWebhook({
             companyId: req.companyId,
