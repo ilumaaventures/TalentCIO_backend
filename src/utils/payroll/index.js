@@ -535,6 +535,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
     basicPercent: calculatedSalary.basicPercent !== undefined && calculatedSalary.basicPercent !== null ? Number(calculatedSalary.basicPercent) : 50,
     hraPercent: calculatedSalary.hraPercent !== undefined && calculatedSalary.hraPercent !== null ? Number(calculatedSalary.hraPercent) : 50,
     vpfPercent: calculatedSalary.vpfPercent !== undefined && calculatedSalary.vpfPercent !== null ? Number(calculatedSalary.vpfPercent) : 0,
+    componentFrequencies: calculatedSalary.componentFrequencies || {},
     pfEnabled: parseBoolVal(calculatedSalary.pfEnabled, true),
     esiEnabled: parseBoolVal(calculatedSalary.esiEnabled, true),
     ptEnabled: parseBoolVal(calculatedSalary.ptEnabled, true),
@@ -574,6 +575,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
   calculatedSalary.includePfInCTC = source.includePfInCTC;
   calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
   calculatedSalary.useSalaryComponents = source.useSalaryComponents;
+  calculatedSalary.componentFrequencies = source.componentFrequencies;
 
   if (config.salaryComponents) {
     config.salaryComponents.forEach(c => {
