@@ -235,9 +235,9 @@ const createUser = async (req, res) => {
             const calculatedSalary = { ...(salary || {}) };
             let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
             let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
-            if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
+            if (annualCTC > 0) {
                 monthlyCTC = Math.round(annualCTC / 12);
-            } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {
+            } else if (monthlyCTC > 0) {
                 annualCTC = monthlyCTC * 12;
             }
 
@@ -390,9 +390,9 @@ const updateUser = async (req, res) => {
             const calculatedSalary = { ...salary };
             let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
             let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
-            if (calculatedSalary.annualCTC !== undefined && calculatedSalary.annualCTC !== '') {
+            if (annualCTC > 0) {
                 monthlyCTC = Math.round(annualCTC / 12);
-            } else if (calculatedSalary.monthlyCTC !== undefined && calculatedSalary.monthlyCTC !== '') {
+            } else if (monthlyCTC > 0) {
                 annualCTC = monthlyCTC * 12;
             }
 
