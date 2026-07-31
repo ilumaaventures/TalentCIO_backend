@@ -68,10 +68,17 @@ const getDayProrateArray = (totalDays, workingDays, paidDays, strategy = 'propor
   return dayProrate;
 };
 
+const parseBoolVal = (val, def = true) => {
+  if (val === false || val === 'false') return false;
+  if (val === true || val === 'true') return true;
+  return def;
+};
+
 module.exports = {
   roundAmount,
   sumNamedAmounts,
   clamp,
   getSegmentLops,
   getDayProrateArray,
+  parseBoolVal,
 };

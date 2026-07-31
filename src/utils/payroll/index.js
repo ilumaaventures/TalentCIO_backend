@@ -1,8 +1,7 @@
-const { getMonthlyPT } = require('../professionalTaxSlabs');
-const { roundAmount, sumNamedAmounts, clamp, getSegmentLops, getDayProrateArray } = require('./prorationUtils');
+const { getMonthlyPT, computeStatutoryComponents } = require('./statutoryEngine');
+const { roundAmount, sumNamedAmounts, clamp, getSegmentLops, getDayProrateArray, parseBoolVal } = require('./prorationUtils');
 const { calculateHRAExemption, calculateTaxForRegime, calculateTaxDetails } = require('./taxCalculator');
 const { getMonthlyCTCValue, resolveStrategyMonthlyCTC } = require('./compensationStrategies');
-const { computeStatutoryComponents } = require('./statutoryEngine');
 
 const DEFAULT_PAYROLL_CONFIG = {
   basicPercent: 0.5,
@@ -518,12 +517,6 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     netSalary,
     masterStructure: master,
   };
-};
-
-const parseBoolVal = (val, def = true) => {
-  if (val === false || val === 'false') return false;
-  if (val === true || val === 'true') return true;
-  return def;
 };
 
 const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, monthlyCTC) => {
