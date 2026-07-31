@@ -576,6 +576,8 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
   calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
   calculatedSalary.useSalaryComponents = source.useSalaryComponents;
   calculatedSalary.componentFrequencies = source.componentFrequencies;
+  calculatedSalary.customAllowances = source.otherAllowances;
+  calculatedSalary.customDeductions = source.otherDeductions;
 
   if (config.salaryComponents) {
     config.salaryComponents.forEach(c => {
