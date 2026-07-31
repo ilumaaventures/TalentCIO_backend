@@ -68,12 +68,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
 
   const useComponents = source.useSalaryComponents !== false && !isIntern && !isHourly && !isFlat && !isNonSalariedType;
 
-  // Toggles integration — non-salaried contractor strategies turn off standard statutory by default unless user toggles on
-  const pfEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.pfEnabled !== false;
-  const esiEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.esiEnabled !== false;
-  const ptEnabled = !isIntern && !isHourly && !isFlat && source.ptEnabled !== false;
-  const lwfEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.lwfEnabled !== false;
-  const gratuityEnabled = !isIntern && !isHourly && !isFlat && !isNonSalariedType && source.gratuityEnabled !== false;
+  // Toggles integration — non-structured mode & non-salaried contractor strategies turn off standard statutory components (PF, ESI, PT, LWF, Gratuity)
+  const pfEnabled = useComponents && source.pfEnabled !== false;
+  const esiEnabled = useComponents && source.esiEnabled !== false;
+  const ptEnabled = useComponents && source.ptEnabled !== false;
+  const lwfEnabled = useComponents && source.lwfEnabled !== false;
+  const gratuityEnabled = useComponents && source.gratuityEnabled !== false;
   const includePfInCTC = pfEnabled && source.includePfInCTC === true;
   const includeGratuityInCTC = gratuityEnabled && source.includeGratuityInCTC !== false;
 
@@ -302,8 +302,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     declarations
   }, monthlyCTC, config, basicMaster, hraMaster, totalEarnings);
 
+  const tdsEnabled = parseBoolVal(source.tdsEnabled, true);
   const calculatedTdsMonthly = taxDetails[taxRegime === 'old' ? 'oldRegime' : 'newRegime'].monthlyTax;
-  const tds = Number(source.deductions?.tds) > 0 ? Number(source.deductions?.tds) : roundAmount(calculatedTdsMonthly);
+  const tds = tdsEnabled ? (Number(source.deductions?.tds) > 0 ? Number(source.deductions?.tds) : roundAmount(calculatedTdsMonthly)) : 0;
 
   const manualPT = Number(source.deductions?.professionalTax) || 0;
   const computedPT = (ptEnabled && source.ptState)
