@@ -12,7 +12,10 @@ const logWork = async (req, res) => {
     const { taskId } = req.params;
 
     try {
-        const task = await Task.findOne({ _id: taskId, companyId: req.companyId });
+        const task = await Task.findOne({ _id: taskId, companyId: req.companyId }).populate({
+            path: 'module',
+            select: 'project'
+        });
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
         }
@@ -51,6 +54,8 @@ const logWork = async (req, res) => {
 
         const workLog = await WorkLog.create({
             task: taskId,
+            module: task.module?._id || null,
+            project: task.module?.project || null,
             user: req.user._id,
             companyId: req.companyId,
             date: normalizedDate,

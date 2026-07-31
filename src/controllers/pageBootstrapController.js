@@ -25,6 +25,7 @@ const User = require('../models/User');
 const WorkLog = require('../models/WorkLog');
 const { getStartOfDayIST } = require('../utils/attendancePolicy');
 const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../utils/timesheetPeriod');
+const { populateWorkLogHierarchy, mapWorkLogToTimesheetEntry } = require('./timesheetController');
 
 // HIGH-1: Global permission cache — permissions rarely change, 10-minute TTL is safe
 const PERMISSION_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -232,22 +233,11 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
     const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
 
     const [workLogs, attendance] = await Promise.all([
-        WorkLog.find({
+        populateWorkLogHierarchy(WorkLog.find({
             user: targetUserId,
             companyId,
             date: { $gte: start, $lte: end }
-        })
-            .populate({
-                path: 'task',
-                select: 'name module',
-                populate: {
-                    path: 'module',
-                    select: 'name project',
-                    populate: { path: 'project', select: 'name client' }
-                }
-            })
-            .sort({ date: 1 })
-            .lean(),
+        })).sort({ date: 1 }).lean(),
         Attendance.find({
             user: targetUserId,
             companyId,
@@ -257,18 +247,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
             .lean()
     ]);
 
-    const entries = workLogs.map(log => ({
-        _id: log._id,
-        date: log.date,
-        project: log.task?.module?.project || { name: 'Unknown Project' },
-        module: log.task?.module,
-        task: log.task,
-        taskName: log.task?.name,
-        hours: log.hours,
-        description: log.description,
-        status: log.status,
-        rejectionReason: log.rejectionReason
-    }));
+    const entries = workLogs.map(mapWorkLogToTimesheetEntry);
 
     return {
         ...(timesheet || {
@@ -745,12 +724,40 @@ exports.getDiscussionsBootstrap = async (req, res) => {
             supervisorsPromise
         ]);
 
-        const discussions = await Discussion.populate(discussionRows, [
+        let discussions = await Discussion.populate(discussionRows, [
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
             { path: 'supervisor', select: 'firstName lastName email profilePicture' },
             { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' },
             { path: 'project', select: 'name' }
         ]);
+
+        if (discussions && discussions.length > 0) {
+            const objectIds = [];
+            const stringIds = [];
+            discussions.forEach(d => {
+                if (d && d._id) {
+                    const strId = String(d._id);
+                    stringIds.push(strId);
+                    if (MongooseObjectId.isValid(strId)) {
+                        objectIds.push(new MongooseObjectId(strId));
+                    }
+                }
+            });
+            const totals = await WorkLog.aggregate([
+                {
+                    $match: {
+                        discussion: { $in: [...objectIds, ...stringIds] },
+                        isDeleted: { $ne: true }
+                    }
+                },
+                { $group: { _id: '$discussion', total: { $sum: '$hours' } } }
+            ]);
+            const totalsMap = new Map(totals.map(t => [String(t._id), t.total]));
+            discussions = discussions.map(d => ({
+                ...d,
+                totalLoggedHours: totalsMap.get(String(d._id)) || 0
+            }));
+        }
 
         res.status(200).json({
             discussions: discussions.map((discussion) => attachDiscussionPermissions(discussion, req.user)),

@@ -5,7 +5,18 @@ const workLogSchema = new mongoose.Schema({
     task: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Task',
-        required: true
+        required: false,
+        default: null
+    },
+    project: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Project',
+        default: null
+    },
+    module: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Module',
+        default: null
     },
     user: {
         type: mongoose.Schema.Types.ObjectId,
@@ -22,6 +33,11 @@ const workLogSchema = new mongoose.Schema({
         min: 0
     },
     description: String,
+    discussion: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Discussion',
+        default: null
+    },
     status: {
         type: String,
         enum: ['PENDING', 'APPROVED', 'REJECTED'],
