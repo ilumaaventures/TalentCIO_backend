@@ -4,13 +4,14 @@ const publicApplicationSchema = new mongoose.Schema({
     hiringRequestId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'HiringRequest',
-        required: true,
+        required: false,
         index: true
     },
+    desiredPosition: { type: String, trim: true },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',
-        required: true,
+        required: false,
         index: true
     },
     applicantId: {
@@ -22,10 +23,12 @@ const publicApplicationSchema = new mongoose.Schema({
     candidateName: { type: String, required: true, trim: true },
     email: { type: String, required: true, trim: true, lowercase: true },
     mobile: { type: String, required: true, trim: true },
+    currentCompany: { type: String, trim: true },
+    totalExperienceYears: { type: Number, min: 0 },
     currentCTC: { type: Number, min: 0 },
     expectedCTC: { type: Number, min: 0 },
     noticePeriod: { type: Number, min: 0 },
-    coverNote: { type: String, trim: true, maxlength: 500 },
+    coverNote: { type: String, trim: true, maxlength: 1000 },
 
     resumeUrl: { type: String, required: true },
     resumePublicId: { type: String, required: true },
@@ -50,7 +53,7 @@ const publicApplicationSchema = new mongoose.Schema({
     source: { type: String, default: 'Public Job Board' },
 }, { timestamps: true });
 
-publicApplicationSchema.index({ hiringRequestId: 1, email: 1 }, { unique: true });
+publicApplicationSchema.index({ hiringRequestId: 1, email: 1 }, { unique: true, sparse: true });
 publicApplicationSchema.index({ hiringRequestId: 1, reviewStatus: 1 });
 publicApplicationSchema.index({ companyId: 1, createdAt: -1 });
 

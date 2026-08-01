@@ -23,6 +23,7 @@ router.get('/jobs/:id', publicController.getPublicJobById);
 router.get('/resource-gateway/jobs', publicController.getResourceGatewayJobs);
 router.get('/resource-gateway/jobs/:id', publicController.getResourceGatewayJobById);
 router.post('/jobs/:id/apply', protectApplicant, upload.single('resume'), publicController.applyToJob);
+router.post('/general-application', protectApplicant, upload.single('resume'), publicController.submitGeneralApplication);
 router.use('/applicant', applicantAuthRoutes);
 
 module.exports = router;
