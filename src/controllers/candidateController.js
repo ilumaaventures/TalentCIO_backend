@@ -3735,7 +3735,9 @@ exports.bulkScheduleInterview = async (req, res) => {
                 const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
 
                 const shouldSendEmail = sendEmail !== false && sendEmail !== 'false';
-                const isSelectedForEmail = !Array.isArray(emailCandidateIds) || emailCandidateIds.length === 0 || emailCandidateIds.map(String).includes(String(candidate._id));
+                const isSelectedForEmail = Array.isArray(emailCandidateIds)
+                    ? emailCandidateIds.map(String).includes(String(candidate._id))
+                    : true;
 
                 if (shouldSendEmail && isSelectedForEmail) {
                     sendInterviewScheduleEmails({
