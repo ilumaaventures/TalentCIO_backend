@@ -507,6 +507,16 @@ const resolveMassMailTemplate = async ({ companyId, templateId, customSubject, c
     };
 };
 
+// ponytail: insert logs in chunks of 200 to avoid oversized single insertMany writes
+const LOG_BATCH_SIZE = 200;
+const insertLogChunks = async (entries) => {
+    for (let i = 0; i < entries.length; i += LOG_BATCH_SIZE) {
+        await TAEmailLog.insertMany(entries.slice(i, i + LOG_BATCH_SIZE));
+    }
+};
+
+const CANDIDATE_MAIL_FIELDS = 'candidateName firstName lastName email mobile status profilePulledBy companyName';
+
 const sendMassMailForHiringRequest = async ({
     companyId,
     user,
@@ -520,7 +530,8 @@ const sendMassMailForHiringRequest = async ({
     customNote = '',
     cc,
     bcc,
-    attachments = []
+    attachments = [],
+    io = null
 }) => {
     if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
         const error = new Error('Invalid hiring request ID.');
@@ -549,7 +560,8 @@ const sendMassMailForHiringRequest = async ({
         };
     }
 
-    const candidates = await Candidate.find(query).lean();
+    // Only load fields needed for templating and logging — avoids loading phaseHistory/interviewRounds arrays
+    const candidates = await Candidate.find(query).select(CANDIDATE_MAIL_FIELDS).lean();
     const company = await Company.findById(companyId).select('name settings.logo').lean();
     const { template, subject, htmlBody } = await resolveMassMailTemplate({
         companyId,
@@ -567,139 +579,178 @@ const sendMassMailForHiringRequest = async ({
         emailAccountId
     );
 
+    const batchId = new mongoose.Types.ObjectId();
+    const senderName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter';
+    const resolvedTemplateName = template?.name || template?.category || (customSubject ? 'Custom Email' : 'JD Sharing');
+
+    const formattedAttachments = (attachments || []).map(att => {
+        const filename = att.originalname || att.filename || att.name || 'Attachment';
+        const storedName = att.storedFilename || (att.path ? path.basename(att.path) : '');
+        let relativeUrl = att.url || '';
+        if (storedName) {
+            relativeUrl = `uploads/mass-mail/${storedName}`;
+        } else if (att.path) {
+            const normalized = String(att.path).replace(/\\/g, '/');
+            const idx = normalized.indexOf('uploads/');
+            relativeUrl = idx !== -1 ? normalized.substring(idx) : normalized;
+        }
+
+        return {
+            filename,
+            path: att.path || relativeUrl,
+            url: relativeUrl,
+            contentType: att.mimetype || att.contentType || '',
+            size: att.size || (att.buffer ? att.buffer.length : 0)
+        };
+    });
+
+    let currentInterEmailDelayMs = 250;
+    let pendingLogBuffer = [];
+    const MAX_RETRIES_PER_EMAIL = 3;
+    const { isRateLimitError } = require('../services/companyEmailService');
+
     for (const [index, candidate] of candidates.entries()) {
-        try {
-            const dataMap = buildCandidateDataMap(
-                candidate,
-                hiringRequest,
-                company?.name,
-                { customNote }
-            );
+        const dataMap = buildCandidateDataMap(
+            candidate,
+            hiringRequest,
+            company?.name,
+            { customNote }
+        );
 
-            const resolvedSubject = resolveTemplate(subject, dataMap);
-            const resolvedBody = resolveTemplate(htmlBody, dataMap);
-            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
-            const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
+        const resolvedSubject = resolveTemplate(subject, dataMap);
+        const resolvedBody = resolveTemplate(htmlBody, dataMap);
+        const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
+        const resolvedText = hasHtmlMarkup(resolvedBody) ? stripHtml(resolvedHtml) : resolvedBody;
 
-            const delivered = await sendEmailForCompany({
-                companyId,
-                emailAccountId: delivery.emailAccountId,
-                to: candidate.email,
-                cc: cc || undefined,
-                bcc: bcc || undefined,
-                subject: resolvedSubject,
-                html: resolvedHtml,
-                text: resolvedText,
-                attachments
-            });
+        let delivered = false;
+        let attempt = 0;
+        let lastError = null;
 
-            if (delivered) {
-                sent += 1;
-            } else {
-                failed += 1;
-                failedEmails.push({
-                    candidateId: candidate._id,
-                    email: candidate.email
+        while (attempt < MAX_RETRIES_PER_EMAIL && !delivered) {
+            attempt++;
+            try {
+                delivered = await sendEmailForCompany({
+                    companyId,
+                    emailAccountId: delivery.emailAccountId,
+                    to: candidate.email,
+                    cc: cc || undefined,
+                    bcc: bcc || undefined,
+                    subject: resolvedSubject,
+                    html: resolvedHtml,
+                    text: resolvedText,
+                    attachments,
+                    throwOnError: true
                 });
+            } catch (candidateEmailError) {
+                lastError = candidateEmailError;
+                const isRateLimit = candidateEmailError.isRateLimit || isRateLimitError(candidateEmailError);
+
+                if (isRateLimit && attempt < MAX_RETRIES_PER_EMAIL) {
+                    currentInterEmailDelayMs = Math.min(currentInterEmailDelayMs * 2, 3000);
+                    const backoffMs = attempt * 15000;
+                    console.warn(`[MASS MAIL RATE-LIMIT] Hit provider rate limit sending to ${candidate?.email}. Cooling down for ${backoffMs / 1000}s before retry (Attempt ${attempt}/${MAX_RETRIES_PER_EMAIL})...`);
+                    await wait(backoffMs);
+                } else {
+                    console.error(`[MASS MAIL] Exception sending email to ${candidate?.email}:`, candidateEmailError.message || candidateEmailError);
+                    break;
+                }
             }
-        } catch (candidateEmailError) {
-            console.error(`[MASS MAIL] Exception sending email to ${candidate?.email}:`, candidateEmailError);
+        }
+
+        const candidateDisplayName = (candidate?.candidateName && !candidate.candidateName.includes('@'))
+            ? candidate.candidateName.trim()
+            : `${candidate?.firstName || ''} ${candidate?.lastName || ''}`.trim()
+            || (candidate?.email ? candidate.email.split('@')[0].replace(/[._\-+]/g, ' ').split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '')
+            || 'Candidate';
+
+        if (delivered) {
+            sent += 1;
+        } else {
             failed += 1;
             failedEmails.push({
-                candidateId: candidate?._id,
-                email: candidate?.email,
-                reason: candidateEmailError.message || 'Send error'
+                candidateId: candidate._id,
+                email: candidate.email,
+                reason: lastError?.message || 'Send error'
             });
         }
 
-        if (candidates.length > 20 && index < candidates.length - 1) {
-            await wait(150);
+        // Buffer logs in micro-batches of 10 to optimize DB I/O while maintaining live feed and crash recovery
+        const logDocData = {
+            companyId,
+            sentBy: user?._id || null,
+            senderEmail: user?.email || '',
+            senderName,
+            hiringRequestId: hiringRequest._id,
+            hiringRequestTitle: hiringRequest?.roleDetails?.title || '',
+            candidateId: candidate._id,
+            recipientName: candidateDisplayName,
+            recipientEmail: candidate.email || '',
+            cc: String(cc || ''),
+            bcc: String(bcc || ''),
+            templateId: template?._id || null,
+            templateName: resolvedTemplateName,
+            subject: resolvedSubject || customSubject || '',
+            body: (resolvedHtml || resolvedBody || '').slice(0, 65000),
+            attachments: formattedAttachments,
+            status: delivered ? 'Sent' : 'Failed',
+            errorReason: delivered ? '' : (lastError?.message || 'Send error'),
+            batchId,
+            batchTotalCount: candidates.length,
+            sentAt: new Date()
+        };
+
+        pendingLogBuffer.push(logDocData);
+
+        // Flush buffer every 10 emails or on the final candidate
+        if (pendingLogBuffer.length >= 10 || index === candidates.length - 1) {
+            try {
+                const insertedDocs = await TAEmailLog.insertMany(pendingLogBuffer);
+                if (io && user?._id) {
+                    insertedDocs.forEach((doc) => {
+                        io.to(user._id.toString()).emit('ta_email_logged', {
+                            log: doc,
+                            progress: { sent, failed, total: candidates.length, hiringRequestId: hiringRequest._id }
+                        });
+                    });
+                }
+            } catch (bufferErr) {
+                console.error('[MASS MAIL] Failed to flush log buffer:', bufferErr.message);
+            }
+            pendingLogBuffer = [];
+        }
+
+        if (index < candidates.length - 1) {
+            await wait(currentInterEmailDelayMs);
         }
     }
 
     try {
-        const batchId = new mongoose.Types.ObjectId();
-        const senderName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter';
-        const resolvedTemplateName = template?.name || template?.category || (customSubject ? 'Custom Email' : 'JD Sharing');
-
-        const formattedAttachments = (attachments || []).map(att => {
-            const filename = att.originalname || att.filename || att.name || 'Attachment';
-            const storedName = att.storedFilename || (att.path ? path.basename(att.path) : '');
-            let relativeUrl = att.url || '';
-            if (storedName) {
-                relativeUrl = `uploads/mass-mail/${storedName}`;
-            } else if (att.path) {
-                const normalized = String(att.path).replace(/\\/g, '/');
-                const idx = normalized.indexOf('uploads/');
-                relativeUrl = idx !== -1 ? normalized.substring(idx) : normalized;
+        await HRRAuditLog.create({
+            hiringRequestId: hiringRequest._id,
+            companyId,
+            action: 'MASS_MAIL_SENT',
+            performedBy: user._id,
+            details: {
+                templateId: template?._id || templateId || null,
+                recipientCount: sent,
+                failedCount: failed,
+                filters,
+                candidateIds: Array.isArray(candidateIds) ? candidateIds : []
             }
-
-            return {
-                filename,
-                path: att.path || relativeUrl,
-                url: relativeUrl,
-                contentType: att.mimetype || att.contentType || '',
-                size: att.size || (att.buffer ? att.buffer.length : 0)
-            };
         });
-
-        const logEntries = candidates.map((candidate) => {
-            const dataMap = buildCandidateDataMap(candidate, hiringRequest, company?.name, { customNote });
-            const resolvedSubject = resolveTemplate(subject, dataMap);
-            const resolvedBody = resolveTemplate(htmlBody, dataMap);
-            const resolvedHtml = renderTemplateBody(htmlBody, dataMap);
-            const isFailed = failedEmails.some(f => String(f.candidateId) === String(candidate._id));
-
-            const candidateDisplayName = (candidate?.candidateName && !candidate.candidateName.includes('@'))
-                ? candidate.candidateName.trim()
-                : `${candidate?.firstName || ''} ${candidate?.lastName || ''}`.trim()
-                || (candidate?.email ? candidate.email.split('@')[0].replace(/[._\-+]/g, ' ').split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '')
-                || 'Candidate';
-
-            return {
-                companyId,
-                sentBy: user?._id || null,
-                senderEmail: user?.email || '',
-                senderName,
-                hiringRequestId: hiringRequest._id,
-                hiringRequestTitle: hiringRequest?.roleDetails?.title || '',
-                candidateId: candidate._id,
-                recipientName: candidateDisplayName,
-                recipientEmail: candidate.email || '',
-                cc: String(cc || ''),
-                bcc: String(bcc || ''),
-                templateId: template?._id || null,
-                templateName: resolvedTemplateName,
-                subject: resolvedSubject || customSubject || '',
-                body: resolvedHtml || resolvedBody || '',
-                attachments: formattedAttachments,
-                status: isFailed ? 'Failed' : 'Sent',
-                batchId,
-                batchTotalCount: candidates.length,
-                sentAt: new Date()
-            };
-        });
-
-        if (logEntries.length > 0) {
-            await TAEmailLog.insertMany(logEntries);
-        }
-    } catch (logErr) {
-        console.error('Failed to create candidate TAEmailLog records:', logErr);
+    } catch (auditErr) {
+        console.error('[MASS MAIL] Failed to create audit log:', auditErr.message);
     }
 
-    await HRRAuditLog.create({
-        hiringRequestId: hiringRequest._id,
-        companyId,
-        action: 'MASS_MAIL_SENT',
-        performedBy: user._id,
-        details: {
-            templateId: template?._id || templateId || null,
-            recipientCount: sent,
-            failedCount: failed,
-            filters,
-            candidateIds: Array.isArray(candidateIds) ? candidateIds : []
-        }
-    });
+    if (io && user?._id) {
+        io.to(user._id.toString()).emit('ta_email_batch_completed', {
+            batchId,
+            hiringRequestId: hiringRequest._id,
+            sent,
+            failed,
+            total: candidates.length
+        });
+    }
 
     return {
         hiringRequestId: hiringRequest._id,
@@ -2072,9 +2123,10 @@ exports.sendMassMail = async (req, res) => {
     try {
         const candidateIds = parseJsonIfNeeded(req.body?.candidateIds, []);
         const filters = parseJsonIfNeeded(req.body?.filters, {});
+        // parseMassMailAttachmentsFromReq must complete before response — it reads req.files
         const attachments = await parseMassMailAttachmentsFromReq(req);
 
-        const result = await sendMassMailForHiringRequest({
+        const jobArgs = {
             companyId: req.companyId,
             user: req.user,
             hiringRequestId: req.params.id,
@@ -2087,10 +2139,22 @@ exports.sendMassMail = async (req, res) => {
             customNote: req.body?.customNote,
             cc: req.body?.cc || req.body?.ccEmails,
             bcc: req.body?.bcc || req.body?.bccEmails,
-            attachments
-        });
+            attachments,
+            io: req.app?.get('io')
+        };
 
-        res.status(200).json(result);
+        // Respond immediately — the send loop runs in the background.
+        // Progress is visible via email history (/ta/email-history).
+        res.status(202).json({ message: 'Mass mail queued. Progress available in Email History.' });
+
+        // ponytail: setImmediate detaches from the request lifecycle — no BullMQ needed for this scale
+        setImmediate(async () => {
+            try {
+                await sendMassMailForHiringRequest(jobArgs);
+            } catch (bgErr) {
+                console.error('[MASS MAIL BG] sendMassMail failed:', bgErr.message);
+            }
+        });
     } catch (error) {
         console.error('sendMassMail error:', error);
         res.status(error.statusCode || 500).json({ message: error.message || 'Failed to send mass mail' });
@@ -2114,45 +2178,38 @@ exports.sendMassMailBulk = async (req, res) => {
         const filters = parseJsonIfNeeded(req.body?.filters, {});
         const attachments = await parseMassMailAttachmentsFromReq(req);
 
-        const results = [];
-        let sent = 0;
-        let failed = 0;
-        const failedEmails = [];
+        const baseArgs = {
+            companyId: req.companyId,
+            user: req.user,
+            emailAccountId: req.body?.emailAccountId,
+            templateId: req.body?.templateId,
+            customSubject: req.body?.customSubject,
+            customHtmlBody: req.body?.customHtmlBody,
+            filters: typeof filters === 'object' ? filters : {},
+            customNote: req.body?.customNote,
+            cc: req.body?.cc || req.body?.ccEmails,
+            bcc: req.body?.bcc || req.body?.bccEmails,
+            attachments,
+            io: req.app?.get('io')
+        };
 
-        for (const hiringRequestId of hiringRequestIds) {
-            try {
-                const result = await sendMassMailForHiringRequest({
-                    companyId: req.companyId,
-                    user: req.user,
-                    hiringRequestId,
-                    emailAccountId: req.body?.emailAccountId,
-                    templateId: req.body?.templateId,
-                    customSubject: req.body?.customSubject,
-                    customHtmlBody: req.body?.customHtmlBody,
-                    candidateIds: selectionMap.get(String(hiringRequestId)) || [],
-                    filters: typeof filters === 'object' ? filters : {},
-                    customNote: req.body?.customNote,
-                    cc: req.body?.cc || req.body?.ccEmails,
-                    bcc: req.body?.bcc || req.body?.bccEmails,
-                    attachments
-                });
+        // Respond immediately — all jobs run in the background
+        res.status(202).json({ message: 'Bulk mass mail queued. Progress available in Email History.' });
 
-                results.push(result);
-                sent += result.sent;
-                failed += result.failed;
-                failedEmails.push(...result.failedEmails);
-            } catch (error) {
-                results.push({
-                    hiringRequestId,
-                    sent: 0,
-                    failed: 0,
-                    failedEmails: [],
-                    error: error.message || 'Failed to send mail for this requisition'
-                });
+        // ponytail: sequential background jobs — simple, no queue infra needed
+        setImmediate(async () => {
+            for (const hiringRequestId of hiringRequestIds) {
+                try {
+                    await sendMassMailForHiringRequest({
+                        ...baseArgs,
+                        hiringRequestId,
+                        candidateIds: selectionMap.get(String(hiringRequestId)) || []
+                    });
+                } catch (bgErr) {
+                    console.error(`[MASS MAIL BG] Bulk job failed for ${hiringRequestId}:`, bgErr.message);
+                }
             }
-        }
-
-        res.status(200).json({ sent, failed, failedEmails, results });
+        });
     } catch (error) {
         console.error('sendMassMailBulk error:', error);
         res.status(500).json({ message: 'Failed to send bulk mass mail', error: error.message });
