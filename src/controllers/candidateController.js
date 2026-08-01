@@ -2725,9 +2725,22 @@ exports.addInterviewRound = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        const FIXED_ASSIGN_AFTER_STAGES = new Set([
+            'Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared', 'Offer Released'
+        ]);
+        const normalizedAssignAfter = String(assignAfterStage || 'Shortlisted').trim();
+        const existingRoundNames = new Set(
+            (candidate.interviewRounds || []).map((r) => String(r.levelName || '').trim()).filter(Boolean)
+        );
+        if (normalizedAssignAfter && !FIXED_ASSIGN_AFTER_STAGES.has(normalizedAssignAfter) && !existingRoundNames.has(normalizedAssignAfter)) {
+            return res.status(400).json({
+                message: `Invalid assignAfterStage: "${normalizedAssignAfter}". Must be a known stage name or an existing round's level name.`
+            });
+        }
+
         const newRound = {
             levelName,
-            assignAfterStage: assignAfterStage || 'Shortlisted',
+            assignAfterStage: normalizedAssignAfter || 'Shortlisted',
             assignedTo: assignedTo || [],
             status: 'Pending',
             scheduledDate,
@@ -4603,6 +4616,25 @@ exports.getCandidateCardFilters = async (req, res) => {
         ));
         const basePhase3Candidates = structuralPhase3Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 3));
 
+        const roundMap = new Map();
+        for (const candidate of structuralPhase1Candidates) {
+            const seenRounds = new Set();
+            for (const round of (candidate?.interviewRounds || [])) {
+                if (Number(round?.phase || 1) !== 1) continue;
+                const name = String(round?.levelName || '').trim();
+                if (!name) continue;
+                const anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                if (!roundMap.has(name)) {
+                    roundMap.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                }
+                if (!seenRounds.has(name)) {
+                    seenRounds.add(name);
+                    roundMap.get(name).count += 1;
+                }
+            }
+        }
+        const interviewRoundsSummary = Array.from(roundMap.values());
+
         const summary = {
             phase1Metrics: {
                 total: structuralPhase1Candidates.length,
@@ -4619,7 +4651,8 @@ exports.getCandidateCardFilters = async (req, res) => {
                 didNotTurnUp: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Did Not Turn Up').length,
                 onHold: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'On Hold').length,
                 profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
-                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
+                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length,
+                interviewRoundsSummary
             },
             phase2Metrics: {
                 totalShortlisted: structuralPhase2Candidates.length,

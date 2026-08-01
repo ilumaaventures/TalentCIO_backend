@@ -253,8 +253,10 @@ const candidateSchema = new mongoose.Schema({
             required: true
         },
         assignAfterStage: {
+            // Accepts a fixed stage name ('Total Sourced', 'Interested', 'Shortlisted',
+            // 'Profile Shared', 'Offer Released') OR the levelName of another interview
+            // round, enabling round-to-round chaining in the recruitment pipeline.
             type: String,
-            enum: ['Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared', 'Offer Released'],
             default: 'Shortlisted'
         },
         phase: { // Tracks whether this round belongs to Phase 1 or Phase 2
