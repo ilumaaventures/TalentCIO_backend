@@ -3659,11 +3659,7 @@ exports.transferToOnboarding = async (req, res) => {
 
 exports.bulkScheduleInterview = async (req, res) => {
     try {
-        const { candidateIds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody } = req.body;
-
-        if (!levelName || typeof levelName !== 'string' || !levelName.trim()) {
-            return res.status(400).json({ message: 'Level name (round name) is required' });
-        }
+        const { candidateIds, rounds: reqRounds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody, sendEmail, emailCandidateIds } = req.body;
 
         if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
             return res.status(400).json({ message: 'At least one candidate must be selected' });
@@ -3672,6 +3668,31 @@ exports.bulkScheduleInterview = async (req, res) => {
         const validCandidateIds = candidateIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
         if (validCandidateIds.length === 0) {
             return res.status(400).json({ message: 'No valid candidate IDs provided' });
+        }
+
+        let roundsToSchedule = [];
+        if (Array.isArray(reqRounds) && reqRounds.length > 0) {
+            roundsToSchedule = reqRounds.filter(r => r.levelName && String(r.levelName).trim());
+        } else if (levelName && String(levelName).trim()) {
+            roundsToSchedule = [{
+                levelName: String(levelName).trim(),
+                assignedTo,
+                scheduledDate,
+                phase,
+                customFields,
+                emailTemplateId,
+                emailAccountId,
+                cc,
+                bcc,
+                customSubject,
+                customHtmlBody,
+                sendEmail,
+                emailCandidateIds
+            }];
+        }
+
+        if (roundsToSchedule.length === 0) {
+            return res.status(400).json({ message: 'At least one interview round with a valid name is required' });
         }
 
         const candidates = await Candidate.find({
@@ -3683,14 +3704,10 @@ exports.bulkScheduleInterview = async (req, res) => {
             return res.status(404).json({ message: 'No candidates found for the given IDs' });
         }
 
-        const roundPhase = Number(phase) > 0 ? Number(phase) : 1;
-        const normalizedAssignedTo = Array.isArray(assignedTo)
-            ? assignedTo.filter((id) => mongoose.Types.ObjectId.isValid(id))
-            : [];
-
         let scheduled = 0;
         const failed = [];
         const scheduledCandidateNames = [];
+        const allAssignedUserIds = new Set();
 
         for (const candidate of candidates) {
             try {
@@ -3710,41 +3727,57 @@ exports.bulkScheduleInterview = async (req, res) => {
                     continue;
                 }
 
-                const newRound = {
-                    levelName: levelName.trim(),
-                    assignedTo: normalizedAssignedTo,
-                    status: 'Pending',
-                    scheduledDate: scheduledDate || undefined,
-                    phase: roundPhase,
-                    customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : [],
-                    emailTemplateId: emailTemplateId || null,
-                    emailAccountId: emailAccountId || null,
-                    cc: cc || '',
-                    bcc: bcc || '',
-                    customSubject: customSubject || '',
-                    customHtmlBody: customHtmlBody || ''
-                };
+                for (const roundConfig of roundsToSchedule) {
+                    const roundPhase = Number(roundConfig.phase) > 0 ? Number(roundConfig.phase) : 1;
+                    const normalizedAssignedTo = Array.isArray(roundConfig.assignedTo)
+                        ? roundConfig.assignedTo.filter((id) => mongoose.Types.ObjectId.isValid(id))
+                        : [];
 
-                candidate.interviewRounds.push(newRound);
-                await candidate.save();
+                    normalizedAssignedTo.forEach(id => allAssignedUserIds.add(id.toString()));
 
-                const updatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
-                    .populate('hiringRequestId', 'requestId client roleDetails')
-                    .populate('interviewRounds.assignedTo', 'firstName lastName email');
+                    const newRound = {
+                        levelName: String(roundConfig.levelName).trim(),
+                        assignedTo: normalizedAssignedTo,
+                        status: 'Pending',
+                        scheduledDate: roundConfig.scheduledDate || undefined,
+                        phase: roundPhase,
+                        customFields: Array.isArray(roundConfig.customFields) ? roundConfig.customFields.filter(f => f.key && String(f.key).trim()) : [],
+                        emailTemplateId: roundConfig.emailTemplateId || null,
+                        emailAccountId: roundConfig.emailAccountId || null,
+                        cc: roundConfig.cc || '',
+                        bcc: roundConfig.bcc || '',
+                        customSubject: roundConfig.customSubject || '',
+                        customHtmlBody: roundConfig.customHtmlBody || ''
+                    };
 
-                const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
+                    candidate.interviewRounds.push(newRound);
+                    await candidate.save();
 
-                sendInterviewScheduleEmails({
-                    companyId: req.companyId,
-                    candidate: updatedCandidate,
-                    round: savedRound,
-                    user: req.user,
-                    cc,
-                    bcc,
-                    emailAccountId,
-                    customSubject,
-                    customHtmlBody
-                });
+                    const updatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
+                        .populate('hiringRequestId', 'requestId client roleDetails')
+                        .populate('interviewRounds.assignedTo', 'firstName lastName email');
+
+                    const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
+
+                    const shouldSendEmail = roundConfig.sendEmail !== false && roundConfig.sendEmail !== 'false';
+                    const isSelectedForEmail = Array.isArray(roundConfig.emailCandidateIds)
+                        ? roundConfig.emailCandidateIds.map(String).includes(String(candidate._id))
+                        : true;
+
+                    if (shouldSendEmail && isSelectedForEmail) {
+                        sendInterviewScheduleEmails({
+                            companyId: req.companyId,
+                            candidate: updatedCandidate,
+                            round: savedRound,
+                            user: req.user,
+                            cc: roundConfig.cc,
+                            bcc: roundConfig.bcc,
+                            emailAccountId: roundConfig.emailAccountId,
+                            customSubject: roundConfig.customSubject,
+                            customHtmlBody: roundConfig.customHtmlBody
+                        });
+                    }
+                }
 
                 scheduled += 1;
                 scheduledCandidateNames.push(candidate.candidateName);
@@ -3758,16 +3791,17 @@ exports.bulkScheduleInterview = async (req, res) => {
         }
 
         // Send grouped notifications to assigned interviewers
-        if (normalizedAssignedTo.length > 0 && scheduled > 0) {
+        const assignedUserArray = Array.from(allAssignedUserIds);
+        if (assignedUserArray.length > 0 && scheduled > 0) {
             const io = req.app.get('io');
-            const notifications = normalizedAssignedTo.map((userId) => ({
+            const notifications = assignedUserArray.map((userId) => ({
                 user: userId,
                 companyId: req.companyId,
                 preferenceKey: 'interview_assigned',
                 title: 'New Interviews Assigned',
                 message: scheduled === 1
-                    ? `You have been assigned to evaluate ${scheduledCandidateNames[0]} for the ${levelName} round.`
-                    : `You have been assigned to evaluate ${scheduled} candidates for the ${levelName} round.`,
+                    ? `You have been assigned to evaluate ${scheduledCandidateNames[0]} for interview rounds.`
+                    : `You have been assigned to evaluate ${scheduled} candidates for interview rounds.`,
                 type: 'Interview',
                 link: '/ta',
                 origin: req.headers.origin
@@ -3775,18 +3809,16 @@ exports.bulkScheduleInterview = async (req, res) => {
 
             await NotificationService.createManyNotifications(io, notifications);
 
-            // Emit real-time updates to each assigned interviewer
-            normalizedAssignedTo.forEach((userId) => {
+            assignedUserArray.forEach((userId) => {
                 NotificationService.emitToUser(io, userId, 'interview_update', {
                     type: 'BULK_SCHEDULED',
-                    count: scheduled,
-                    levelName
+                    count: scheduled
                 });
             });
         }
 
         res.status(200).json({
-            message: `Interview round "${levelName}" scheduled for ${scheduled} candidate(s)`,
+            message: `${roundsToSchedule.length} interview round(s) scheduled for ${scheduled} candidate(s)`,
             scheduled,
             failed: failed.length,
             errors: failed

@@ -606,10 +606,75 @@ const sendMassMailForHiringRequest = async ({
 
     let currentInterEmailDelayMs = 250;
     let pendingLogBuffer = [];
+    let consecutiveRateLimitFailures = 0;
+    const MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 3;
     const MAX_RETRIES_PER_EMAIL = 3;
     const { isRateLimitError } = require('../services/companyEmailService');
 
     for (const [index, candidate] of candidates.entries()) {
+        if (consecutiveRateLimitFailures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES) {
+            console.error(`[MASS MAIL CIRCUIT-BREAKER TRIPPED] Provider rate limit exceeded for ${consecutiveRateLimitFailures} consecutive candidates. Halting remaining batch of ${candidates.length - index} candidates.`);
+
+            // Log all remaining candidates as Failed (Quota Exceeded)
+            for (let remIdx = index; remIdx < candidates.length; remIdx++) {
+                const remCandidate = candidates[remIdx];
+                failed += 1;
+                failedEmails.push({
+                    candidateId: remCandidate._id,
+                    email: remCandidate.email,
+                    reason: 'Provider rate limit / daily quota exceeded. Halting batch.'
+                });
+
+                const remDisplayName = (remCandidate?.candidateName && !remCandidate.candidateName.includes('@'))
+                    ? remCandidate.candidateName.trim()
+                    : `${remCandidate?.firstName || ''} ${remCandidate?.lastName || ''}`.trim()
+                    || (remCandidate?.email ? remCandidate.email.split('@')[0].replace(/[._\-+]/g, ' ').split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '')
+                    || 'Candidate';
+
+                pendingLogBuffer.push({
+                    companyId,
+                    sentBy: user?._id || null,
+                    senderEmail: user?.email || '',
+                    senderName,
+                    hiringRequestId: hiringRequest._id,
+                    hiringRequestTitle: hiringRequest?.roleDetails?.title || '',
+                    candidateId: remCandidate._id,
+                    recipientName: remDisplayName,
+                    recipientEmail: remCandidate.email || '',
+                    cc: String(cc || ''),
+                    bcc: String(bcc || ''),
+                    templateId: template?._id || null,
+                    templateName: resolvedTemplateName,
+                    subject: customSubject || '',
+                    body: '',
+                    attachments: formattedAttachments,
+                    status: 'Failed',
+                    errorReason: 'Provider rate limit / daily quota exceeded',
+                    batchId,
+                    batchTotalCount: candidates.length,
+                    sentAt: new Date()
+                });
+            }
+
+            if (pendingLogBuffer.length > 0) {
+                try {
+                    const insertedDocs = await TAEmailLog.insertMany(pendingLogBuffer);
+                    if (io && user?._id) {
+                        insertedDocs.forEach((doc) => {
+                            io.to(user._id.toString()).emit('ta_email_logged', {
+                                log: doc,
+                                progress: { sent, failed, total: candidates.length, hiringRequestId: hiringRequest._id }
+                            });
+                        });
+                    }
+                } catch (bErr) {
+                    console.error('[MASS MAIL] Failed to flush final log buffer:', bErr.message);
+                }
+                pendingLogBuffer = [];
+            }
+            break;
+        }
+
         const dataMap = buildCandidateDataMap(
             candidate,
             hiringRequest,
@@ -625,6 +690,7 @@ const sendMassMailForHiringRequest = async ({
         let delivered = false;
         let attempt = 0;
         let lastError = null;
+        let lastWasRateLimit = false;
 
         while (attempt < MAX_RETRIES_PER_EMAIL && !delivered) {
             attempt++;
@@ -644,6 +710,7 @@ const sendMassMailForHiringRequest = async ({
             } catch (candidateEmailError) {
                 lastError = candidateEmailError;
                 const isRateLimit = candidateEmailError.isRateLimit || isRateLimitError(candidateEmailError);
+                if (isRateLimit) lastWasRateLimit = true;
 
                 if (isRateLimit && attempt < MAX_RETRIES_PER_EMAIL) {
                     currentInterEmailDelayMs = Math.min(currentInterEmailDelayMs * 2, 3000);
@@ -665,8 +732,14 @@ const sendMassMailForHiringRequest = async ({
 
         if (delivered) {
             sent += 1;
+            consecutiveRateLimitFailures = 0; // Reset circuit breaker counter on success
         } else {
             failed += 1;
+            if (lastWasRateLimit) {
+                consecutiveRateLimitFailures++;
+            } else {
+                consecutiveRateLimitFailures = 0;
+            }
             failedEmails.push({
                 candidateId: candidate._id,
                 email: candidate.email,
