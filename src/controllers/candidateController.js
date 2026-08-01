@@ -2709,7 +2709,7 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
 exports.addInterviewRound = async (req, res) => {
     try {
         const { id } = req.params;
-        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
 
         if (!levelName) {
             return res.status(400).json({ message: 'Level name is required' });
@@ -2727,6 +2727,7 @@ exports.addInterviewRound = async (req, res) => {
 
         const newRound = {
             levelName,
+            assignAfterStage: assignAfterStage || 'Shortlisted',
             assignedTo: assignedTo || [],
             status: 'Pending',
             scheduledDate,
