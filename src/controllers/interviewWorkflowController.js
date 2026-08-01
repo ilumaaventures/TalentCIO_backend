@@ -1,4 +1,14 @@
+const mongoose = require('mongoose');
 const InterviewWorkflow = require('../models/InterviewWorkflow');
+
+const sanitizeRounds = (rounds = []) => (
+    Array.isArray(rounds) ? rounds.map((r) => ({
+        ...r,
+        role: r.role && mongoose.Types.ObjectId.isValid(r.role) ? r.role : null,
+        user: r.user && mongoose.Types.ObjectId.isValid(r.user) ? r.user : null,
+        emailTemplateId: r.emailTemplateId && mongoose.Types.ObjectId.isValid(r.emailTemplateId) ? r.emailTemplateId : null
+    })) : []
+);
 
 // @desc    Create Interview Workflow
 // @route   POST /api/ta/interview-workflows
@@ -16,7 +26,7 @@ exports.createInterviewWorkflow = async (req, res) => {
             companyId: req.companyId,
             name,
             description,
-            rounds,
+            rounds: sanitizeRounds(rounds),
             createdBy: req.user._id
         });
 
@@ -87,7 +97,7 @@ exports.updateInterviewWorkflow = async (req, res) => {
 
         workflow.name = name || workflow.name;
         workflow.description = description !== undefined ? description : workflow.description;
-        workflow.rounds = rounds || workflow.rounds;
+        workflow.rounds = rounds ? sanitizeRounds(rounds) : workflow.rounds;
         workflow.isActive = isActive !== undefined ? isActive : workflow.isActive;
 
         await workflow.save();

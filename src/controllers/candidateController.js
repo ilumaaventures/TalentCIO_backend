@@ -3659,7 +3659,7 @@ exports.transferToOnboarding = async (req, res) => {
 
 exports.bulkScheduleInterview = async (req, res) => {
     try {
-        const { candidateIds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody } = req.body;
+        const { candidateIds, levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody, sendEmail, emailCandidateIds } = req.body;
 
         if (!levelName || typeof levelName !== 'string' || !levelName.trim()) {
             return res.status(400).json({ message: 'Level name (round name) is required' });
@@ -3734,17 +3734,22 @@ exports.bulkScheduleInterview = async (req, res) => {
 
                 const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
 
-                sendInterviewScheduleEmails({
-                    companyId: req.companyId,
-                    candidate: updatedCandidate,
-                    round: savedRound,
-                    user: req.user,
-                    cc,
-                    bcc,
-                    emailAccountId,
-                    customSubject,
-                    customHtmlBody
-                });
+                const shouldSendEmail = sendEmail !== false && sendEmail !== 'false';
+                const isSelectedForEmail = !Array.isArray(emailCandidateIds) || emailCandidateIds.length === 0 || emailCandidateIds.map(String).includes(String(candidate._id));
+
+                if (shouldSendEmail && isSelectedForEmail) {
+                    sendInterviewScheduleEmails({
+                        companyId: req.companyId,
+                        candidate: updatedCandidate,
+                        round: savedRound,
+                        user: req.user,
+                        cc,
+                        bcc,
+                        emailAccountId,
+                        customSubject,
+                        customHtmlBody
+                    });
+                }
 
                 scheduled += 1;
                 scheduledCandidateNames.push(candidate.candidateName);
