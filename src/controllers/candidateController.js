@@ -11,6 +11,7 @@ const OnboardingEmployee = require('../models/OnboardingEmployee');
 const CandidateSource = require('../models/CandidateSource');
 const { parseCV } = require('../utils/cvParser');
 const PublicApplication = require('../models/PublicApplication');
+const { attachLastApplicationData } = require('../utils/applicationHistoryUtils');
 const {
     buildInitialDynamicPhaseState,
     isDynamicHiringRequest
@@ -4720,12 +4721,14 @@ exports.globalSearchPublicApplications = async (req, res) => {
             });
         }
 
+        const applicationsWithHistory = await attachLastApplicationData(filteredApps);
+
         res.status(200).json({
             currentPage: page,
             totalPages: Math.max(Math.ceil(total / limit), 1),
             count: total,
             limit,
-            applications: filteredApps
+            applications: applicationsWithHistory
         });
     } catch (error) {
         console.error('Error in global search public applications:', error);

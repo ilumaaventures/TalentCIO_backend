@@ -8,6 +8,7 @@ const Company = require('../models/Company');
 const HandoffToken = require('../models/HandoffToken');
 const { HiringRequest } = require('../models/HiringRequest');
 const PublicApplication = require('../models/PublicApplication');
+const { check3MonthApplicationLock } = require('../utils/applicationHistoryUtils');
 const { sendEmail } = require('../services/emailService');
 const { sendEmailForCompany } = require('../services/companyEmailService');
 const NotificationService = require('../services/notificationService');
@@ -636,6 +637,15 @@ exports.applyToJob = async (req, res) => {
         }
 
         const normalizedEmail = req.applicant?.email || String(email).trim().toLowerCase();
+        const normalizedMobile = String(mobile || '').trim();
+
+        const lockCheck = await check3MonthApplicationLock(normalizedEmail, normalizedMobile);
+        if (lockCheck.isLocked) {
+            return res.status(409).json({
+                message: 'Your application was submitted within the last 3 months. You can update it or re-apply only after 3 months.'
+            });
+        }
+
         const existingApplication = await PublicApplication.exists({
             hiringRequestId: job._id,
             email: normalizedEmail
@@ -680,6 +690,184 @@ exports.applyToJob = async (req, res) => {
 
         console.error('Failed to submit public application:', error);
         res.status(500).json({ message: 'Failed to submit application' });
+    }
+};
+
+exports.submitGeneralApplication = async (req, res) => {
+    try {
+        const {
+            desiredPosition,
+            positionToFill,
+            candidateName,
+            email,
+            mobile,
+            currentCompany,
+            totalExperienceYears,
+            currentCTC,
+            expectedCTC,
+            noticePeriod,
+            preferredLocation,
+            coverNote,
+            useProfileResume,
+            profileResumeUrl,
+            profileResumePublicId
+        } = req.body;
+
+        const targetPosition = String(desiredPosition || positionToFill || '').trim();
+
+        if (!targetPosition) {
+            return res.status(400).json({ message: 'Please specify the position you want to fill.' });
+        }
+
+        if (!candidateName?.trim() || !email?.trim() || !mobile?.trim()) {
+            return res.status(400).json({ message: 'Full name, email address, and mobile number are required.' });
+        }
+
+        let resumeUrl = '';
+        let resumePublicId = '';
+
+        if (useProfileResume === 'true' || useProfileResume === true) {
+            if (!profileResumeUrl) {
+                return res.status(400).json({ message: 'Saved profile resume is missing.' });
+            }
+            resumeUrl = profileResumeUrl;
+            resumePublicId = profileResumePublicId || '';
+        } else {
+            if (!req.file?.path) {
+                return res.status(400).json({ message: 'Resume document is required.' });
+            }
+            resumeUrl = req.file.path;
+            resumePublicId = req.file.filename || req.file.path;
+        }
+
+        if (!req.applicant) {
+            return res.status(401).json({ message: 'Please login first to submit your candidate application.' });
+        }
+
+        const normalizedEmail = String(req.applicant.email).trim().toLowerCase();
+        const applicantId = req.applicant._id;
+        let profileSnapshot = null;
+
+        const applicantProfile = await Applicant.findById(applicantId).lean();
+        if (applicantProfile) {
+            profileSnapshot = buildProfileSnapshot(applicantProfile);
+        }
+
+        if (!profileSnapshot) {
+            const nameParts = String(candidateName).trim().split(' ');
+            profileSnapshot = {
+                firstName: nameParts[0] || String(candidateName).trim(),
+                lastName: nameParts.slice(1).join(' ') || '',
+                email: normalizedEmail,
+                mobile: String(mobile).trim(),
+                headline: `${targetPosition} Candidate`,
+                summary: coverNote?.trim() || `Submitted application for position: ${targetPosition}.`,
+                currentCity: preferredLocation ? String(preferredLocation).split('/')[0].trim() : '',
+                willingToRelocate: true,
+                jobSearchStatus: 'Actively Looking',
+                profileCompletionScore: 83,
+                currentCompany: currentCompany?.trim() || 'Not added',
+                totalExperienceYears: totalExperienceYears ? Number(totalExperienceYears) : 0,
+                currentCTC: currentCTC ? Number(currentCTC) : 0,
+                expectedCTC: expectedCTC ? Number(expectedCTC) : 0,
+                noticePeriod: noticePeriod ? String(noticePeriod).trim() : '30',
+                skills: [],
+                preferredLocations: preferredLocation ? [String(preferredLocation).trim()] : [],
+                preferredJobTypes: ['Full-time'],
+                preferredDepartments: [],
+                workExperience: currentCompany?.trim() ? [{
+                    jobTitle: targetPosition,
+                    companyName: currentCompany.trim(),
+                    isCurrent: true,
+                    description: coverNote?.trim() || `Applied for position: ${targetPosition}`
+                }] : [],
+                education: [],
+                certifications: [],
+                languages: [],
+                linkedinUrl: '',
+                githubUrl: '',
+                resumeUrl
+            };
+        }
+
+        const lockCheck = await check3MonthApplicationLock(normalizedEmail, mobile);
+        if (lockCheck.isLocked) {
+            return res.status(409).json({
+                message: 'Your application was submitted within the last 3 months. You can update it or re-apply only after 3 months.'
+            });
+        }
+
+        const application = new PublicApplication({
+            desiredPosition: targetPosition,
+            applicantId,
+            candidateName: String(candidateName).trim(),
+            email: normalizedEmail,
+            mobile: String(mobile).trim(),
+            currentCompany: currentCompany?.trim() || undefined,
+            totalExperienceYears: totalExperienceYears ? Number(totalExperienceYears) : undefined,
+            currentCTC: currentCTC ? Number(currentCTC) : undefined,
+            expectedCTC: expectedCTC ? Number(expectedCTC) : undefined,
+            noticePeriod: noticePeriod ? String(noticePeriod).trim() : undefined,
+            coverNote: coverNote?.trim() || (preferredLocation ? `Preferred Location: ${preferredLocation}` : ''),
+            resumeUrl,
+            resumePublicId,
+            source: 'Opportunity Board (General Application)',
+            profileSnapshot: profileSnapshot || undefined
+        });
+
+        await application.save();
+
+        const submittedAt = new Date();
+        const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; color: #0f172a;">
+                <h2 style="margin: 0 0 12px; color: #115cb9;">New General Candidate Application</h2>
+                <p style="margin: 0 0 20px; color: #475569;">A candidate submitted their details for an unlisted position on the TalentCIO Opportunity Board.</p>
+
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr><td style="padding: 8px 0; font-weight: 700; width: 180px;">Desired Position</td><td style="padding: 8px 0; font-weight: 700; color: #115cb9;">${targetPosition}</td></tr>
+                    <tr><td style="padding: 8px 0; font-weight: 700;">Candidate Name</td><td style="padding: 8px 0;">${candidateName}</td></tr>
+                    <tr><td style="padding: 8px 0; font-weight: 700;">Email</td><td style="padding: 8px 0;">${email}</td></tr>
+                    <tr><td style="padding: 8px 0; font-weight: 700;">Mobile</td><td style="padding: 8px 0;">${mobile}</td></tr>
+                    ${currentCompany ? `<tr><td style="padding: 8px 0; font-weight: 700;">Current Company</td><td style="padding: 8px 0;">${currentCompany}</td></tr>` : ''}
+                    ${totalExperienceYears !== undefined ? `<tr><td style="padding: 8px 0; font-weight: 700;">Total Experience</td><td style="padding: 8px 0;">${totalExperienceYears} Years</td></tr>` : ''}
+                    ${preferredLocation ? `<tr><td style="padding: 8px 0; font-weight: 700;">Preferred Location</td><td style="padding: 8px 0;">${preferredLocation}</td></tr>` : ''}
+                    ${currentCTC ? `<tr><td style="padding: 8px 0; font-weight: 700;">Current CTC</td><td style="padding: 8px 0;">₹${currentCTC} LPA</td></tr>` : ''}
+                    ${expectedCTC ? `<tr><td style="padding: 8px 0; font-weight: 700;">Expected CTC</td><td style="padding: 8px 0;">₹${expectedCTC} LPA</td></tr>` : ''}
+                    ${noticePeriod !== undefined ? `<tr><td style="padding: 8px 0; font-weight: 700;">Notice Period</td><td style="padding: 8px 0;">${noticePeriod}</td></tr>` : ''}
+                    <tr><td style="padding: 8px 0; font-weight: 700;">Resume URL</td><td style="padding: 8px 0;"><a href="${resumeUrl}" target="_blank" style="color: #2563eb; text-decoration: underline;">View / Download Resume</a></td></tr>
+                    <tr><td style="padding: 8px 0; font-weight: 700;">Submitted At</td><td style="padding: 8px 0;">${submittedAt.toLocaleString('en-IN')}</td></tr>
+                </table>
+
+                ${coverNote ? `
+                <div style="margin-top: 20px; padding: 16px; background: #f8fafc; border-radius: 10px;">
+                    <div style="font-weight: 700; margin-bottom: 8px;">Cover Note / Additional Details</div>
+                    <div style="white-space: pre-wrap; color: #334155;">${coverNote}</div>
+                </div>
+                ` : ''}
+            </div>
+        `;
+
+        sendEmail({
+            to: DEMO_REQUEST_RECIPIENT,
+            subject: `[General Application] ${candidateName} - ${targetPosition}`,
+            html,
+            text: `New General Candidate Application\nDesired Position: ${targetPosition}\nCandidate: ${candidateName}\nEmail: ${email}\nMobile: ${mobile}\nResume: ${resumeUrl}`
+        }).catch((err) => {
+            console.error('[GENERAL APPLICATION EMAIL FAILED]', err.message);
+        });
+
+        res.json({
+            message: 'Application received! Our recruitment team will review your profile for present and future openings matching your desired role.'
+        });
+    } catch (error) {
+        if (error?.code === 11000) {
+            return res.status(409).json({
+                message: 'You have already filled out your application details. You can update or re-apply after 3 months.'
+            });
+        }
+
+        console.error('Failed to submit general application:', error);
+        res.status(500).json({ message: 'Failed to submit general application. Please try again.' });
     }
 };
 

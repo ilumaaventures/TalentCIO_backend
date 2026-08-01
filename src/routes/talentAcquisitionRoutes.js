@@ -7,6 +7,7 @@ const { protect } = require('../middlewares/authMiddleware');
 const { authorizeAny } = require('../middlewares/authorize');
 const { upload, uploadMassMailAttachments } = require('../config/cloudinary');
 const PublicApplication = require('../models/PublicApplication');
+const { attachLastApplicationData } = require('../utils/applicationHistoryUtils');
 const Candidate = require('../models/Candidate');
 const { HiringRequest: HiringRequestModel } = require('../models/HiringRequest');
 const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
@@ -118,6 +119,182 @@ router.put('/settings/access/clients/assignments', protect, authorizeAny(taAcces
 // File Uploads
 router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taController.uploadJDFile);
 
+router.get('/public-applications', protect, async (req, res) => {
+    try {
+        const query = {
+            $or: [
+                { companyId: req.companyId },
+                { companyId: { $exists: false } },
+                { companyId: null }
+            ]
+        };
+
+        if (req.query.type === 'unlisted' || req.query.unlistedOnly === 'true') {
+            query.$and = [
+                {
+                    $or: [
+                        { hiringRequestId: { $exists: false } },
+                        { hiringRequestId: null },
+                        { desiredPosition: { $exists: true, $ne: '' } },
+                        { source: /General Application/i }
+                    ]
+                }
+            ];
+        }
+
+        if (req.query.status && req.query.status !== 'All') {
+            query.reviewStatus = req.query.status;
+        }
+
+        const apps = await PublicApplication.find(query)
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .populate('hiringRequestId', 'requestId roleDetails client')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const appsWithHistory = await attachLastApplicationData(apps);
+        res.json(appsWithHistory);
+    } catch (err) {
+        console.error('Failed to fetch public applications:', err);
+        res.status(500).json({ message: 'Failed to fetch public applications' });
+    }
+});
+
+router.patch('/public-applications/:appId/review', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision', 'ta.candidate.edit', 'ta.edit']), async (req, res) => {
+    try {
+        const { reviewStatus, reviewNote } = req.body;
+        const validStatuses = ['Pending Review', 'Shortlisted', 'Rejected'];
+
+        if (!validStatuses.includes(reviewStatus)) {
+            return res.status(400).json({ message: 'Invalid review status' });
+        }
+
+        const app = await PublicApplication.findOneAndUpdate(
+            {
+                _id: req.params.appId,
+                companyId: req.companyId
+            },
+            {
+                reviewStatus,
+                reviewNote: reviewNote || '',
+                reviewedBy: req.user._id,
+                reviewedAt: new Date()
+            },
+            { new: true }
+        ).populate('applicantId', APPLICANT_REVIEW_SELECT)
+         .populate('hiringRequestId', 'requestId roleDetails client');
+
+        if (!app) {
+            return res.status(404).json({ message: 'Application not found' });
+        }
+
+        res.json(app);
+    } catch (err) {
+        console.error('Failed to update review status:', err);
+        res.status(500).json({ message: 'Failed to update review status' });
+    }
+});
+
+router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), async (req, res) => {
+    try {
+        const app = await PublicApplication.findOne({
+            _id: req.params.appId,
+            companyId: req.companyId
+        });
+
+        if (!app) {
+            return res.status(404).json({ message: 'Application not found' });
+        }
+
+        if (app.reviewStatus === 'Transferred') {
+            return res.status(409).json({ message: 'This applicant has already been transferred.' });
+        }
+
+        const targetRequestId = req.body.targetHiringRequestId || app.hiringRequestId;
+
+        if (!targetRequestId) {
+            return res.status(400).json({ message: 'Please select a target hiring request for transfer.' });
+        }
+
+        const targetRequest = await HiringRequestModel.findOne({
+            _id: targetRequestId,
+            companyId: req.companyId,
+            status: { $in: ['Approved'] }
+        });
+
+        if (!targetRequest) {
+            return res.status(404).json({ message: 'Target hiring request not found or not active' });
+        }
+
+        const duplicateCandidateConditions = [];
+        if (app.email) {
+            duplicateCandidateConditions.push({ email: String(app.email).trim().toLowerCase() });
+        }
+        if (app.mobile) {
+            duplicateCandidateConditions.push({ mobile: String(app.mobile).trim() });
+        }
+
+        const existing = duplicateCandidateConditions.length
+            ? await Candidate.findOne({
+                companyId: req.companyId,
+                hiringRequestId: targetRequestId,
+                $or: duplicateCandidateConditions
+            })
+            : null;
+
+        if (existing) {
+            return res.status(409).json({ message: 'This candidate already exists in the target requisition.' });
+        }
+
+        const candidate = new Candidate({
+            hiringRequestId: targetRequestId,
+            companyId: req.companyId,
+            applicantId: app.applicantId || undefined,
+            publicApplicationId: app._id,
+            profileSnapshot: app.profileSnapshot || undefined,
+            resumeUrl: app.resumeUrl,
+            resumePublicId: app.resumePublicId,
+            uploadedBy: req.user._id,
+            candidateName: app.candidateName,
+            email: String(app.email || '').trim().toLowerCase(),
+            mobile: String(app.mobile || '').trim(),
+            source: 'Public Job Board',
+            profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
+            currentCTC: app.currentCTC,
+            expectedCTC: app.expectedCTC,
+            noticePeriod: app.noticePeriod,
+            remark: app.coverNote || '',
+            totalExperience: 0,
+            status: 'Interested',
+            decision: 'None',
+            phase2Decision: 'None',
+            phase3Decision: 'None',
+            isTransferred: true,
+            transferredFrom: app.hiringRequestId || undefined,
+        });
+
+        await candidate.save();
+
+        app.reviewStatus = 'Transferred';
+        app.transferredCandidateId = candidate._id;
+        app.transferredAt = new Date();
+        app.transferredBy = req.user._id;
+        await app.save();
+
+        res.json({
+            message: 'Applicant transferred to active request successfully.',
+            candidateId: candidate._id
+        });
+    } catch (err) {
+        if (err.code === 11000) {
+            return res.status(409).json({ message: 'This candidate already exists in the system.' });
+        }
+
+        console.error('Failed to transfer application:', err);
+        res.status(500).json({ message: 'Failed to transfer applicant' });
+    }
+});
+
 router.get('/hiring-request/:id/public-applications', protect, async (req, res) => {
     try {
         const hiringRequest = await HiringRequestModel.findOne({
@@ -139,9 +316,11 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
             companyId: req.companyId
         })
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
 
-        res.json(apps);
+        const appsWithHistory = await attachLastApplicationData(apps);
+        res.json(appsWithHistory);
     } catch (err) {
         res.status(500).json({ message: 'Failed to fetch public applications' });
     }
