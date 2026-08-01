@@ -8,6 +8,10 @@ const DEFAULT_LOGO_WIDTH = 200;
 const DEFAULT_LOGO_HEIGHT = 44;
 const DEFAULT_LOGO_ALIGNMENT = 'center';
 
+// ponytail: simple Map cache — same pattern as getCompanyEmailSettings in companyEmailService.js
+const brandingCache = new Map();
+const BRANDING_CACHE_TTL_MS = 5 * 60 * 1000;
+
 /**
  * Configure the transporter using Brevo SMTP.
  */
@@ -45,13 +49,16 @@ const getCompanyBranding = async (companyId) => {
         };
     }
 
+    const cached = brandingCache.get(String(companyId));
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
     try {
         const company = await Company.findById(companyId)
             .select('name settings.emailBranding settings.logo settings.themeColor')
             .lean();
         const branding = company?.settings?.emailBranding || {};
 
-        return {
+        const value = {
             logoUrl: branding.logoUrl || '',
             logoWidth: Number.isFinite(Number(branding.logoWidth)) ? Number(branding.logoWidth) : DEFAULT_LOGO_WIDTH,
             logoHeight: Number.isFinite(Number(branding.logoHeight)) ? Number(branding.logoHeight) : DEFAULT_LOGO_HEIGHT,
@@ -64,6 +71,8 @@ const getCompanyBranding = async (companyId) => {
             displayName: branding.displayName || company?.name || 'TalentCIO',
             logoAlt: branding.displayName || company?.name || 'TalentCIO'
         };
+        brandingCache.set(String(companyId), { value, expiresAt: Date.now() + BRANDING_CACHE_TTL_MS });
+        return value;
     } catch (error) {
         console.warn('[EMAIL] Failed to load company branding:', error.message);
         return {

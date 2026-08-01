@@ -30,11 +30,29 @@ const getCompanyTransporter = (emailCfg = {}) => {
             user: smtp.user,
             pass: decrypt(smtp.pass)
         },
+        pool: true,          // reuse TCP connections across emails
+        maxConnections: 1,   // 1 connection avoids parallel connection-burst rate limits on Hostinger/Titan
+        maxMessages: 100,
         connectionTimeout: 10000,
         greetingTimeout: 10000,
-        socketTimeout: 10000
+        socketTimeout: 30000
     });
 };
+
+const isRateLimitError = (error) => {
+    const msg = String(error?.response?.data?.message || error?.message || '').toLowerCase();
+    const status = error?.status || error?.response?.status || error?.responseCode;
+    return (
+        status === 429 ||
+        status === 451 ||
+        msg.includes('ratelimit') ||
+        msg.includes('rate limit') ||
+        msg.includes('too many requests') ||
+        msg.includes('exceeded') ||
+        msg.includes('451 4.7.1')
+    );
+};
+
 
 const buildLegacyEmailAccount = (emailSettings = {}, companyName = '') => {
     if (emailSettings?.provider === 'brevo' && emailSettings?.brevoApiKey && emailSettings?.fromAddress) {
@@ -364,7 +382,8 @@ const sendEmailForCompany = async ({
     logoUrl,
     logoLink,
     logoAlt,
-    replyTo
+    replyTo,
+    throwOnError = false
 }) => {
     const settings = await getCompanyEmailSettings(companyId);
     const selection = pickEmailAccount(settings, emailAccountId);
@@ -385,11 +404,13 @@ const sendEmailForCompany = async ({
 
     if (selection.mode === 'missing') {
         console.error(`[EMAIL] Selected account ${selection.accountId} not found for company ${companyId}`);
+        if (throwOnError) throw new Error(`Selected account ${selection.accountId} not found`);
         return false;
     }
 
     if (selection.mode === 'invalid') {
         console.error(`[EMAIL] Selected account ${selection.accountId} is not fully configured for company ${companyId}`);
+        if (throwOnError) throw new Error(`Selected account ${selection.accountId} is not configured`);
         return false;
     }
 
@@ -415,6 +436,10 @@ const sendEmailForCompany = async ({
                 `[EMAIL:brevo-company] Failed for company ${companyId}:`,
                 error.response?.data || error.message
             );
+            if (throwOnError) {
+                error.isRateLimit = isRateLimitError(error);
+                throw error;
+            }
             return false;
         }
     }
@@ -438,6 +463,10 @@ const sendEmailForCompany = async ({
             return true;
         } catch (error) {
             console.error(`[EMAIL:smtp-company] Failed for company ${companyId}:`, error.message);
+            if (throwOnError) {
+                error.isRateLimit = isRateLimitError(error);
+                throw error;
+            }
             return false;
         }
     }
@@ -467,5 +496,7 @@ module.exports = {
     resolveEmailConfig,
     sendViaBrevoApi,
     sendViaSmtp,
-    sendEmailForCompany
+    sendEmailForCompany,
+    isRateLimitError
 };
+
