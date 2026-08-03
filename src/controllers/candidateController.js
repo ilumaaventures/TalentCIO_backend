@@ -682,7 +682,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
             || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 1), filterInterviewStatus);
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 1 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared && matchesInterviewRound;
@@ -705,7 +705,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
 
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 2 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
@@ -731,7 +731,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
 
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 3 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
@@ -4954,7 +4954,7 @@ exports.getCandidateInterviewDetails = async (req, res) => {
                 const targetRound = String(filterInterviewRound).trim().toLowerCase();
                 const rounds = Array.isArray(c?.interviewRounds) ? c.interviewRounds : [];
                 const hasRound = rounds.some((r) =>
-                    Number(r?.phase || 1) === targetPhase && String(r?.levelName || '').trim().toLowerCase() === targetRound
+                    String(r?.levelName || '').trim().toLowerCase() === targetRound
                 );
                 if (!hasRound) return false;
             }
@@ -5057,22 +5057,21 @@ exports.getCandidateRoundSummary = async (req, res) => {
             const seenPhase2 = new Set();
 
             for (const round of (candidate.interviewRounds || [])) {
-                const phaseNum = Number(round.phase || 1);
                 const name = String(round.levelName || '').trim();
                 if (!name) continue;
                 const anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
 
-                if (phaseNum === 1) {
-                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
-                    if (!seenPhase1.has(name)) {
-                        seenPhase1.add(name);
-                        phase1Map.get(name).count += 1;
-                    }
-                } else if (phaseNum === 2 && isPhase2) {
+                if (isPhase2) {
                     if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                     if (!seenPhase2.has(name)) {
                         seenPhase2.add(name);
                         phase2Map.get(name).count += 1;
+                    }
+                } else {
+                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    if (!seenPhase1.has(name)) {
+                        seenPhase1.add(name);
+                        phase1Map.get(name).count += 1;
                     }
                 }
             }
