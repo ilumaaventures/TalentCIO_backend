@@ -2727,9 +2727,7 @@ exports.addInterviewRound = async (req, res) => {
         const { id } = req.params;
         const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
 
-        if (!levelName) {
-            return res.status(400).json({ message: 'Level name is required' });
-        }
+        const roundLevelName = String(levelName || 'Round 1').trim() || 'Round 1';
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -2755,7 +2753,7 @@ exports.addInterviewRound = async (req, res) => {
         }
 
         const newRound = {
-            levelName,
+            levelName: roundLevelName,
             assignAfterStage: normalizedAssignAfter || 'Shortlisted',
             assignedTo: assignedTo || [],
             status: 'Pending',
@@ -4637,9 +4635,11 @@ exports.getCandidateCardFilters = async (req, res) => {
             const seenRounds = new Set();
             for (const round of (candidate?.interviewRounds || [])) {
                 if (Number(round?.phase || 1) !== 1) continue;
-                const name = String(round?.levelName || '').trim();
-                if (!name) continue;
-                const anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                const name = String(round?.levelName || 'Round 1').trim() || 'Round 1';
+                let anchor = String(round?.assignAfterStage || 'Interested').trim() || 'Interested';
+                if (anchor === 'Interview Scheduled' || !['Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared'].includes(anchor)) {
+                    anchor = 'Interested';
+                }
                 if (!roundMap.has(name)) {
                     roundMap.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                 }
@@ -4654,11 +4654,25 @@ exports.getCandidateCardFilters = async (req, res) => {
         const roundMapPhase2 = new Map();
         for (const candidate of structuralPhase2Candidates) {
             const seenRounds = new Set();
-            for (const round of (candidate?.interviewRounds || [])) {
-                if (Number(round?.phase || 1) !== 2) continue;
-                const name = String(round?.levelName || '').trim();
-                if (!name) continue;
-                const anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+            const phase2Rounds = getLegacyRoundsForPhase(candidate, 2);
+            if (phase2Rounds.length > 0) {
+                for (const round of phase2Rounds) {
+                    const name = String(round?.levelName || 'Round 1').trim() || 'Round 1';
+                    let anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                    if (anchor === 'Interview Scheduled' || !['Profile Shared', 'Shortlisted', 'Selected', 'Rejected'].includes(anchor)) {
+                        anchor = 'Shortlisted';
+                    }
+                    if (!roundMapPhase2.has(name)) {
+                        roundMapPhase2.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    }
+                    if (!seenRounds.has(name)) {
+                        seenRounds.add(name);
+                        roundMapPhase2.get(name).count += 1;
+                    }
+                }
+            } else if (hasLegacyPhase2InterviewActivity(candidate)) {
+                const name = 'Phase 2 Interview';
+                const anchor = 'Shortlisted';
                 if (!roundMapPhase2.has(name)) {
                     roundMapPhase2.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                 }
@@ -5051,28 +5065,44 @@ exports.getCandidateRoundSummary = async (req, res) => {
 
         for (const candidate of candidates) {
             if (!matchesStructural(candidate)) continue;
-            const isPhase2 = isProfileSharedCandidate(candidate);
 
             const seenPhase1 = new Set();
             const seenPhase2 = new Set();
 
             for (const round of (candidate.interviewRounds || [])) {
-                const name = String(round.levelName || '').trim();
-                if (!name) continue;
-                const anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                const rPhase = Number(round?.phase || 1);
+                const name = String(round.levelName || 'Round 1').trim() || 'Round 1';
 
-                if (isPhase2) {
-                    if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
-                    if (!seenPhase2.has(name)) {
-                        seenPhase2.add(name);
-                        phase2Map.get(name).count += 1;
+                if (rPhase === 1) {
+                    let anchor = String(round.assignAfterStage || 'Interested').trim() || 'Interested';
+                    if (anchor === 'Interview Scheduled' || !['Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared'].includes(anchor)) {
+                        anchor = 'Interested';
                     }
-                } else {
                     if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                     if (!seenPhase1.has(name)) {
                         seenPhase1.add(name);
                         phase1Map.get(name).count += 1;
                     }
+                } else if (rPhase === 2 && isProfileSharedCandidate(candidate)) {
+                    let anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                    if (anchor === 'Interview Scheduled' || !['Profile Shared', 'Shortlisted', 'Selected', 'Rejected'].includes(anchor)) {
+                        anchor = 'Shortlisted';
+                    }
+                    if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    if (!seenPhase2.has(name)) {
+                        seenPhase2.add(name);
+                        phase2Map.get(name).count += 1;
+                    }
+                }
+            }
+
+            if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && (!candidate.interviewRounds || candidate.interviewRounds.length === 0)) {
+                const name = 'Phase 2 Interview';
+                const anchor = 'Shortlisted';
+                if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                if (!seenPhase2.has(name)) {
+                    seenPhase2.add(name);
+                    phase2Map.get(name).count += 1;
                 }
             }
         }
