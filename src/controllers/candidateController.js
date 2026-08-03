@@ -2851,26 +2851,35 @@ exports.updateInterviewRound = async (req, res) => {
         }
 
         if (roundId === 'phase2-imported-interview') {
-            if (feedback !== undefined) candidate.phase2InterviewerFeedback = feedback;
-            if (status !== undefined) candidate.phase2InterviewStatus = status;
+            const newRoundLevelName = String(levelName || 'Round 1').trim() || 'Round 1';
+            const newRound = {
+                levelName: newRoundLevelName,
+                assignAfterStage: assignAfterStage || 'Shortlisted',
+                assignedTo: Array.isArray(assignedTo) ? assignedTo : (assignedTo ? [assignedTo] : []),
+                scheduledDate: scheduledDate || null,
+                phase: 2,
+                status: status || candidate.phase2InterviewStatus || 'Scheduled',
+                feedback: feedback !== undefined ? feedback : (candidate.phase2InterviewerFeedback || ''),
+                rating: (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined,
+                customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : []
+            };
+            if (!Array.isArray(candidate.interviewRounds)) {
+                candidate.interviewRounds = [];
+            }
+            candidate.interviewRounds.push(newRound);
+            candidate.phase2InterviewerFeedback = '';
+            candidate.phase2InterviewStatus = 'None';
             await candidate.save();
+
             const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
                 .populate('hiringRequestId', 'requestId client roleDetails')
                 .populate('interviewRounds.assignedTo', 'firstName lastName email')
                 .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+            const createdRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
             return res.status(200).json({
-                message: 'Phase 2 interview card updated successfully',
-                round: {
-                    _id: 'phase2-imported-interview',
-                    levelName: levelName || 'Phase 2 Interview',
-                    assignedTo: [],
-                    scheduledDate: scheduledDate || null,
-                    feedback: updatedCandidate.phase2InterviewerFeedback || '',
-                    rating: null,
-                    skillRatings: [],
-                    displayStatusLabel: updatedCandidate.phase2InterviewStatus || 'Scheduled',
-                    isSyntheticPhase2: true
-                },
+                message: 'Phase 2 interview card updated and saved successfully',
+                round: createdRound,
                 candidate: updatedCandidate
             });
         }
@@ -2880,7 +2889,7 @@ exports.updateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Interview round not found' });
         }
 
-        if (levelName) round.levelName = levelName;
+        if (levelName !== undefined) round.levelName = String(levelName).trim() || 'Round 1';
         if (assignAfterStage !== undefined) round.assignAfterStage = assignAfterStage;
         if (assignedTo !== undefined) round.assignedTo = assignedTo;
         if (scheduledDate !== undefined) round.scheduledDate = scheduledDate;
@@ -4710,7 +4719,7 @@ exports.getCandidateCardFilters = async (req, res) => {
                     }
                 }
             } else if (hasLegacyPhase2InterviewActivity(candidate)) {
-                const name = 'Phase 2 Interview';
+                const name = 'Round 1';
                 const anchor = 'Shortlisted';
                 if (!roundMapPhase2.has(name)) {
                     roundMapPhase2.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
@@ -5070,7 +5079,7 @@ exports.getCandidateRoundSummary = async (req, res) => {
 
         // Minimal projection — only fields needed for round summary + structural filter matching
         const candidates = await Candidate.find(candidateQuery)
-            .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred')
+            .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred phase2Decision phase2InterviewStatus phase2InterviewerFeedback')
             .populate('uploadedBy', 'firstName lastName')
             .lean();
 
@@ -5136,7 +5145,7 @@ exports.getCandidateRoundSummary = async (req, res) => {
             }
 
             if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && seenPhase2.size === 0) {
-                const name = 'Phase 2 Interview';
+                const name = 'Round 1';
                 const anchor = 'Shortlisted';
                 if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                 if (!seenPhase2.has(name)) {
