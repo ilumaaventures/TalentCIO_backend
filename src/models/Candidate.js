@@ -226,13 +226,14 @@ const candidateSchema = new mongoose.Schema({
     // Status Tracking
     status: {
         type: String,
-        enum: ['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'In Interview', 'High expectation', 'Long Notice period', 'Location Not suitable', ''],
+        enum: ['Total Sourced', 'Interested', 'Interview Scheduled', 'Shortlisted', 'Profile Shared', 'Offer Released', 'Not Interested', 'Not Relevant', 'Not Picking', 'In Interview', 'High expectation', 'Long Notice period', 'Location Not suitable', ''],
+        default: 'Total Sourced',
         required: false
     },
     statusHistory: [{
         status: {
             type: String,
-            enum: ['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'In Interview', 'High expectation', 'Long Notice period', 'Location Not suitable', ''],
+            enum: ['Total Sourced', 'Interested', 'Interview Scheduled', 'Shortlisted', 'Profile Shared', 'Offer Released', 'Not Interested', 'Not Relevant', 'Not Picking', 'In Interview', 'High expectation', 'Long Notice period', 'Location Not suitable', ''],
         },
         changedBy: {
             type: mongoose.Schema.Types.ObjectId,
@@ -250,6 +251,13 @@ const candidateSchema = new mongoose.Schema({
         levelName: { // e.g., '1', '2', 'L1 - Technical', 'HR Round'
             type: String,
             required: true
+        },
+        assignAfterStage: {
+            // Accepts a fixed stage name ('Total Sourced', 'Interested', 'Shortlisted',
+            // 'Profile Shared', 'Offer Released') OR the levelName of another interview
+            // round, enabling round-to-round chaining in the recruitment pipeline.
+            type: String,
+            default: 'Shortlisted'
         },
         phase: { // Tracks whether this round belongs to Phase 1 or Phase 2
             type: Number,

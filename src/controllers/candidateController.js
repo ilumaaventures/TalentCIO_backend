@@ -630,7 +630,8 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         filterUploadedBy = [],
         filterUploadType = 'All',
         filterTransferred = 'All',
-        filterProfileShared = false
+        filterProfileShared = false,
+        filterInterviewRound = ''
     } = filters;
 
     const normalizedSearch = String(search || '').trim().toLowerCase();
@@ -679,8 +680,12 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         const matchesProfileShared = !filterProfileShared || isProfileSharedCandidate(candidate);
         const matchesInterviewStatus = filterInterviewStatus === 'All'
             || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 1), filterInterviewStatus);
+        const matchesInterviewRound = !filterInterviewRound
+            || (candidate?.interviewRounds || []).some((r) =>
+                Number(r.phase || 1) === 1 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+            );
 
-        return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared;
+        return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared && matchesInterviewRound;
     });
 
     const structuralPhase2Candidates = candidates.filter((candidate) => (
@@ -698,7 +703,12 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
                 ? hasLegacyPhase2InterviewActivity(candidate)
                 : matchesLegacyInterviewFilter(getLegacyDisplayInterviewRoundsForPhase(candidate, 2), filterInterviewStatus));
 
-        return matchesDecision && matchesInterviewStatus;
+        const matchesInterviewRound = !filterInterviewRound
+            || (candidate?.interviewRounds || []).some((r) =>
+                Number(r.phase || 1) === 2 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+            );
+
+        return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
     });
 
     const structuralPhase3Candidates = candidates.filter((candidate) => (
@@ -719,7 +729,12 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         const matchesInterviewStatus = filterInterviewStatus === 'All'
             || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 3), filterInterviewStatus);
 
-        return matchesDecision && matchesInterviewStatus;
+        const matchesInterviewRound = !filterInterviewRound
+            || (candidate?.interviewRounds || []).some((r) =>
+                Number(r.phase || 1) === 3 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+            );
+
+        return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
     });
 
     const filteredCandidates = normalizedActivePhase === 2
@@ -1557,7 +1572,8 @@ exports.getCandidatesByHiringRequest = async (req, res) => {
                     filterUploadedBy: req.query.filterUploadedBy,
                     filterUploadType: req.query.filterUploadType,
                     filterTransferred: req.query.filterTransferred,
-                    filterProfileShared: parseBooleanQueryValue(req.query.filterProfileShared)
+                    filterProfileShared: parseBooleanQueryValue(req.query.filterProfileShared),
+                    filterInterviewRound: req.query.filterInterviewRound || req.query.interviewRound
                 },
                 page,
                 limit
@@ -2709,7 +2725,7 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
 exports.addInterviewRound = async (req, res) => {
     try {
         const { id } = req.params;
-        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
 
         if (!levelName) {
             return res.status(400).json({ message: 'Level name is required' });
@@ -2725,8 +2741,22 @@ exports.addInterviewRound = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        const FIXED_ASSIGN_AFTER_STAGES = new Set([
+            'Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared', 'Selected', 'Rejected', 'Offer Sent', 'Offer Accepted', 'Joined', 'Offer Released'
+        ]);
+        const normalizedAssignAfter = String(assignAfterStage || 'Shortlisted').trim();
+        const existingRoundNames = new Set(
+            (candidate.interviewRounds || []).map((r) => String(r.levelName || '').trim()).filter(Boolean)
+        );
+        if (normalizedAssignAfter && !FIXED_ASSIGN_AFTER_STAGES.has(normalizedAssignAfter) && !existingRoundNames.has(normalizedAssignAfter)) {
+            return res.status(400).json({
+                message: `Invalid assignAfterStage: "${normalizedAssignAfter}". Must be a known stage name or an existing round's level name.`
+            });
+        }
+
         const newRound = {
             levelName,
+            assignAfterStage: normalizedAssignAfter || 'Shortlisted',
             assignedTo: assignedTo || [],
             status: 'Pending',
             scheduledDate,
@@ -4602,6 +4632,44 @@ exports.getCandidateCardFilters = async (req, res) => {
         ));
         const basePhase3Candidates = structuralPhase3Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 3));
 
+        const roundMap = new Map();
+        for (const candidate of structuralPhase1Candidates) {
+            const seenRounds = new Set();
+            for (const round of (candidate?.interviewRounds || [])) {
+                if (Number(round?.phase || 1) !== 1) continue;
+                const name = String(round?.levelName || '').trim();
+                if (!name) continue;
+                const anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                if (!roundMap.has(name)) {
+                    roundMap.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                }
+                if (!seenRounds.has(name)) {
+                    seenRounds.add(name);
+                    roundMap.get(name).count += 1;
+                }
+            }
+        }
+        const interviewRoundsSummary = Array.from(roundMap.values());
+
+        const roundMapPhase2 = new Map();
+        for (const candidate of structuralPhase2Candidates) {
+            const seenRounds = new Set();
+            for (const round of (candidate?.interviewRounds || [])) {
+                if (Number(round?.phase || 1) !== 2) continue;
+                const name = String(round?.levelName || '').trim();
+                if (!name) continue;
+                const anchor = String(round?.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+                if (!roundMapPhase2.has(name)) {
+                    roundMapPhase2.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                }
+                if (!seenRounds.has(name)) {
+                    seenRounds.add(name);
+                    roundMapPhase2.get(name).count += 1;
+                }
+            }
+        }
+        const interviewRoundsSummaryPhase2 = Array.from(roundMapPhase2.values());
+
         const summary = {
             phase1Metrics: {
                 total: structuralPhase1Candidates.length,
@@ -4618,14 +4686,16 @@ exports.getCandidateCardFilters = async (req, res) => {
                 didNotTurnUp: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Did Not Turn Up').length,
                 onHold: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'On Hold').length,
                 profileShared: structuralPhase1Candidates.filter((candidate) => isProfileSharedCandidate(candidate)).length,
-                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length
+                transferred: structuralPhase1Candidates.filter((candidate) => candidate?.isTransferred === true).length,
+                interviewRoundsSummary
             },
             phase2Metrics: {
                 totalShortlisted: structuralPhase2Candidates.length,
                 totalScreened: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected').length,
                 selected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Selected').length,
                 rejected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Rejected').length,
-                interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length
+                interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length,
+                interviewRoundsSummary: interviewRoundsSummaryPhase2
             },
             phase3Metrics: {
                 total: structuralPhase3Candidates.length,
