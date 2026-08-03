@@ -2837,7 +2837,8 @@ exports.addInterviewRound = async (req, res) => {
 // Update an existing interview round (e.g., reschedule, change assignment)
 exports.updateInterviewRound = async (req, res) => {
     try {
-        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail } = req.body;
+        const { id, roundId } = req.params;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, status, rating, feedback, evaluatedBy } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -2847,6 +2848,31 @@ exports.updateInterviewRound = async (req, res) => {
         const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.SCHEDULE_INTERVIEW);
         if (!hasAccess) {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
+        }
+
+        if (roundId === 'phase2-imported-interview') {
+            if (feedback !== undefined) candidate.phase2InterviewerFeedback = feedback;
+            if (status !== undefined) candidate.phase2InterviewStatus = status;
+            await candidate.save();
+            const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+                .populate('hiringRequestId', 'requestId client roleDetails')
+                .populate('interviewRounds.assignedTo', 'firstName lastName email')
+                .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+            return res.status(200).json({
+                message: 'Phase 2 interview card updated successfully',
+                round: {
+                    _id: 'phase2-imported-interview',
+                    levelName: levelName || 'Phase 2 Interview',
+                    assignedTo: [],
+                    scheduledDate: scheduledDate || null,
+                    feedback: updatedCandidate.phase2InterviewerFeedback || '',
+                    rating: null,
+                    skillRatings: [],
+                    displayStatusLabel: updatedCandidate.phase2InterviewStatus || 'Scheduled',
+                    isSyntheticPhase2: true
+                },
+                candidate: updatedCandidate
+            });
         }
 
         const round = candidate.interviewRounds.id(roundId);
@@ -2864,6 +2890,14 @@ exports.updateInterviewRound = async (req, res) => {
         if (emailAccountId !== undefined) round.emailAccountId = emailAccountId || null;
         if (cc !== undefined) round.cc = cc || '';
         if (bcc !== undefined) round.bcc = bcc || '';
+
+        if (status !== undefined) round.status = status;
+        if (rating !== undefined) round.rating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined;
+        if (feedback !== undefined) round.feedback = feedback;
+        if (evaluatedBy !== undefined) round.evaluatedBy = evaluatedBy || req.user._id;
+        if (feedback || rating !== undefined || ['Passed', 'Failed', 'Skipped', 'Shortlisted', 'Rejected'].includes(status)) {
+            if (!round.evaluatedAt) round.evaluatedAt = new Date();
+        }
 
         await candidate.save();
 
