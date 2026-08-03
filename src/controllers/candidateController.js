@@ -2838,7 +2838,7 @@ exports.addInterviewRound = async (req, res) => {
 exports.updateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, status, rating, feedback, evaluatedBy } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -2850,12 +2850,47 @@ exports.updateInterviewRound = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        if (roundId === 'phase2-imported-interview') {
+            const newRoundLevelName = String(levelName || 'Round 1').trim() || 'Round 1';
+            const newRound = {
+                levelName: newRoundLevelName,
+                assignAfterStage: assignAfterStage || 'Shortlisted',
+                assignedTo: Array.isArray(assignedTo) ? assignedTo : (assignedTo ? [assignedTo] : []),
+                scheduledDate: scheduledDate || null,
+                phase: 2,
+                status: status || candidate.phase2InterviewStatus || 'Scheduled',
+                feedback: feedback !== undefined ? feedback : (candidate.phase2InterviewerFeedback || ''),
+                rating: (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined,
+                customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : []
+            };
+            if (!Array.isArray(candidate.interviewRounds)) {
+                candidate.interviewRounds = [];
+            }
+            candidate.interviewRounds.push(newRound);
+            candidate.phase2InterviewerFeedback = '';
+            candidate.phase2InterviewStatus = 'None';
+            await candidate.save();
+
+            const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+                .populate('hiringRequestId', 'requestId client roleDetails')
+                .populate('interviewRounds.assignedTo', 'firstName lastName email')
+                .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+            const createdRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
+            return res.status(200).json({
+                message: 'Phase 2 interview card updated and saved successfully',
+                round: createdRound,
+                candidate: updatedCandidate
+            });
+        }
+
         const round = candidate.interviewRounds.id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
         }
 
-        if (levelName) round.levelName = levelName;
+        if (levelName !== undefined) round.levelName = String(levelName).trim() || 'Round 1';
+        if (assignAfterStage !== undefined) round.assignAfterStage = assignAfterStage;
         if (assignedTo !== undefined) round.assignedTo = assignedTo;
         if (scheduledDate !== undefined) round.scheduledDate = scheduledDate;
         if (phase !== undefined) round.phase = phase;
@@ -2864,6 +2899,14 @@ exports.updateInterviewRound = async (req, res) => {
         if (emailAccountId !== undefined) round.emailAccountId = emailAccountId || null;
         if (cc !== undefined) round.cc = cc || '';
         if (bcc !== undefined) round.bcc = bcc || '';
+
+        if (status !== undefined) round.status = status;
+        if (rating !== undefined) round.rating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined;
+        if (feedback !== undefined) round.feedback = feedback;
+        if (evaluatedBy !== undefined) round.evaluatedBy = evaluatedBy || req.user._id;
+        if (feedback || rating !== undefined || ['Passed', 'Failed', 'Skipped', 'Shortlisted', 'Rejected'].includes(status)) {
+            if (!round.evaluatedAt) round.evaluatedAt = new Date();
+        }
 
         await candidate.save();
 
@@ -3763,8 +3806,13 @@ exports.bulkScheduleInterview = async (req, res) => {
 
                     normalizedAssignedTo.forEach(id => allAssignedUserIds.add(id.toString()));
 
+                    const defaultAnchor = roundPhase === 2 ? 'Shortlisted' : 'Interested';
+                    const rawAnchor = String(roundConfig.assignAfterStage || defaultAnchor).trim() || defaultAnchor;
+                    const normalizedAnchor = (rawAnchor === 'Interview Scheduled' || !rawAnchor) ? defaultAnchor : rawAnchor;
+
                     const newRound = {
-                        levelName: String(roundConfig.levelName).trim(),
+                        levelName: String(roundConfig.levelName || 'Round 1').trim() || 'Round 1',
+                        assignAfterStage: normalizedAnchor,
                         assignedTo: normalizedAssignedTo,
                         status: 'Pending',
                         scheduledDate: roundConfig.scheduledDate || undefined,
@@ -4671,7 +4719,7 @@ exports.getCandidateCardFilters = async (req, res) => {
                     }
                 }
             } else if (hasLegacyPhase2InterviewActivity(candidate)) {
-                const name = 'Phase 2 Interview';
+                const name = 'Round 1';
                 const anchor = 'Shortlisted';
                 if (!roundMapPhase2.has(name)) {
                     roundMapPhase2.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
@@ -5031,7 +5079,7 @@ exports.getCandidateRoundSummary = async (req, res) => {
 
         // Minimal projection — only fields needed for round summary + structural filter matching
         const candidates = await Candidate.find(candidateQuery)
-            .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred')
+            .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred phase2Decision phase2InterviewStatus phase2InterviewerFeedback')
             .populate('uploadedBy', 'firstName lastName')
             .lean();
 
@@ -5096,8 +5144,8 @@ exports.getCandidateRoundSummary = async (req, res) => {
                 }
             }
 
-            if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && (!candidate.interviewRounds || candidate.interviewRounds.length === 0)) {
-                const name = 'Phase 2 Interview';
+            if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && seenPhase2.size === 0) {
+                const name = 'Round 1';
                 const anchor = 'Shortlisted';
                 if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                 if (!seenPhase2.has(name)) {
