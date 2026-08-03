@@ -40,6 +40,7 @@ router.get('/global/public-applications/search', protect, authorizeAny(candidate
 router.get('/global/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchCandidates);
 router.post('/', protect, candidateController.createCandidate);
 router.get('/:hiringRequestId/card-filters', protect, candidateController.getCandidateCardFilters);
+router.get('/:hiringRequestId/round-summary', protect, candidateController.getCandidateRoundSummary);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
 router.get('/candidate/:id/details', protect, candidateController.getCandidateDetailsById);
