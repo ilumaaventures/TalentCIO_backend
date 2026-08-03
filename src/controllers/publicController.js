@@ -639,12 +639,6 @@ exports.applyToJob = async (req, res) => {
         const normalizedEmail = req.applicant?.email || String(email).trim().toLowerCase();
         const normalizedMobile = String(mobile || '').trim();
 
-        const lockCheck = await check3MonthApplicationLock(normalizedEmail, normalizedMobile);
-        if (lockCheck.isLocked) {
-            return res.status(409).json({
-                message: 'Your application was submitted within the last 3 months. You can update it or re-apply only after 3 months.'
-            });
-        }
 
         const existingApplication = await PublicApplication.exists({
             hiringRequestId: job._id,
@@ -790,10 +784,15 @@ exports.submitGeneralApplication = async (req, res) => {
             };
         }
 
-        const lockCheck = await check3MonthApplicationLock(normalizedEmail, mobile);
+        const lockCheck = await check3MonthApplicationLock(normalizedEmail, mobile, applicantId, true);
         if (lockCheck.isLocked) {
+            const dateStr = lockCheck.existingApp?.createdAt
+                ? new Date(lockCheck.existingApp.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                : '';
             return res.status(409).json({
-                message: 'Your application was submitted within the last 3 months. You can update it or re-apply only after 3 months.'
+                alreadyApplied: true,
+                submittedAt: lockCheck.existingApp?.createdAt,
+                message: `Your application was submitted within the last 3 months${dateStr ? ` (on ${dateStr})` : ''}. You can update it or re-apply only after 3 months.`
             });
         }
 

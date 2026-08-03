@@ -18,42 +18,38 @@ const normalizeMobile = (mobile = '') => String(mobile || '').trim();
 const getMobileDigits = (mobile = '') => String(mobile || '').replace(/\D/g, '');
 
 /**
- * Checks if an application with the same email OR phone number exists within the last 3 months.
+ * Checks if an application by the same applicant exists within the last 3 months.
+ * Uses applicantId (logged-in user) first, falls back to email match.
+ * If generalOnly=true, only checks general applications (no hiringRequestId).
+ * If the record is deleted from the DB, the lock is immediately gone.
  */
-const check3MonthApplicationLock = async (email, mobile) => {
+const check3MonthApplicationLock = async (email, mobile, applicantId, generalOnly = false) => {
     const PublicApplication = mongoose.model('PublicApplication');
-
-    const normEmail = normalizeEmail(email);
-    const rawMobile = normalizeMobile(mobile);
-    const mobileDigits = getMobileDigits(rawMobile);
 
     const threeMonthsAgo = new Date();
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-    const conditions = [];
+    const query = { createdAt: { $gte: threeMonthsAgo } };
 
-    if (normEmail) {
-        conditions.push({ email: normEmail });
+    // Prefer applicantId match (most reliable for logged-in users)
+    if (applicantId) {
+        query.applicantId = applicantId;
+    } else {
+        const normEmail = normalizeEmail(email);
+        if (!normEmail) {
+            return { isLocked: false, existingApp: null };
+        }
+        query.email = normEmail;
     }
 
-    if (rawMobile) {
-        conditions.push({ mobile: rawMobile });
+    // Only check general applications (unlisted positions), not job-specific ones
+    if (generalOnly) {
+        query.hiringRequestId = { $exists: false };
     }
 
-    if (mobileDigits.length >= 7) {
-        // Match trailing 10 digits in case of country code variations
-        const last10Digits = mobileDigits.slice(-10);
-        conditions.push({ mobile: new RegExp(`${escapeRegex(last10Digits)}$`) });
-    }
-
-    if (conditions.length === 0) {
-        return { isLocked: false, existingApp: null };
-    }
-
-    const existingApp = await PublicApplication.findOne({
-        $or: conditions,
-        createdAt: { $gte: threeMonthsAgo }
-    }).sort({ createdAt: -1 }).lean();
+    const existingApp = await PublicApplication.findOne(query)
+        .sort({ createdAt: -1 })
+        .lean();
 
     if (existingApp) {
         return { isLocked: true, existingApp };
