@@ -41,6 +41,7 @@ router.get('/global/search', protect, authorizeAny(candidateViewPermissions), ca
 router.post('/', protect, candidateController.createCandidate);
 router.get('/:hiringRequestId/card-filters', protect, candidateController.getCandidateCardFilters);
 router.get('/:hiringRequestId/round-summary', protect, candidateController.getCandidateRoundSummary);
+router.get('/:hiringRequestId/interview-details', protect, candidateController.getCandidateInterviewDetails);
 router.get('/:hiringRequestId', protect, candidateController.getCandidatesByHiringRequest);
 router.get('/shortlisted/:hiringRequestId', protect, candidateController.getShortlistedCandidates);
 router.get('/candidate/:id/details', protect, candidateController.getCandidateDetailsById);

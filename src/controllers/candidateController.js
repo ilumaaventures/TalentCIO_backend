@@ -682,7 +682,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
             || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 1), filterInterviewStatus);
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 1 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared && matchesInterviewRound;
@@ -701,11 +701,11 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         const matchesInterviewStatus = filterInterviewStatus === 'All'
             || (filterInterviewStatus === 'Scheduled'
                 ? hasLegacyPhase2InterviewActivity(candidate)
-                : matchesLegacyInterviewFilter(getLegacyDisplayInterviewRoundsForPhase(candidate, 2), filterInterviewStatus));
+                : matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 2), filterInterviewStatus));
 
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 2 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
@@ -731,7 +731,7 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
 
         const matchesInterviewRound = !filterInterviewRound
             || (candidate?.interviewRounds || []).some((r) =>
-                Number(r.phase || 1) === 3 && String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
+                String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
 
         return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
@@ -4839,6 +4839,137 @@ exports.globalSearchPublicApplications = async (req, res) => {
 };
 
 /**
+ * GET /:hiringRequestId/interview-details
+ * Lightweight endpoint that returns candidate identification and interview details
+ * for ALL matching candidates in a hiring request.
+ * Does NOT paginate or load heavy resume/applicant/public application data.
+ * Used for mass operations (mass interview scheduling, bulk transfer, export)
+ * and interview analytics so data across ALL pages is fetched cleanly.
+ */
+exports.getCandidateInterviewDetails = async (req, res) => {
+    try {
+        const { hiringRequestId } = req.params;
+        const {
+            activePhase = 1,
+            search = '',
+            filterPreference = 'All',
+            filterStatus = 'All',
+            filterDecision = 'All',
+            filterExperience = '',
+            filterInterviewStatus = 'All',
+            filterRating = 'All',
+            filterPulledBy,
+            filterUploadedBy,
+            filterUploadType = 'All',
+            filterTransferred = 'All',
+            filterProfileShared = 'false',
+            filterInterviewRound = '',
+            dateField,
+            startDate,
+            endDate
+        } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId }).lean();
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden' });
+        }
+
+        const candidateQuery = await buildAccessibleCandidateQuery(
+            req.companyId,
+            req.user,
+            { hiringRequestId },
+            { capability: TA_CAPABILITIES.VIEW }
+        );
+
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+        // Lightweight selection — only candidate identity & interview round details
+        const candidates = await Candidate.find(candidateQuery)
+            .select('_id candidateName email mobile status decision phase2Decision phase3Decision phase2InterviewStatus phase2InterviewerFeedback profileShared isTransferred interviewRounds preference totalExperience uploadedAt profilePulledBy uploadedBy resumeUrl')
+            .populate('uploadedBy', 'firstName lastName')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+            .sort({ uploadedAt: -1 })
+            .lean();
+
+        const normalizedSearch = String(search || '').trim().toLowerCase();
+        const normalizedPulledBy = parseStringArrayQuery(filterPulledBy);
+        const normalizedUploadedBy = parseStringArrayQuery(filterUploadedBy);
+        const minExp = filterExperience === '' ? null : Number(filterExperience);
+        const targetPhase = Number(activePhase) || 1;
+
+        const getCandidateUploadedByName = (c) =>
+            `${c?.uploadedBy?.firstName || ''} ${c?.uploadedBy?.lastName || ''}`.trim();
+        const getCandidateUploadType = (c) =>
+            (typeof c?.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
+        const isProfileSharedCandidate = (c) =>
+            c?.profileShared === true || (c?.profileShared == null && c?.decision === 'Shortlisted');
+
+        const filtered = candidates.filter((c) => {
+            if (normalizedSearch && !String(c?.candidateName || '').toLowerCase().includes(normalizedSearch)) return false;
+            if (normalizedPulledBy.length && !normalizedPulledBy.includes(String(c?.profilePulledBy || '').trim())) return false;
+            if (normalizedUploadedBy.length && !normalizedUploadedBy.includes(getCandidateUploadedByName(c))) return false;
+            if (filterUploadType !== 'All' && getCandidateUploadType(c) !== filterUploadType) return false;
+            if (filterTransferred !== 'All') {
+                if (filterTransferred === 'Transferred' && c?.isTransferred !== true) return false;
+                if (filterTransferred !== 'Transferred' && c?.isTransferred === true) return false;
+            }
+            if (filterPreference !== 'All' && c?.preference !== filterPreference) return false;
+            if (minExp !== null && (c?.totalExperience === undefined || c?.totalExperience === null || Number(c.totalExperience) < minExp)) return false;
+
+            if (targetPhase === 1) {
+                if (filterStatus !== 'All' && c?.status !== filterStatus) return false;
+                if (filterDecision !== 'All' && (c?.decision || 'None') !== filterDecision) return false;
+                if (parseBooleanQueryValue(filterProfileShared) && !isProfileSharedCandidate(c)) return false;
+            } else if (targetPhase === 2) {
+                if (!isProfileSharedCandidate(c)) return false;
+                if (filterDecision !== 'All') {
+                    if (filterDecision === 'Shortlisted_Selected') {
+                        if (c?.phase2Decision !== 'Shortlisted' && c?.phase2Decision !== 'Selected') return false;
+                    } else if ((c?.phase2Decision || 'None') !== filterDecision) return false;
+                }
+            } else if (targetPhase === 3) {
+                if (c?.phase2Decision !== 'Selected') return false;
+                if (filterDecision !== 'All') {
+                    if (filterDecision === 'No Show_Offer Declined') {
+                        if (c?.phase3Decision !== 'No Show' && c?.phase3Decision !== 'Offer Declined') return false;
+                    } else if (filterDecision === 'Offer Sent') {
+                        if (!['Offer Sent', 'Offer Accepted', 'Joined'].includes(c?.phase3Decision)) return false;
+                    } else if (filterDecision === 'Offer Accepted') {
+                        if (!['Offer Accepted', 'Joined'].includes(c?.phase3Decision)) return false;
+                    } else if ((c?.phase3Decision || 'None') !== filterDecision) return false;
+                }
+            }
+
+            if (filterInterviewRound) {
+                const targetRound = String(filterInterviewRound).trim().toLowerCase();
+                const rounds = Array.isArray(c?.interviewRounds) ? c.interviewRounds : [];
+                const hasRound = rounds.some((r) =>
+                    String(r?.levelName || '').trim().toLowerCase() === targetRound
+                );
+                if (!hasRound) return false;
+            }
+
+            return true;
+        });
+
+        res.status(200).json(filtered);
+    } catch (error) {
+        console.error('Error fetching candidate interview details:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+/**
  * GET /:hiringRequestId/round-summary
  * Lightweight endpoint that returns ONLY interview round summaries per phase
  * for the pipeline pill builder. No pagination — fetches all candidates but
@@ -4926,22 +5057,21 @@ exports.getCandidateRoundSummary = async (req, res) => {
             const seenPhase2 = new Set();
 
             for (const round of (candidate.interviewRounds || [])) {
-                const phaseNum = Number(round.phase || 1);
                 const name = String(round.levelName || '').trim();
                 if (!name) continue;
                 const anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
 
-                if (phaseNum === 1) {
-                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
-                    if (!seenPhase1.has(name)) {
-                        seenPhase1.add(name);
-                        phase1Map.get(name).count += 1;
-                    }
-                } else if (phaseNum === 2 && isPhase2) {
+                if (isPhase2) {
                     if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
                     if (!seenPhase2.has(name)) {
                         seenPhase2.add(name);
                         phase2Map.get(name).count += 1;
+                    }
+                } else {
+                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    if (!seenPhase1.has(name)) {
+                        seenPhase1.add(name);
+                        phase1Map.get(name).count += 1;
                     }
                 }
             }
