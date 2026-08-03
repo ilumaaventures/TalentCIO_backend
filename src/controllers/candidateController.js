@@ -4837,3 +4837,122 @@ exports.globalSearchPublicApplications = async (req, res) => {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
+
+/**
+ * GET /:hiringRequestId/round-summary
+ * Lightweight endpoint that returns ONLY interview round summaries per phase
+ * for the pipeline pill builder. No pagination — fetches all candidates but
+ * only projects interviewRounds, profileShared, decision, and structural-filter
+ * fields. Pill counts stay consistent with the visible list because the same
+ * structural filters (search, pulledBy, uploadedBy, uploadType, transferred,
+ * date range) are applied.
+ */
+exports.getCandidateRoundSummary = async (req, res) => {
+    try {
+        const { hiringRequestId } = req.params;
+        const {
+            dateField,
+            startDate,
+            endDate,
+            search = '',
+            filterPulledBy,
+            filterUploadedBy,
+            filterUploadType = 'All',
+            filterTransferred = 'All'
+        } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId }).lean();
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const hasAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
+        if (!hasAccess) {
+            return res.status(403).json({ message: 'Forbidden' });
+        }
+
+        const candidateQuery = await buildAccessibleCandidateQuery(
+            req.companyId,
+            req.user,
+            { hiringRequestId },
+            { capability: TA_CAPABILITIES.VIEW }
+        );
+
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+
+        // Minimal projection — only fields needed for round summary + structural filter matching
+        const candidates = await Candidate.find(candidateQuery)
+            .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred')
+            .populate('uploadedBy', 'firstName lastName')
+            .lean();
+
+        // Structural filter helpers (mirrors card-filters logic exactly)
+        const normalizedSearch = String(search || '').trim().toLowerCase();
+        const normalizedPulledBy = parseStringArrayQuery(filterPulledBy);
+        const normalizedUploadedBy = parseStringArrayQuery(filterUploadedBy);
+
+        const getCandidateUploadedByName = (c) =>
+            `${c?.uploadedBy?.firstName || ''} ${c?.uploadedBy?.lastName || ''}`.trim();
+        const getCandidateUploadType = (c) =>
+            (typeof c?.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
+        const isProfileSharedCandidate = (c) =>
+            c?.profileShared === true || (c?.profileShared == null && c?.decision === 'Shortlisted');
+
+        const matchesStructural = (c) => {
+            if (normalizedSearch && !String(c?.candidateName || '').toLowerCase().includes(normalizedSearch)) return false;
+            if (normalizedPulledBy.length && !normalizedPulledBy.includes(String(c?.profilePulledBy || '').trim())) return false;
+            if (normalizedUploadedBy.length && !normalizedUploadedBy.includes(getCandidateUploadedByName(c))) return false;
+            if (filterUploadType !== 'All' && getCandidateUploadType(c) !== filterUploadType) return false;
+            if (filterTransferred !== 'All') {
+                if (filterTransferred === 'Transferred' && c?.isTransferred !== true) return false;
+                if (filterTransferred !== 'Transferred' && c?.isTransferred === true) return false;
+            }
+            return true;
+        };
+
+        // Build aggregated round maps for phase 1 and phase 2
+        const phase1Map = new Map(); // levelName → { levelName, assignAfterStage, count }
+        const phase2Map = new Map();
+
+        for (const candidate of candidates) {
+            if (!matchesStructural(candidate)) continue;
+            const isPhase2 = isProfileSharedCandidate(candidate);
+
+            const seenPhase1 = new Set();
+            const seenPhase2 = new Set();
+
+            for (const round of (candidate.interviewRounds || [])) {
+                const phaseNum = Number(round.phase || 1);
+                const name = String(round.levelName || '').trim();
+                if (!name) continue;
+                const anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
+
+                if (phaseNum === 1) {
+                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    if (!seenPhase1.has(name)) {
+                        seenPhase1.add(name);
+                        phase1Map.get(name).count += 1;
+                    }
+                } else if (phaseNum === 2 && isPhase2) {
+                    if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
+                    if (!seenPhase2.has(name)) {
+                        seenPhase2.add(name);
+                        phase2Map.get(name).count += 1;
+                    }
+                }
+            }
+        }
+
+        return res.status(200).json({
+            phase1: Array.from(phase1Map.values()),
+            phase2: Array.from(phase2Map.values())
+        });
+    } catch (error) {
+        console.error('Error fetching candidate round summary:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
