@@ -269,7 +269,7 @@ const candidateSchema = new mongoose.Schema({
         }],
         status: { // State of this specific round
             type: String,
-            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between'],
+            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between', 'Shortlisted', 'Rejected', 'Did not Turn up'],
             default: 'Pending'
         },
         scheduledDate: Date,
