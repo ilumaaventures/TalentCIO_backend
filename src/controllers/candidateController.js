@@ -2837,8 +2837,7 @@ exports.addInterviewRound = async (req, res) => {
 // Update an existing interview round (e.g., reschedule, change assignment)
 exports.updateInterviewRound = async (req, res) => {
     try {
-        const { id, roundId } = req.params;
-        const { levelName, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -2856,6 +2855,7 @@ exports.updateInterviewRound = async (req, res) => {
         }
 
         if (levelName) round.levelName = levelName;
+        if (assignAfterStage !== undefined) round.assignAfterStage = assignAfterStage;
         if (assignedTo !== undefined) round.assignedTo = assignedTo;
         if (scheduledDate !== undefined) round.scheduledDate = scheduledDate;
         if (phase !== undefined) round.phase = phase;
@@ -3763,8 +3763,13 @@ exports.bulkScheduleInterview = async (req, res) => {
 
                     normalizedAssignedTo.forEach(id => allAssignedUserIds.add(id.toString()));
 
+                    const defaultAnchor = roundPhase === 2 ? 'Shortlisted' : 'Interested';
+                    const rawAnchor = String(roundConfig.assignAfterStage || defaultAnchor).trim() || defaultAnchor;
+                    const normalizedAnchor = (rawAnchor === 'Interview Scheduled' || !rawAnchor) ? defaultAnchor : rawAnchor;
+
                     const newRound = {
-                        levelName: String(roundConfig.levelName).trim(),
+                        levelName: String(roundConfig.levelName || 'Round 1').trim() || 'Round 1',
+                        assignAfterStage: normalizedAnchor,
                         assignedTo: normalizedAssignedTo,
                         status: 'Pending',
                         scheduledDate: roundConfig.scheduledDate || undefined,
@@ -5096,7 +5101,7 @@ exports.getCandidateRoundSummary = async (req, res) => {
                 }
             }
 
-            if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && (!candidate.interviewRounds || candidate.interviewRounds.length === 0)) {
+            if (isProfileSharedCandidate(candidate) && hasLegacyPhase2InterviewActivity(candidate) && seenPhase2.size === 0) {
                 const name = 'Phase 2 Interview';
                 const anchor = 'Shortlisted';
                 if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
