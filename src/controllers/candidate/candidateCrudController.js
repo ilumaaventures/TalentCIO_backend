@@ -468,7 +468,8 @@ const getCandidatesByHiringRequest = async (req, res) => {
                     filterUploadType: req.query.filterUploadType,
                     filterTransferred: req.query.filterTransferred,
                     filterProfileShared: parseBooleanQueryValue(req.query.filterProfileShared),
-                    filterInterviewRound: req.query.filterInterviewRound || req.query.interviewRound
+                    filterInterviewRound: req.query.filterInterviewRound || req.query.interviewRound,
+                    filterDynamicStage: req.query.filterDynamicStage
                 },
                 page,
                 limit

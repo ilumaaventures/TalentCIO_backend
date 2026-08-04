@@ -623,7 +623,8 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         filterUploadType = 'All',
         filterTransferred = 'All',
         filterProfileShared = false,
-        filterInterviewRound = ''
+        filterInterviewRound = '',
+        filterDynamicStage = 'All'
     } = filters;
 
     const normalizedSearch = String(search || '').trim().toLowerCase();
@@ -636,6 +637,46 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
     const matchesSearch = (candidate) => (
         !normalizedSearch || String(candidate?.candidateName || '').toLowerCase().includes(normalizedSearch)
     );
+
+    const isNotScheduledFilter = filterDynamicStage && String(filterDynamicStage).startsWith('NotScheduled_');
+
+    const matchesDynamicStageFilter = (candidate, phase) => {
+        if (!filterDynamicStage || filterDynamicStage === 'All') return true;
+        const parts = String(filterDynamicStage).split('_');
+        const statusType = parts[0];
+        const targetRoundName = parts.slice(1).join('_').trim().toLowerCase();
+        const rounds = Array.isArray(candidate?.interviewRounds) ? candidate.interviewRounds : [];
+
+        if (statusType === 'NotScheduled' || statusType === 'Unscheduled') {
+            const hasTargetRound = rounds.some(
+                (r) => Number(r.phase || 1) === phase && String(r.levelName || '').trim().toLowerCase() === targetRoundName
+            );
+            return !hasTargetRound;
+        }
+
+        const targetRoundObj = rounds.find(
+            (r) => Number(r.phase || 1) === phase && String(r.levelName || '').trim().toLowerCase() === targetRoundName
+        );
+
+        if (!targetRoundObj) return false;
+        const s = String(targetRoundObj.status || 'Pending').trim();
+        if (statusType === 'Cleared') {
+            return s === 'Passed' || s === 'Pass' || s === 'Shortlisted';
+        }
+        if (statusType === 'Failed') {
+            return s === 'Failed' || s === 'Fail' || s === 'Rejected';
+        }
+        if (statusType === 'DNTU') {
+            return s === 'Did Not Turn Up' || s === 'Did Not Turnup' || s === 'Did Not Turn up' || s === 'Skipped' || s === 'No Show' || s === 'DNTU';
+        }
+        if (statusType === 'LIB') {
+            return s === 'Left in between' || s === 'Left In Between' || s === 'LIB';
+        }
+        if (statusType === 'Pending') {
+            return s === 'Pending' || s === 'Scheduled';
+        }
+        return true;
+    };
 
     const matchesCommonStructuralFilters = (candidate) => {
         const matchesPulledBy = !normalizedPulledBy.length || normalizedPulledBy.includes(String(candidate?.profilePulledBy || '').trim());
@@ -673,11 +714,13 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
         const matchesInterviewStatus = filterInterviewStatus === 'All'
             || matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 1), filterInterviewStatus);
         const matchesInterviewRound = !filterInterviewRound
+            || isNotScheduledFilter
             || (candidate?.interviewRounds || []).some((r) =>
                 String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
+        const matchesDynamic = matchesDynamicStageFilter(candidate, 1);
 
-        return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared && matchesInterviewRound;
+        return matchesStatus && matchesDecision && matchesInterviewStatus && matchesProfileShared && matchesInterviewRound && matchesDynamic;
     });
 
     const structuralPhase2Candidates = candidates.filter((candidate) => (
@@ -696,11 +739,13 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
                 : matchesLegacyInterviewFilter(getLegacyRoundsForPhase(candidate, 2), filterInterviewStatus));
 
         const matchesInterviewRound = !filterInterviewRound
+            || isNotScheduledFilter
             || (candidate?.interviewRounds || []).some((r) =>
                 String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
+        const matchesDynamic = matchesDynamicStageFilter(candidate, 2);
 
-        return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
+        return matchesDecision && matchesInterviewStatus && matchesInterviewRound && matchesDynamic;
     });
 
     const structuralPhase3Candidates = candidates.filter((candidate) => (
@@ -725,8 +770,9 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
             || (candidate?.interviewRounds || []).some((r) =>
                 String(r.levelName || '').trim().toLowerCase() === String(filterInterviewRound).trim().toLowerCase()
             );
+        const matchesDynamic = matchesDynamicStageFilter(candidate, 3);
 
-        return matchesDecision && matchesInterviewStatus && matchesInterviewRound;
+        return matchesDecision && matchesInterviewStatus && matchesInterviewRound && matchesDynamic;
     });
 
     const filteredCandidates = normalizedActivePhase === 2

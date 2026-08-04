@@ -116,20 +116,18 @@ const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, 
             return processed;
         };
 
-        const defaultSubject = `Interview Scheduled: ${round.levelName || 'Interview Round'} - ${candidate.candidateName}`;
-        const defaultCandidateBody = `
-            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
-                <h2 style="color: #2563eb; margin-top: 0;">Interview Scheduled</h2>
-                <p>Hello <strong>${candidate.candidateName}</strong>,</p>
-                <p>Your interview for <strong>${round.levelName}</strong> (${roleTitle}) has been scheduled.</p>
-                <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
-                    <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
-                    <p style="margin: 4px 0;"><strong>Interviewer(s):</strong> ${interviewersList}</p>
-                </div>
-                ${customFieldsHtml}
-                <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Thank you,<br/>Talent Acquisition Team</p>
-            </div>
-        `;
+        const defaultSubject = `Interview Scheduled: {{roundName}} - {{candidateName}}`;
+        const defaultCandidateBody = `Hello {{candidateName}},
+
+Your interview for {{roundName}} has been scheduled.
+
+Date & Time: {{scheduledDate}}
+Interviewer(s): {{interviewerName}}
+
+{{customFields}}
+
+Thanks & Regards,
+Talent Acquisition Team`;
 
         const defaultInterviewerBody = `
             <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
@@ -462,7 +460,7 @@ const updateInterviewRound = async (req, res) => {
         if (rating !== undefined) round.rating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined;
         if (feedback !== undefined) round.feedback = feedback;
         if (evaluatedBy !== undefined) round.evaluatedBy = evaluatedBy || req.user._id;
-        if (feedback || rating !== undefined || ['Passed', 'Failed', 'Skipped', 'Shortlisted', 'Rejected'].includes(status)) {
+        if (feedback || rating !== undefined || ['Passed', 'Failed', 'Skipped', 'Shortlisted', 'Rejected', 'Did Not Turn Up', 'Did not turn up', 'Left in between', 'Left In Between'].includes(status)) {
             if (!round.evaluatedAt) round.evaluatedAt = new Date();
         }
 
@@ -517,7 +515,7 @@ const updateInterviewRound = async (req, res) => {
 const sendInterviewRoundEmail = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { emailTemplateId, emailAccountId, cc, bcc, customFields } = req.body;
+        const { emailTemplateId, emailAccountId, cc, bcc, customFields, customSubject, customHtmlBody } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -557,7 +555,9 @@ const sendInterviewRoundEmail = async (req, res) => {
             user: req.user,
             cc: cc !== undefined ? cc : round.cc,
             bcc: bcc !== undefined ? bcc : round.bcc,
-            emailAccountId: emailAccountId || round.emailAccountId
+            emailAccountId: emailAccountId || round.emailAccountId,
+            customSubject,
+            customHtmlBody
         });
 
         res.status(200).json({
@@ -593,7 +593,7 @@ const previewInterviewRoundEmail = async (req, res) => {
         const effectiveTemplateId = emailTemplateId || round.emailTemplateId;
         let template = null;
         if (effectiveTemplateId) {
-            template = await EmailTemplate.findOne({ _id: effectiveTemplateId, companyId: req.companyId }).lean();
+            template = await EmailTemplate.findById(effectiveTemplateId).lean();
         }
 
         const roleTitle = candidate.hiringRequestId?.roleDetails?.title || candidate.roleTitle || candidate.position || '';
@@ -689,23 +689,27 @@ const previewInterviewRoundEmail = async (req, res) => {
             return processed;
         };
 
-        const defaultSubject = `Interview Scheduled: ${round.levelName || 'Interview Round'} - ${candidate.candidateName}`;
-        const defaultCandidateBody = `
-            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
-                <h2 style="color: #2563eb; margin-top: 0;">Interview Scheduled</h2>
-                <p>Hello <strong>${candidate.candidateName}</strong>,</p>
-                <p>Your interview for <strong>${round.levelName}</strong> (${roleTitle}) has been scheduled.</p>
-                <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
-                    <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
-                    <p style="margin: 4px 0;"><strong>Interviewer(s):</strong> ${interviewersList}</p>
-                </div>
-                ${customFieldsHtml}
-                <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Thank you,<br/>Talent Acquisition Team</p>
-            </div>
-        `;
+        const defaultSubject = `Interview Scheduled: {{roundName}} - {{candidateName}}`;
+        const defaultCandidateBody = `Hello {{candidateName}},
 
-        const subject = template?.subject ? processTemplate(template.subject, false) : defaultSubject;
-        const htmlBody = template?.htmlBody ? processTemplate(template.htmlBody, true) : defaultCandidateBody;
+Your interview for {{roundName}} has been scheduled.
+
+Date & Time: {{scheduledDate}}
+Interviewer(s): {{interviewerName}}
+
+{{customFields}}
+
+Thanks & Regards,
+Talent Acquisition Team`;
+
+        const customSubjectInput = req.body?.customSubject || req.query?.customSubject;
+        const customHtmlBodyInput = req.body?.customHtmlBody || req.query?.customHtmlBody;
+
+        const rawSubject = customSubjectInput || template?.subject || defaultSubject;
+        const rawBody = customHtmlBodyInput || template?.htmlBody || defaultCandidateBody;
+
+        const subject = processTemplate(rawSubject, false);
+        const htmlBody = processTemplate(rawBody, true);
 
         res.status(200).json({
             candidateName: candidate.candidateName,
@@ -713,6 +717,8 @@ const previewInterviewRoundEmail = async (req, res) => {
             interviewers: assignedInterviewers.map(u => ({ name: `${u.firstName || ''} ${u.lastName || ''}`.trim(), email: u.email })),
             subject,
             htmlBody,
+            rawSubject,
+            rawBody,
             customFields: validFields,
             scheduledDateFormatted,
             cc: round.cc || '',
@@ -819,8 +825,9 @@ const evaluateInterviewRound = async (req, res) => {
         const { id, roundId } = req.params;
         const { status, feedback, rating, skillRatings } = req.body;
 
-        if (!['Passed', 'Failed', 'Skipped'].includes(status)) {
-            return res.status(400).json({ message: 'Status must be Passed, Failed or Skipped' });
+        const validStatuses = ['Passed', 'Failed', 'Skipped', 'Did Not Turn Up', 'Did not turn up', 'Left in between', 'Left In Between'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ message: 'Status must be Passed, Failed, Skipped, Did Not Turn Up, or Left in between' });
         }
 
         if (!feedback) {

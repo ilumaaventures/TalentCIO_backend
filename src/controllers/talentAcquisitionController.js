@@ -1034,18 +1034,32 @@ exports.getHiringRequestPhases = async (req, res) => {
 exports.getHiringRequests = async (req, res) => {
     try {
         setNoCache(res);
-        const { status, page = 1, limit = 10, client } = req.query;
+        const { status, page = 1, limit = 30, client, search } = req.query;
         const query = await buildAccessibleHiringRequestQuery(req.companyId, req.user, { action: 'view' });
 
-        if (status) query.status = status;
-        if (client) query.client = client;
+        if (status && status !== 'All') {
+            query.status = status;
+        }
+        if (client && client !== 'All') {
+            query.client = client;
+        }
 
-        const pageNumber = parseInt(page);
-        const limitNumber = parseInt(limit);
+        if (search && search.trim() !== '') {
+            const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            query.$or = [
+                { requestId: searchRegex },
+                { 'roleDetails.title': searchRegex },
+                { client: searchRegex },
+                { 'roleDetails.department': searchRegex }
+            ];
+        }
+
+        const pageNumber = Math.max(1, parseInt(page) || 1);
+        const limitNumber = Math.max(1, parseInt(limit) || 30);
         const skip = (pageNumber - 1) * limitNumber;
 
         const totalRequests = await HiringRequest.countDocuments(query);
-        const totalPages = Math.ceil(totalRequests / limitNumber);
+        const totalPages = Math.ceil(totalRequests / limitNumber) || 1;
 
         const requests = await HiringRequest.find(query)
             .populate('ownership.hiringManager', 'firstName lastName')
@@ -1060,7 +1074,8 @@ exports.getHiringRequests = async (req, res) => {
             requests: requests.map((request) => serializeHiringRequestResponse(request, req.user)),
             totalPages,
             currentPage: pageNumber,
-            totalRequests
+            totalRequests,
+            limit: limitNumber
         });
     } catch (error) {
         console.error(error);

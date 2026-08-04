@@ -1341,30 +1341,52 @@ const getCandidateRoundSummary = async (req, res) => {
             const seenPhase1 = new Set();
             const seenPhase2 = new Set();
 
+            const normalizeRoundTitle = (str) => {
+                if (!str) return 'Round 1';
+                const trimmed = String(str).trim();
+                return trimmed.replace(/\b\w/g, (char) => char.toUpperCase());
+            };
+
             for (const round of (candidate.interviewRounds || [])) {
                 const rPhase = Number(round?.phase || 1);
-                const name = String(round.levelName || 'Round 1').trim() || 'Round 1';
+                const rawName = String(round.levelName || 'Round 1').trim() || 'Round 1';
+                const name = normalizeRoundTitle(rawName);
+                const key = name.toLowerCase();
 
                 if (rPhase === 1) {
                     let anchor = String(round.assignAfterStage || 'Interested').trim() || 'Interested';
                     if (anchor === 'Interview Scheduled' || !['Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared'].includes(anchor)) {
                         anchor = 'Interested';
                     }
-                    if (!phase1Map.has(name)) phase1Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
-                    if (!seenPhase1.has(name)) {
-                        seenPhase1.add(name);
-                        phase1Map.get(name).count += 1;
+                    if (!phase1Map.has(key)) phase1Map.set(key, { levelName: name, assignAfterStage: anchor, count: 0, shortlisted: 0, rejected: 0, didNotTurnUp: 0, leftInBetween: 0, pending: 0 });
+                    const entry = phase1Map.get(key);
+                    if (!seenPhase1.has(key)) {
+                        seenPhase1.add(key);
+                        entry.count += 1;
                     }
+                    const s1 = String(round.status || '').trim();
+                    if (s1 === 'Passed' || s1 === 'Pass' || s1 === 'Shortlisted') entry.shortlisted += 1;
+                    else if (s1 === 'Failed' || s1 === 'Fail' || s1 === 'Rejected') entry.rejected += 1;
+                    else if (s1 === 'Did Not Turn Up' || s1 === 'Did Not Turnup' || s1 === 'Did Not Turn up' || s1 === 'Skipped' || s1 === 'No Show' || s1 === 'DNTU') entry.didNotTurnUp += 1;
+                    else if (s1 === 'Left in between' || s1 === 'Left In Between' || s1 === 'LIB') entry.leftInBetween += 1;
+                    else entry.pending += 1;
                 } else if (rPhase === 2 && isProfileSharedCandidate(candidate)) {
                     let anchor = String(round.assignAfterStage || 'Shortlisted').trim() || 'Shortlisted';
                     if (anchor === 'Interview Scheduled' || !['Profile Shared', 'Shortlisted', 'Selected', 'Rejected'].includes(anchor)) {
                         anchor = 'Shortlisted';
                     }
-                    if (!phase2Map.has(name)) phase2Map.set(name, { levelName: name, assignAfterStage: anchor, count: 0 });
-                    if (!seenPhase2.has(name)) {
-                        seenPhase2.add(name);
-                        phase2Map.get(name).count += 1;
+                    if (!phase2Map.has(key)) phase2Map.set(key, { levelName: name, assignAfterStage: anchor, count: 0, shortlisted: 0, rejected: 0, didNotTurnUp: 0, leftInBetween: 0, pending: 0 });
+                    const entry = phase2Map.get(key);
+                    if (!seenPhase2.has(key)) {
+                        seenPhase2.add(key);
+                        entry.count += 1;
                     }
+                    const s2 = String(round.status || '').trim();
+                    if (s2 === 'Passed' || s2 === 'Pass' || s2 === 'Shortlisted') entry.shortlisted += 1;
+                    else if (s2 === 'Failed' || s2 === 'Fail' || s2 === 'Rejected') entry.rejected += 1;
+                    else if (s2 === 'Did Not Turn Up' || s2 === 'Did Not Turnup' || s2 === 'Did Not Turn up' || s2 === 'Skipped' || s2 === 'No Show' || s2 === 'DNTU') entry.didNotTurnUp += 1;
+                    else if (s2 === 'Left in between' || s2 === 'Left In Between' || s2 === 'LIB') entry.leftInBetween += 1;
+                    else entry.pending += 1;
                 }
             }
 
