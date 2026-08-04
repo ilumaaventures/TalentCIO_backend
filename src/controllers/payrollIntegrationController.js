@@ -167,11 +167,9 @@ const getAttendanceSummary = async (req, res) => {
         const parsedYear = Number.parseInt(year, 10);
         const totalDaysInMonth = new Date(parsedYear, parsedMonth, 0).getDate();
 
-        const isCurrentMonth = now.getFullYear() === parsedYear && (now.getMonth() + 1) === parsedMonth;
-        // For the current month, clamp to today's IST day; otherwise use the full month.
-        const elapsedDays = isCurrentMonth
-            ? Math.min(Number.parseInt(toLocalTimezoneRep(now).getDate(), 10), totalDaysInMonth)
-            : totalDaysInMonth;
+        // Evaluate the full calendar month (e.g. 31 days) so all recorded attendance
+        // entries in the database for days 1..31 are evaluated for payroll sync.
+        const elapsedDays = totalDaysInMonth;
 
         const evalEndPadded = String(elapsedDays).padStart(2, '0');
         const evalEndMonthPadded = String(parsedMonth).padStart(2, '0');
@@ -208,6 +206,7 @@ const getAttendanceSummary = async (req, res) => {
 
                 const userApprovedLeaves = approvedLeaves.filter(l => String(l.user?._id || l.user || '') === userIdStr);
 
+                const dailyDetails = [];
                 const cursor = new Date(start);
                 while (cursor <= evalEnd && cursor < end) {
                     const localCursor = toLocalTimezoneRep(cursor);
@@ -237,8 +236,6 @@ const getAttendanceSummary = async (req, res) => {
 
                         if (attendanceRec) {
                             if (attendanceRec.attendanceMode === 'present_only' && status === 'PRESENT') {
-                                // Bug 7 fix: present_only mode has no clock times — assign company default
-                                // working hours so totalWorkingHours is not always 0 for these employees.
                                 workingHours = companyWorkingHours;
                             } else if (attendanceRec.clockIn && attendanceRec.clockOut) {
                                 const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
@@ -253,6 +250,29 @@ const getAttendanceSummary = async (req, res) => {
                             const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
                             isPaidLeave = leaveConfig?.isPaid !== false;
                         }
+
+                        let dayStatus = 'ABSENT';
+                        if (isWeeklyOffDay) {
+                            dayStatus = 'WEEKLY_OFF';
+                        } else if (isHolidayDay) {
+                            dayStatus = 'HOLIDAY';
+                        } else if (status) {
+                            dayStatus = status;
+                        } else if (matchingLeave) {
+                            dayStatus = 'LEAVE';
+                        }
+
+                        dailyDetails.push({
+                            date: dateStr,
+                            dayName,
+                            status: dayStatus,
+                            clockIn: attendanceRec?.clockIn || null,
+                            clockOut: attendanceRec?.clockOut || null,
+                            workingHours,
+                            isOffDay,
+                            leaveType: matchingLeave?.leaveType || null,
+                            isPaidLeave: isPaidLeave !== null ? isPaidLeave : false
+                        });
 
                         if (isOffDay) {
                             if (isWeeklyOffDay) {
@@ -298,8 +318,6 @@ const getAttendanceSummary = async (req, res) => {
                                         else unpaidLeaves += leaveDays;
                                         if (matchingLeave.isHalfDay) absentDays += 0.5;
                                     } else {
-                                        // Bug 3 fix: attendance record says LEAVE but no approved LeaveRequest
-                                        // exists — treat as absent instead of giving a free paid leave day.
                                         absentDays += 1;
                                     }
                                 } else if (status === 'ABSENT') {
@@ -329,15 +347,6 @@ const getAttendanceSummary = async (req, res) => {
                     cursor.setDate(cursor.getDate() + 1);
                 }
 
-                // paidDays is dynamic:
-                //   - presentDays: days the employee actually worked (or was marked present)
-                //   - paidLeaves: approved paid leave days
-                //   - weeklyOffDays: company weekly-off days *or* per-user flexible-off days
-                //     (the loop already uses userWeeklyOffs which prefers customFlexibleOffDays
-                //     over the company default, so this is automatically per-user correct)
-                //   - holidayDays: company holidays (always paid)
-                // workedOffDays is intentionally excluded here — those are tracked separately
-                // for overtime/comp-off purposes and must not inflate the base salary days.
                 const calculatedPaidDays = presentDays + paidLeaves + weeklyOffDays + holidayDays;
 
                 if (workingDaysTillDate > elapsedDays) {
@@ -349,17 +358,9 @@ const getAttendanceSummary = async (req, res) => {
                 }
 
                 return {
-                    // employeeId removed: exposes internal MongoDB _id to an external system.
-                    // employeeNumber (employeeCode) is the correct external identifier.
                     employeeNumber: user.employeeCode,
                     totalDaysInMonth,
                     elapsedDays,
-                    // workingDays = elapsedDays: this is the correct prorate DENOMINATOR for payrollMath.
-                    // It must equal the total days the employee was employed in the period
-                    // (working days + weekoffs + holidays), so that paidDays/workingDays gives the
-                    // correct salary fraction.
-                    // e.g. employee worked 19 days, 8 weekoffs, 1 holiday:
-                    //   paidDays = 19+8+1 = 28, workingDays = 28 → prorate = 1.0 (full month)
                     workingDays: elapsedDays,
                     workingDaysTillDate,
                     weeklyOffDays,
@@ -372,6 +373,7 @@ const getAttendanceSummary = async (req, res) => {
                     workedOffDays,
                     paidDays: calculatedPaidDays,
                     totalWorkingHours: Number(totalWorkingHours.toFixed(2)),
+                    dailyDetails
                 };
             })
             // Bug 8 fix: guard against null/undefined employeeCode to prevent TypeError crash
