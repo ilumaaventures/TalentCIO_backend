@@ -57,12 +57,18 @@ const resolveMonthRange = (month, year) => {
         return null;
     }
 
-    // Use UTC boundaries so the full calendar month is included regardless of
-    // how attendance dates are stored (UTC midnight vs IST midnight).
-    // start = first millisecond of the month at UTC midnight.
-    // end   = first millisecond of the *next* month (exclusive upper bound).
-    const start = new Date(Date.UTC(parsedYear, parsedMonth - 1, 1));
-    const end = new Date(Date.UTC(parsedYear, parsedMonth, 1));
+    // Attendance dates are stored at IST midnight (e.g. 2026-07-01T00:00:00+05:30
+    // which is 2026-06-30T18:30:00.000Z in UTC).  The query boundaries must use
+    // the same IST-midnight representation so the $gte/$lt range captures the
+    // first day of the month.  Using UTC midnight would miss day-1 records whose
+    // UTC value falls before the boundary.
+    const paddedMonth = String(parsedMonth).padStart(2, '0');
+    const nextMonth = parsedMonth === 12 ? 1 : parsedMonth + 1;
+    const nextYear = parsedMonth === 12 ? parsedYear + 1 : parsedYear;
+    const paddedNextMonth = String(nextMonth).padStart(2, '0');
+
+    const start = parseDateAsIST(`${parsedYear}-${paddedMonth}-01`);
+    const end = parseDateAsIST(`${nextYear}-${paddedNextMonth}-01`);
 
     return { start, end };
 };
