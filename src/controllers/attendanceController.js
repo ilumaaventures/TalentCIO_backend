@@ -144,7 +144,7 @@ exports.clockIn = async (req, res) => {
             attendanceDate: now
         });
 
-        if (req.user.joiningDate && today < new Date(req.user.joiningDate)) {
+        if (req.user.joiningDate && today < parseDateAsIST(req.user.joiningDate)) {
             return res.status(400).json({ message: 'Cannot clock in before joining date.' });
         }
 
@@ -530,6 +530,9 @@ exports.createAttendance = async (req, res) => {
         }
 
         const attendanceDate = parseDateAsIST(date);
+        if (targetUser.joiningDate && attendanceDate < parseDateAsIST(targetUser.joiningDate) && !isAdmin) {
+            return res.status(400).json({ message: 'Cannot create attendance before employee joining date.' });
+        }
         if (attendanceDate > getStartOfDayIST() && !canUpdateFutureRecords(req.user)) {
             return res.status(403).json({ message: 'Not authorized to create attendance for future dates' });
         }
@@ -945,6 +948,9 @@ exports.requestRegularization = async (req, res) => {
         }
         if (holidayDates.includes(targetDateStr)) {
             return res.status(400).json({ message: 'Regularization not allowed on holidays.' });
+        }
+        if (req.user.joiningDate && normalizedTargetDate < parseDateAsIST(req.user.joiningDate)) {
+            return res.status(400).json({ message: 'Cannot request regularization before joining date.' });
         }
         if (normalizedTargetDate > today) {
             return res.status(400).json({ message: 'Regularization not allowed for future dates.' });

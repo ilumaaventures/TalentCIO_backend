@@ -557,7 +557,7 @@ const getCandidateByIdPayload = async (req) => {
 
     let candidateData = await Candidate.findOne({ _id: id, companyId: req.companyId })
         .populate('uploadedBy', 'firstName lastName email')
-        .populate('hiringRequestId', 'requestId roleDetails requirements')
+        .populate('hiringRequestId', 'requestId roleDetails requirements client clientConfidential')
         .populate('applicantId', APPLICANT_REVIEW_SELECT)
         .populate('statusHistory.changedBy', 'firstName lastName')
         .populate('interviewRounds.assignedTo', 'firstName lastName email')
