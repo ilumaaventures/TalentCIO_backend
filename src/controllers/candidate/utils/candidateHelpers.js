@@ -708,7 +708,12 @@ const buildLegacyCandidateListResponse = ({ candidates = [], filters = {}, page 
     const structuralPhase1Candidates = candidates.filter((candidate) => matchesCommonStructuralFilters(candidate));
     const basePhase1Candidates = structuralPhase1Candidates.filter((candidate) => matchesBaseFiltersForPhase(candidate, 1));
     const filteredPhase1Candidates = basePhase1Candidates.filter((candidate) => {
-        const matchesStatus = filterStatus === 'All' || candidate?.status === filterStatus;
+        const mainStatuses = ['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'High expectation', 'Long Notice period', 'Location Not suitable'];
+        const matchesStatus = filterStatus === 'All'
+            ? true
+            : ['Other', 'None', 'OTH'].includes(filterStatus)
+                ? !mainStatuses.includes(candidate?.status)
+                : candidate?.status === filterStatus;
         const matchesDecision = filterDecision === 'All' || (candidate?.decision || 'None') === filterDecision;
         const matchesProfileShared = !filterProfileShared || isProfileSharedCandidate(candidate);
         const matchesInterviewStatus = filterInterviewStatus === 'All'
