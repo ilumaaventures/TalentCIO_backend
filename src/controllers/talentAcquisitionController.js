@@ -350,17 +350,32 @@ const createTransferredCandidateClone = async ({ candidate, targetHiringRequestI
     newCandidateData.hiringRequestId = targetHiringRequestId;
     newCandidateData.isTransferred = true;
     newCandidateData.transferredFrom = candidate.hiringRequestId;
-    newCandidateData.status = 'Interested';
+
+    // Reset profileShared & phase state so candidate starts fresh in Phase 1
+    newCandidateData.profileShared = false;
+    newCandidateData.profileSharedAt = null;
+    newCandidateData.profileSharedBy = null;
+    newCandidateData.currentPhase = 1;
+    newCandidateData.currentPhaseOrder = 1;
+    newCandidateData.currentPhaseId = null;
+    newCandidateData.currentPhaseStatus = '';
+    newCandidateData.currentPhaseName = '';
+
+    // Reset status to 'Total Sourced' (Phase 1 pool, not Interested)
+    newCandidateData.status = 'Total Sourced';
     newCandidateData.statusHistory = [{
-        status: 'Interested',
+        status: 'Total Sourced',
         changedBy: performedBy,
         changedAt: new Date(),
         remark: resetRemark || 'Transferred from previous requisition'
     }];
     newCandidateData.decision = 'None';
     newCandidateData.phase2Decision = 'None';
+    newCandidateData.phase2InterviewStatus = 'None';
+    newCandidateData.phase2InterviewerFeedback = '';
     newCandidateData.phase3Decision = 'None';
     newCandidateData.interviewRounds = [];
+    newCandidateData.phaseHistory = [];
 
     const clonedCandidate = new Candidate(newCandidateData);
     await clonedCandidate.save();
@@ -1979,18 +1994,31 @@ exports.transferCandidate = async (req, res) => {
         newCandidateData.isTransferred = true;
         newCandidateData.transferredFrom = candidate.hiringRequestId;
 
-        // Reset process statuses
-        newCandidateData.status = 'Interested';
+        // Reset profileShared & phase state so candidate starts fresh in Phase 1
+        newCandidateData.profileShared = false;
+        newCandidateData.profileSharedAt = null;
+        newCandidateData.profileSharedBy = null;
+        newCandidateData.currentPhase = 1;
+        newCandidateData.currentPhaseOrder = 1;
+        newCandidateData.currentPhaseId = null;
+        newCandidateData.currentPhaseStatus = '';
+        newCandidateData.currentPhaseName = '';
+
+        // Reset process statuses (Phase 1, Sourced status, not Interested, not Profile Shared)
+        newCandidateData.status = 'Total Sourced';
         newCandidateData.statusHistory = [{
-            status: 'Interested',
+            status: 'Total Sourced',
             changedBy: req.user._id,
             changedAt: new Date(),
             remark: 'Transferred from previous requisition'
         }];
         newCandidateData.decision = 'None';
         newCandidateData.phase2Decision = 'None';
+        newCandidateData.phase2InterviewStatus = 'None';
+        newCandidateData.phase2InterviewerFeedback = '';
         newCandidateData.phase3Decision = 'None';
         newCandidateData.interviewRounds = [];
+        newCandidateData.phaseHistory = [];
 
         const newCandidate = new Candidate(newCandidateData);
         await newCandidate.save();

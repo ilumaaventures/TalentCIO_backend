@@ -1000,6 +1000,7 @@ const getCandidateCardFilters = async (req, res) => {
                 highExpectation: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'High expectation').length,
                 longNoticePeriod: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Long Notice period').length,
                 locationNotSuitable: structuralPhase1Candidates.filter((candidate) => candidate?.status === 'Location Not suitable').length,
+                otherStatus: structuralPhase1Candidates.filter((candidate) => !['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'High expectation', 'Long Notice period', 'Location Not suitable'].includes(candidate?.status)).length,
                 interviewScheduled: structuralPhase1Candidates.filter((candidate) => getLegacyRoundsForPhase(candidate, 1).length > 0).length,
                 shortlisted: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Shortlisted').length,
                 rejected: structuralPhase1Candidates.filter((candidate) => candidate?.decision === 'Rejected').length,
@@ -1225,7 +1226,14 @@ const getCandidateInterviewDetails = async (req, res) => {
             if (minExp !== null && (c?.totalExperience === undefined || c?.totalExperience === null || Number(c.totalExperience) < minExp)) return false;
 
             if (targetPhase === 1) {
-                if (filterStatus !== 'All' && c?.status !== filterStatus) return false;
+                if (filterStatus !== 'All') {
+                    const mainStatuses = ['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'High expectation', 'Long Notice period', 'Location Not suitable'];
+                    if (['Other', 'None', 'OTH'].includes(filterStatus)) {
+                        if (mainStatuses.includes(c?.status)) return false;
+                    } else if (c?.status !== filterStatus) {
+                        return false;
+                    }
+                }
                 if (filterDecision !== 'All' && (c?.decision || 'None') !== filterDecision) return false;
                 if (parseBooleanQueryValue(filterProfileShared) && !isProfileSharedCandidate(c)) return false;
             } else if (targetPhase === 2) {
