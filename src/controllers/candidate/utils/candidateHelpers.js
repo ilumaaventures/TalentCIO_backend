@@ -266,7 +266,8 @@ const hasCandidateMovedToPhase2 = (candidate = {}) => {
     const phase2InterviewerFeedback = String(candidate?.phase2InterviewerFeedback || '').trim();
 
     return candidate?.profileShared === true
-        || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+        || candidate?.decision === 'Shortlisted'
+        || candidate?.decision === 'Profile Shared'
         || Boolean(phase2Decision && phase2Decision !== 'None')
         || Boolean(phase2InterviewStatus && phase2InterviewStatus !== 'None')
         || Boolean(phase2InterviewerFeedback);
@@ -503,9 +504,13 @@ const getCandidateUploadedByName = (candidate = {}) => (
     `${candidate?.uploadedBy?.firstName || ''} ${candidate?.uploadedBy?.lastName || ''}`.trim()
 );
 
-const isProfileSharedCandidate = (candidate = {}) => (
+const isProfileSharedCandidate = (candidate = {}) => Boolean(
     candidate?.profileShared === true
-    || (candidate?.profileShared == null && candidate?.decision === 'Shortlisted')
+    || candidate?.decision === 'Shortlisted'
+    || candidate?.decision === 'Profile Shared'
+    || (candidate?.phase2Decision && candidate?.phase2Decision !== 'None')
+    || (candidate?.phase2InterviewStatus && candidate?.phase2InterviewStatus !== 'None')
+    || Boolean(candidate?.phase2InterviewerFeedback)
 );
 
 const getLegacyRoundsForPhase = (candidate = {}, phase = 1) => (

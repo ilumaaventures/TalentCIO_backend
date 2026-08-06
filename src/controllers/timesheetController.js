@@ -175,10 +175,9 @@ const addEntry = async (req, res) => {
         const targetUser = await User.findById(targetUserId);
 
         if (targetUser?.joiningDate && !isAdmin) {
-            const joiningStart = startOfDay(new Date(targetUser.joiningDate));
-            const entryStart = startOfDay(normalizedEntryDate);
+            const joiningDateIST = parseDateAsIST(targetUser.joiningDate);
 
-            if (entryStart < joiningStart) {
+            if (joiningDateIST && normalizedEntryDate < joiningDateIST) {
                 return res.status(400).json({ message: 'Cannot add entries before joining date.' });
             }
         }
@@ -730,10 +729,10 @@ const updateEntry = async (req, res) => {
         // Check Joining Date
         if (owner.joiningDate && !isAdmin) {
             // For updateEntry, we check the workLog date
-            const joiningStart = startOfDay(new Date(owner.joiningDate));
-            const logStart = startOfDay(workLog.date);
+            const joiningDateIST = parseDateAsIST(owner.joiningDate);
+            const logDateIST = parseDateAsIST(workLog.date);
 
-            if (logStart < joiningStart) {
+            if (joiningDateIST && logDateIST && logDateIST < joiningDateIST) {
                 return res.status(400).json({ message: 'Cannot edit entries before joining date.' });
             }
         }

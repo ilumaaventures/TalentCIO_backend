@@ -38,6 +38,20 @@ const logWork = async (req, res) => {
             return res.status(400).json({ message: 'Cannot add logs to a submitted or approved timesheet.' });
         }
 
+        if (req.user?.joiningDate) {
+            const isAdmin = req.user.roles?.some(r => 
+                (typeof r === 'string' && r === 'Admin') || 
+                (typeof r === 'object' && r.name === 'Admin')
+            ) || req.user.permissions?.includes('*');
+
+            if (!isAdmin) {
+                const joiningDateIST = parseDateAsIST(req.user.joiningDate);
+                if (joiningDateIST && normalizedDate < joiningDateIST) {
+                    return res.status(400).json({ message: 'Cannot add logs before joining date.' });
+                }
+            }
+        }
+
         const startOfDay = normalizedDate;
         const endOfDay = buildEndOfDayIST(normalizedDate);
 
