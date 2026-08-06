@@ -1210,8 +1210,14 @@ const getCandidateInterviewDetails = async (req, res) => {
             `${c?.uploadedBy?.firstName || ''} ${c?.uploadedBy?.lastName || ''}`.trim();
         const getCandidateUploadType = (c) =>
             (typeof c?.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
-        const isProfileSharedCandidate = (c) =>
-            c?.profileShared === true || (c?.profileShared == null && c?.decision === 'Shortlisted');
+        const isProfileSharedCandidate = (c) => Boolean(
+            c?.profileShared === true ||
+            c?.decision === 'Shortlisted' ||
+            c?.decision === 'Profile Shared' ||
+            (c?.phase2Decision && c?.phase2Decision !== 'None') ||
+            (c?.phase2InterviewStatus && c?.phase2InterviewStatus !== 'None') ||
+            Boolean(c?.phase2InterviewerFeedback)
+        );
 
         const filtered = candidates.filter((c) => {
             if (normalizedSearch && !String(c?.candidateName || '').toLowerCase().includes(normalizedSearch)) return false;
@@ -1325,8 +1331,14 @@ const getCandidateRoundSummary = async (req, res) => {
             `${c?.uploadedBy?.firstName || ''} ${c?.uploadedBy?.lastName || ''}`.trim();
         const getCandidateUploadType = (c) =>
             (typeof c?.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
-        const isProfileSharedCandidate = (c) =>
-            c?.profileShared === true || (c?.profileShared == null && c?.decision === 'Shortlisted');
+        const isProfileSharedCandidate = (c) => Boolean(
+            c?.profileShared === true ||
+            c?.decision === 'Shortlisted' ||
+            c?.decision === 'Profile Shared' ||
+            (c?.phase2Decision && c?.phase2Decision !== 'None') ||
+            (c?.phase2InterviewStatus && c?.phase2InterviewStatus !== 'None') ||
+            Boolean(c?.phase2InterviewerFeedback)
+        );
 
         const matchesStructural = (c) => {
             if (normalizedSearch && !String(c?.candidateName || '').toLowerCase().includes(normalizedSearch)) return false;

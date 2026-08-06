@@ -129,6 +129,9 @@ const updateCandidateDecision = async (req, res) => {
         }
 
         candidate.decision = decision;
+        if (['Shortlisted', 'Profile Shared'].includes(decision)) {
+            candidate.profileShared = true;
+        }
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);
         }

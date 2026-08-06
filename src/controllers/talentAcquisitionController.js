@@ -2433,7 +2433,7 @@ exports.getClientAnalytics = async (req, res) => {
         let totalHired = 0;
 
         activeCandidates.forEach(c => {
-            const isProfileShared = c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted');
+            const isProfileShared = c.profileShared === true || c.decision === 'Shortlisted' || c.decision === 'Profile Shared' || Boolean(c.phase2Decision && c.phase2Decision !== 'None');
             // Drop-offs first
             if (
                 c.decision === 'Rejected' ||
@@ -2810,7 +2810,7 @@ exports.getGlobalAnalytics = async (req, res) => {
             else if (['Offer Sent', 'Offer Accepted'].includes(c.phase3Decision)) pipeline['Offer Released']++;
             else if (c.phase2Decision === 'Selected') pipeline['Final Selection']++;
             else if (c.phase2Decision === 'Shortlisted') pipeline['Ph 2 Shortlisted']++;
-            else if (c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted')) pipeline['Ph 2 Shortlisted']++;
+            else if (c.profileShared === true || c.decision === 'Shortlisted' || c.decision === 'Profile Shared' || (c.phase2Decision && c.phase2Decision !== 'None')) pipeline['Ph 2 Shortlisted']++;
             else if (c.decision === 'Shortlisted') pipeline['Ph 1 Shortlisted']++;
             else pipeline['Sourced']++;
 
@@ -2961,7 +2961,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 conversionRate: (activeCandidates.length + activePublicApplications.length) > 0 ? ((totalPh1Shortlisted / (activeCandidates.length + activePublicApplications.length)) * 100).toFixed(1) : 0
             };
         } else if (phase === '2') {
-            const ph1Selected = activeCandidates.filter(c => c.profileShared === true || (c.profileShared == null && c.decision === 'Shortlisted')).length;
+            const ph1Selected = activeCandidates.filter(c => c.profileShared === true || c.decision === 'Shortlisted' || c.decision === 'Profile Shared' || (c.phase2Decision && c.phase2Decision !== 'None')).length;
             const ph2Selected = activeCandidates.filter(c => c.phase2Decision === 'Selected').length;
             displayMetrics = {
                 ...displayMetrics,
