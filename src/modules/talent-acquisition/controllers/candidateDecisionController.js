@@ -1,6 +1,6 @@
-const Candidate = require('../candidate.model');
-const { HiringRequest } = require('../hiringRequest.model');
-const OnboardingEmployee = require('../../onboarding/onboardingEmployee.model');
+const Candidate = require('../model/candidate.model');
+const { HiringRequest } = require('../model/hiringRequest.model');
+const OnboardingEmployee = require('../../onboarding/model/onboardingEmployee.model');
 const mongoose = require('mongoose');
 const NotificationService = require('../../../services/notificationService');
 const { isDynamicHiringRequest } = require('../utils/phaseTemplateUtils');

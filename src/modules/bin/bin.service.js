@@ -3,8 +3,8 @@ const Project = require('../project/project.model');
 const Module = require('../task/module.model');
 const Task = require('../task/task.model');
 const WorkLog = require('../timesheet/workLog.model');
-const Candidate = require('../talent-acquisition/candidate.model');
-const { HiringRequest } = require('../talent-acquisition/hiringRequest.model');
+const Candidate = require('../talent-acquisition/model/candidate.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
 const User = require('../user/user.model');
 const Role = require('../user/role.model');
 const Client = require('../client/client.model');
@@ -13,12 +13,12 @@ const Discussion = require('../discussion/discussion.model');
 const Meeting = require('../meeting/meeting.model');
 const Holiday = require('../holiday/holiday.model');
 const ApprovalWorkflow = require('../workflow/approvalWorkflow.model');
-const InterviewWorkflow = require('../talent-acquisition/interviewWorkflow.model');
-const LeaveConfig = require('../leave/leaveConfig.model');
+const InterviewWorkflow = require('../talent-acquisition/model/interviewWorkflow.model');
+const LeaveConfig = require('../leave/model/leaveConfig.model');
 const QueryType = require('../helpdesk/queryType.model');
 const EmailTemplate = require('../email/model/emailTemplate.model');
-const OnboardingTemplateBin = require('../onboarding/onboardingTemplateBin.model');
-const OnboardingPolicyBin = require('../onboarding/onboardingPolicyBin.model');
+const OnboardingTemplateBin = require('../onboarding/model/onboardingTemplateBin.model');
+const OnboardingPolicyBin = require('../onboarding/model/onboardingPolicyBin.model');
 
 const ENTITY_MAP = {
     project: Project,
@@ -467,7 +467,7 @@ const purgeDeletedDocument = async (entity, item) => {
     }
 
     if (entityKey === 'onboardingtemplate' || entityKey === 'onboardingpolicy') {
-        const OnboardingEmployee = require('../onboarding/onboardingEmployee.model');
+        const OnboardingEmployee = require('../onboarding/model/onboardingEmployee.model');
         const Company = require('../company/company.model');
         const isUsed = await OnboardingEmployee.exists({
             companyId: item.companyId,

@@ -1,5 +1,5 @@
-const { HiringRequest } = require('../../hiringRequest.model');
-const PublicApplication = require('../../publicApplication.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
+const PublicApplication = require('../../model/publicApplication.model');
 const { attachLastApplicationData } = require('../../utils/applicationHistoryUtils');
 
 exports.globalSearchPublicApplications = async (req, res) => {

@@ -1,4 +1,4 @@
-const OnboardingEmployee = require('../onboardingEmployee.model');
+const OnboardingEmployee = require('../model/onboardingEmployee.model');
 const Company = require('../../company/company.model');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');

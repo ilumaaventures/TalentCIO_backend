@@ -1,4 +1,4 @@
-const { HiringRequest } = require('../hiringRequest.model');
+const { HiringRequest } = require('../model/hiringRequest.model');
 const { parseCV } = require('../utils/cvParser');
 const { isDynamicHiringRequest } = require('../utils/phaseTemplateUtils');
 const { TA_CAPABILITIES, canAccessHiringRequestForCapability } = require('../utils/candidateAccess');

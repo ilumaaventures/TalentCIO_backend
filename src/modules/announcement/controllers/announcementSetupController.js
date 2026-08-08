@@ -1,5 +1,5 @@
 const User = require('../../../modules/user/user.model');
-const OnboardingEmployee = require('../../onboarding/onboardingEmployee.model');
+const OnboardingEmployee = require('../../onboarding/model/onboardingEmployee.model');
 const {
     ANNOUNCEMENT_CATEGORIES,
     AUDIENCE_TYPES,

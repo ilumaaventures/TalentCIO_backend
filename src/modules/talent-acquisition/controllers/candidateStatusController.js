@@ -1,4 +1,4 @@
-const Candidate = require('../candidate.model');
+const Candidate = require('../model/candidate.model');
 const { TA_CAPABILITIES } = require('../utils/candidateAccess');
 const { ensureCandidateCapability } = require('../utils/candidateAccess');
 

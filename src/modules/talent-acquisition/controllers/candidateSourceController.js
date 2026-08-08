@@ -1,4 +1,4 @@
-const CandidateSource = require('../candidateSource.model');
+const CandidateSource = require('../model/candidateSource.model');
 
 // GET /api/ta/candidates/sources
 const getCandidateSources = async (req, res) => {

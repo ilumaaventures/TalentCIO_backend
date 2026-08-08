@@ -1,4 +1,4 @@
-const OnboardingEmployee = require('../onboardingEmployee.model');
+const OnboardingEmployee = require('../model/onboardingEmployee.model');
 const Company = require('../../company/company.model');
 const NotificationService = require('../../../services/notificationService');
 const jwt = require('jsonwebtoken');

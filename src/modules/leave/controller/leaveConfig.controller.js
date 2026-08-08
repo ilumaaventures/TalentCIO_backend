@@ -1,5 +1,5 @@
-const LeaveConfig = require('./leaveConfig.model');
-const LeaveBalance = require('./leaveBalance.model'); // Added for balance recalculation
+const LeaveConfig = require('../model/leaveConfig.model');
+const LeaveBalance = require('../model/leaveBalance.model'); // Added for balance recalculation
 
 // @desc    Get all leave policies
 // @route   GET /api/leaves/config
@@ -132,7 +132,7 @@ const seedDefaultPolicies = async (req, res) => {
     }
 };
 
-const { runMonthlyAccrual, runYearlyProcessing } = require('./accrual.service');
+const { runMonthlyAccrual, runYearlyProcessing } = require('../accrual.service');
 
 // @desc    Trigger Monthly Accrual
 // @route   POST /api/leaves/accrual/monthly

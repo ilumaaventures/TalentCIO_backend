@@ -1,7 +1,7 @@
 const express = require('express');
-const { requireModule } = require('../../common/middleware/moduleGuard');
-const { protect } = require('../../common/middleware/authMiddleware');
-const candidateDynamicPhaseController = require('./controllers/dynamicPhaseController/candidateDynamicPhase.controller');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const candidateDynamicPhaseController = require('../controllers/dynamicPhaseController/candidateDynamicPhase.controller');
 
 const router = express.Router();
 

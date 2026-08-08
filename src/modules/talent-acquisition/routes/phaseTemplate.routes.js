@@ -1,8 +1,8 @@
 const express = require('express');
-const { requireModule } = require('../../common/middleware/moduleGuard');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const phaseTemplateController = require('./controllers/phaseTemplateController/phaseTemplate.controller');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../../common/middleware/authorize');
+const phaseTemplateController = require('../controllers/phaseTemplateController/phaseTemplate.controller');
 const configViewPermissions = [
     'ta.manage',
     'ta.config.view',

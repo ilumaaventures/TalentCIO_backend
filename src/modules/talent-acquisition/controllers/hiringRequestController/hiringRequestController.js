@@ -1,10 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
-const { HiringRequest } = require('../../hiringRequest.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
 const ApprovalWorkflow = require('../../../workflow/approvalWorkflow.model');
 const User = require('../../../user/user.model');
-const Candidate = require('../../candidate.model');
+const Candidate = require('../../model/candidate.model');
 const Company = require('../../../company/company.model');
 const SequenceCounter = require('../../../workflow/sequenceCounter.model');
 const NotificationService = require('../../../../services/notificationService');

@@ -1,7 +1,7 @@
 const User = require('./user.model');
 const Role = require('./role.model');
-const { HiringRequest } = require('../talent-acquisition/hiringRequest.model');
-const Candidate = require('../talent-acquisition/candidate.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
+const Candidate = require('../talent-acquisition/model/candidate.model');
 const Company = require('../company/company.model');
 const Permission = require('./permission.model');
 const EmployeeProfile = require('../dossier/employeeProfile.model');

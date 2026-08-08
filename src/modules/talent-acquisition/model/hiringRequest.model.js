@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const softDeletePlugin = require('../../common/utils/softDeletePlugin');
+const softDeletePlugin = require('../../../common/utils/softDeletePlugin');
 
 const phaseStatusOptionSchema = new mongoose.Schema({
     value: { type: String, required: true, trim: true },

@@ -1,6 +1,6 @@
 const Company = require('../company/company.model');
 const User = require('../user/user.model');
-const { HiringRequest } = require('../talent-acquisition/hiringRequest.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
 const HelpdeskQuery = require('../helpdesk/helpdeskQuery.model');
 
 // GET /api/superadmin/analytics

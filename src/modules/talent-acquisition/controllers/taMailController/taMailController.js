@@ -1,10 +1,10 @@
 const path = require('path');
 const fs = require('fs');
-const { HiringRequest } = require('../../hiringRequest.model');
-const Candidate = require('../../candidate.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
+const Candidate = require('../../model/candidate.model');
 const Company = require('../../../company/company.model');
 const EmailTemplate = require('../../../email/model/emailTemplate.model');
-const TAEmailLog = require('../../taEmailLog.model');
+const TAEmailLog = require('../../model/taEmailLog.model');
 const NotificationService = require('../../../../services/notificationService');
 const { sendEmailForCompany, isRateLimitError } = require('../../../../services/companyEmailService');
 const {

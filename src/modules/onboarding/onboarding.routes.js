@@ -73,7 +73,7 @@ const onboardingController = {
     acceptOfferLetter: selfServiceController.acceptOfferLetter,
     downloadTemplateById: selfServiceController.downloadTemplateById
 };
-const OnboardingEmployee = require('./onboardingEmployee.model');
+const OnboardingEmployee = require('./model/onboardingEmployee.model');
 const jwt = require('jsonwebtoken');
 const { getTokenFromRequest } = require('../../common/utils/sessionCookies');
 const { getOnboardingBootstrap } = require('../system/pageBootstrap.controller');

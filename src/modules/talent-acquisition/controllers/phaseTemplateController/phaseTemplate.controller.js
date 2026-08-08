@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
-const PhaseTemplate = require('../../phaseTemplate.model');
-const { HiringRequest } = require('../../hiringRequest.model');
+const PhaseTemplate = require('../../model/phaseTemplate.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
 const {
     ACTIVE_HIRING_REQUEST_STATUSES,
     copyTemplatePhasesForHiringRequest,

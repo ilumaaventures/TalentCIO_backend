@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
-const { buildInitialDynamicPhaseState } = require('./utils/phaseTemplateUtils');
-const softDeletePlugin = require('../../common/utils/softDeletePlugin');
+const { buildInitialDynamicPhaseState } = require('../utils/phaseTemplateUtils');
+const softDeletePlugin = require('../../../common/utils/softDeletePlugin');
 
 const phaseHistorySchema = new mongoose.Schema({
     phaseId: {

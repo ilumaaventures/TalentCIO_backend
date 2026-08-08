@@ -5,7 +5,7 @@ const { invalidateTenantCache } = require('../../common/middleware/tenantMiddlew
 const Permission = require('../user/permission.model');
 const ActivityLog = require('../system/activityLog.model');
 const Attendance = require('../attendance/model/attendance.model');
-const LeaveRequest = require('../leave/leaveRequest.model');
+const LeaveRequest = require('../leave/model/leaveRequest.model');
 const { cloudinary } = require('../../config/cloudinary');
 const { normalizeEnabledModules } = require('../company/enabledModules');
 const {

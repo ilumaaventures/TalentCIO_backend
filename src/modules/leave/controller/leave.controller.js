@@ -1,10 +1,10 @@
-const LeaveRequest = require('./leaveRequest.model');
-const LeaveBalance = require('./leaveBalance.model');
-const LeaveConfig = require('./leaveConfig.model');
-const User = require('../../modules/user/user.model');
-const Company = require('../company/company.model');
-const { calculateLeaveDays } = require('./leave.utils');
-const NotificationService = require('../../services/notificationService');
+const LeaveRequest = require('../model/leaveRequest.model');
+const LeaveBalance = require('../model/leaveBalance.model');
+const LeaveConfig = require('../model/leaveConfig.model');
+const User = require('../../../modules/user/user.model');
+const Company = require('../../company/company.model');
+const { calculateLeaveDays } = require('../leave.utils');
+const NotificationService = require('../../../services/notificationService');
 
 const parseBoolean = (value) => {
     if (typeof value === 'boolean') return value;

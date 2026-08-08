@@ -1,12 +1,12 @@
 const express = require('express');
-const { requireModule } = require('../../common/middleware/moduleGuard');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
 const router = express.Router();
-const hiringRequestController = require('./controllers/hiringRequestController/hiringRequestController');
-const candidateController = require('./controllers/candidateController/candidateController');
-const analyticsController = require('./controllers/analyticsController/analyticsController');
-const taMailController = require('./controllers/taMailController/taMailController');
-const clientController = require('./controllers/clientController/clientController');
-const taAccessSettingsController = require('./controllers/taAccessSettingsController/taAccessSettings.controller');
+const hiringRequestController = require('../controllers/hiringRequestController/hiringRequestController');
+const candidateController = require('../controllers/candidateController/candidateController');
+const analyticsController = require('../controllers/analyticsController/analyticsController');
+const taMailController = require('../controllers/taMailController/taMailController');
+const clientController = require('../controllers/clientController/clientController');
+const taAccessSettingsController = require('../controllers/taAccessSettingsController/taAccessSettings.controller');
 
 const taController = {
     createHiringRequest: hiringRequestController.createHiringRequest,
@@ -38,16 +38,16 @@ const taController = {
 
     getTAClients: clientController.getTAClients
 };
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const { upload, uploadMassMailAttachments } = require('../../config/cloudinary');
-const PublicApplication = require('./publicApplication.model');
-const { attachLastApplicationData } = require('./utils/applicationHistoryUtils');
-const Candidate = require('./candidate.model');
-const { HiringRequest: HiringRequestModel } = require('./hiringRequest.model');
-const { canAccessHiringRequest } = require('./utils/hiringRequestAccess');
-const { hasAssignedTAAnalyticsAccess, hasGlobalTAAnalyticsAccess } = require('./utils/taAnalyticsAccess');
-const { authorizeHiringRequestApproval } = require('../../common/middleware/authorizeHiringRequestApproval');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../../common/middleware/authorize');
+const { upload, uploadMassMailAttachments } = require('../../../config/cloudinary');
+const PublicApplication = require('../model/publicApplication.model');
+const { attachLastApplicationData } = require('../utils/applicationHistoryUtils');
+const Candidate = require('../model/candidate.model');
+const { HiringRequest: HiringRequestModel } = require('../model/hiringRequest.model');
+const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
+const { hasAssignedTAAnalyticsAccess, hasGlobalTAAnalyticsAccess } = require('../utils/taAnalyticsAccess');
+const { authorizeHiringRequestApproval } = require('../../../common/middleware/authorizeHiringRequestApproval');
 
 const APPLICANT_REVIEW_SELECT = [
     'firstName',

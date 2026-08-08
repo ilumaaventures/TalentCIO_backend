@@ -1,8 +1,8 @@
 const User = require('../../../user/user.model');
 const Role = require('../../../user/role.model');
 const Permission = require('../../../user/permission.model');
-const Candidate = require('../../candidate.model');
-const { HiringRequest } = require('../../hiringRequest.model');
+const Candidate = require('../../model/candidate.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
 const {
     addUsersToClientRequisitions,
     mergeAssignedUsersWithClientAssignments,

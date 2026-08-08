@@ -6,8 +6,8 @@ const { protect, admin } = require('../../common/middleware/authMiddleware');
 const { authorize } = require('../../common/middleware/authorize');
 const { dossierGate } = require('../../common/middleware/dossierGate');
 const { upload } = require('../../config/cloudinary');
-const { getLeavePolicies, updateLeavePolicy, deleteLeavePolicy, seedDefaultPolicies, triggerMonthlyAccrual, triggerYearlyAccrual } = require('./leaveConfig.controller');
-const { applyLeave, getMyLeaves, getMyBalances, getManagerApprovals, updateLeaveStatus, cancelLeave } = require('./leave.controller');
+const { getLeavePolicies, updateLeavePolicy, deleteLeavePolicy, seedDefaultPolicies, triggerMonthlyAccrual, triggerYearlyAccrual } = require('./controller/leaveConfig.controller');
+const { applyLeave, getMyLeaves, getMyBalances, getManagerApprovals, updateLeaveStatus, cancelLeave } = require('./controller/leave.controller');
 const { getLeavesBootstrap } = require('../system/pageBootstrap.controller');
 
 router.use(protect);

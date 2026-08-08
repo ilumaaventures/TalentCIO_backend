@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const interviewWorkflowController = require('./controllers/interviewWorkflowController/interviewWorkflow.controller');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const { requireModule } = require('../../common/middleware/moduleGuard');
+const interviewWorkflowController = require('../controllers/interviewWorkflowController/interviewWorkflow.controller');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../../common/middleware/authorize');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
 const workflowViewPermissions = [
     'ta.manage',
     'ta.config.view',

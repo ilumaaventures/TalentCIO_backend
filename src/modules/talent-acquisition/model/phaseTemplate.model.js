@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { validateAndSanitizePhases } = require('./utils/phaseTemplateUtils');
+const { validateAndSanitizePhases } = require('../utils/phaseTemplateUtils');
 
 const statusOptionSchema = new mongoose.Schema({
     value: { type: String, required: true, trim: true },

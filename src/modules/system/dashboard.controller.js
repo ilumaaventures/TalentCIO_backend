@@ -2,7 +2,7 @@ const User = require('../user/user.model');
 const Attendance = require('../attendance/model/attendance.model');
 const Project = require('../project/project.model');
 const Company = require('../company/company.model');
-const LeaveRequest = require('../leave/leaveRequest.model');
+const LeaveRequest = require('../leave/model/leaveRequest.model');
 
 const DEFAULT_ATTENDANCE_LIMIT = 10;
 const IST_TIME_ZONE = 'Asia/Kolkata';

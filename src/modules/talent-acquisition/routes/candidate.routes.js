@@ -1,17 +1,17 @@
 const express = require('express');
-const { requireModule } = require('../../common/middleware/moduleGuard');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
 const router = express.Router();
-const candidateResumeController = require('./controllers/candidateResumeController');
-const candidateSourceController = require('./controllers/candidateSourceController');
-const candidateSearchCheckController = require('./controllers/candidateSearchController/candidateCheckController');
-const globalSearchController = require('./controllers/candidateSearchController/globalSearchController');
-const candidateFilterController = require('./controllers/candidateSearchController/candidateFilterController');
-const publicAppSearchController = require('./controllers/candidateSearchController/publicAppSearchController');
-const candidateCrudController = require('./controllers/candidateCrudController');
-const candidateStatusController = require('./controllers/candidateStatusController');
-const candidateDecisionController = require('./controllers/candidateDecisionController');
-const candidateInterviewController = require('./controllers/candidateInterviewController');
-const candidateSkillController = require('./controllers/candidateSkillController');
+const candidateResumeController = require('../controllers/candidateResumeController');
+const candidateSourceController = require('../controllers/candidateSourceController');
+const candidateSearchCheckController = require('../controllers/candidateSearchController/candidateCheckController');
+const globalSearchController = require('../controllers/candidateSearchController/globalSearchController');
+const candidateFilterController = require('../controllers/candidateSearchController/candidateFilterController');
+const publicAppSearchController = require('../controllers/candidateSearchController/publicAppSearchController');
+const candidateCrudController = require('../controllers/candidateCrudController');
+const candidateStatusController = require('../controllers/candidateStatusController');
+const candidateDecisionController = require('../controllers/candidateDecisionController');
+const candidateInterviewController = require('../controllers/candidateInterviewController');
+const candidateSkillController = require('../controllers/candidateSkillController');
 
 const candidateController = {
     uploadResume: candidateResumeController.uploadResume,
@@ -63,9 +63,9 @@ const candidateController = {
     addSkillRating: candidateSkillController.addSkillRating,
     deleteSkillRating: candidateSkillController.deleteSkillRating
 };
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const { upload } = require('../../config/cloudinary');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../../common/middleware/authorize');
+const { upload } = require('../../../config/cloudinary');
 const multer = require('multer');
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 const analyticsCandidatePermissions = ['ta.analytics.assigned', 'ta.analytics.global'];

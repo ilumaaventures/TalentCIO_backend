@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { HRRAuditLog } = require('../hiringRequest.model');
+const { HRRAuditLog } = require('../model/hiringRequest.model');
 
 const createCorrelationId = () => new mongoose.Types.ObjectId().toString();
 

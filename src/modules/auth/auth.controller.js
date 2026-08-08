@@ -1,6 +1,6 @@
 const User = require('../user/user.model');
-const { HiringRequest } = require('../talent-acquisition/hiringRequest.model');
-const Candidate = require('../talent-acquisition/candidate.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
+const Candidate = require('../talent-acquisition/model/candidate.model');
 const jwt = require('jsonwebtoken');
 const emailService = require('../../services/emailService');
 const { sendEmailForCompany } = require('../../services/companyEmailService');
@@ -549,7 +549,7 @@ const logoutUser = async (req, res) => {
 const getBirthdayStatus = async (req, res) => {
     try {
         const EmployeeProfile = require('../dossier/employeeProfile.model');
-        const OnboardingEmployee = require('../onboarding/onboardingEmployee.model');
+        const OnboardingEmployee = require('../onboarding/model/onboardingEmployee.model');
 
         const userId = req.user._id;
         const companyId = req.companyId;

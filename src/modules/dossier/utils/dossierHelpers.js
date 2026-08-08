@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const OnboardingEmployee = require('../../onboarding/onboardingEmployee.model');
+const OnboardingEmployee = require('../../onboarding/model/onboardingEmployee.model');
 const Company = require('../../company/company.model');
 const {
     DOCUMENT_PENDING_REVIEW_STATUS,

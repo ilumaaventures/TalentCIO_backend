@@ -1,8 +1,8 @@
 const { format } = require('date-fns');
 const Attendance = require('../../modules/attendance/model/attendance.model');
 const Holiday = require('../holiday/holiday.model');
-const LeaveRequest = require('../leave/leaveRequest.model');
-const LeaveConfig = require('../leave/leaveConfig.model');
+const LeaveRequest = require('../leave/model/leaveRequest.model');
+const LeaveConfig = require('../leave/model/leaveConfig.model');
 const User = require('../../modules/user/user.model');
 const {
     listActiveEmployeesForPayroll

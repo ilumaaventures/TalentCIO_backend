@@ -1,5 +1,5 @@
 const User = require('../user/user.model');
-const { HiringRequest } = require('../talent-acquisition/hiringRequest.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
 
 const normalizeClientName = (value) => String(value || '').trim();
 

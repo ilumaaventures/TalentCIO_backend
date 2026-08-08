@@ -1,4 +1,4 @@
-const Candidate = require('../../talent-acquisition/candidate.model');
+const Candidate = require('../../talent-acquisition/model/candidate.model');
 const NotificationService = require('../../../services/notificationService');
 
 const syncTADecision = async (employee, decision) => {

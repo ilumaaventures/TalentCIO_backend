@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const InterviewWorkflow = require('../../interviewWorkflow.model');
+const InterviewWorkflow = require('../../model/interviewWorkflow.model');
 
 const sanitizeRounds = (rounds = []) => (
     Array.isArray(rounds) ? rounds.map((r) => ({

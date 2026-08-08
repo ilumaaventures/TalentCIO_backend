@@ -1,4 +1,4 @@
-const { HiringRequest } = require('../../hiringRequest.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
 const { getClientAssignedUserIds } = require('../../../client/clientAssignmentSync');
 
 exports.getTAClients = async (req, res) => {

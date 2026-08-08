@@ -1,6 +1,6 @@
 const User = require('../../modules/user/user.model');
-const LeaveConfig = require('../leave/leaveConfig.model');
-const LeaveBalance = require('../leave/leaveBalance.model');
+const LeaveConfig = require('./model/leaveConfig.model');
+const LeaveBalance = require('./model/leaveBalance.model');
 
 /**
  * Run Monthly Accrual for a specific month/year.

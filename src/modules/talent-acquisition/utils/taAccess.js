@@ -1,5 +1,5 @@
-const Candidate = require('../candidate.model');
-const { HiringRequest } = require('../hiringRequest.model');
+const Candidate = require('../model/candidate.model');
+const { HiringRequest } = require('../model/hiringRequest.model');
 const { canAccessHiringRequest, getAssignedClientNames, getUserPermissionKeys, hasAssignedClientAccess, isHiringRequestAdmin } = require('./hiringRequestAccess');
 const { buildTABacHiringRequestConstraint, getTABacActionForCapability, matchesTABacHiringRequest } = require('./taABAC');
 

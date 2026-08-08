@@ -1,4 +1,4 @@
-const OnboardingEmployee = require('../onboardingEmployee.model');
+const OnboardingEmployee = require('../model/onboardingEmployee.model');
 const { getCompanyEmailBranding } = require('./onboardingEmailController');
 const { resolveNotificationEmailDelivery, syncTADecision } = require('../utils/onboardingHelpers');
 const { sendEmailForCompany } = require('../../../services/companyEmailService');

@@ -1,6 +1,6 @@
-const Candidate = require('../../candidate.model');
-const { HiringRequest } = require('../../hiringRequest.model');
-const PublicApplication = require('../../publicApplication.model');
+const Candidate = require('../../model/candidate.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
+const PublicApplication = require('../../model/publicApplication.model');
 const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,

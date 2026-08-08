@@ -1,5 +1,5 @@
-const { HiringRequest } = require('../../hiringRequest.model');
-const Candidate = require('../../candidate.model');
+const { HiringRequest } = require('../../model/hiringRequest.model');
+const Candidate = require('../../model/candidate.model');
 const Company = require('../../../company/company.model');
 const { buildAccessibleHiringRequestQuery } = require('../../utils/hiringRequestAccess');
 const { normalizeClientName } = require('../../../client/clientAssignmentSync');
