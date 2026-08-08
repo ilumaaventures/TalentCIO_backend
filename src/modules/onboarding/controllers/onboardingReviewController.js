@@ -2,7 +2,7 @@ const OnboardingEmployee = require('../onboardingEmployee.model');
 const { getCompanyEmailBranding } = require('./onboardingEmailController');
 const { resolveNotificationEmailDelivery, syncTADecision } = require('../utils/onboardingHelpers');
 const { sendEmailForCompany } = require('../../../services/companyEmailService');
-const HREmailLog = require('../../email/hrEmailLog.model');
+const HREmailLog = require('../../email/model/hrEmailLog.model');
 const archiver = require('archiver');
 const axios = require('axios');
 

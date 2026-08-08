@@ -1,8 +1,8 @@
 const OnboardingEmployee = require('../onboardingEmployee.model');
 const Candidate = require('../../talent-acquisition/candidate.model');
 const Company = require('../../company/company.model');
-const EmailTemplate = require('../../email/emailTemplate.model');
-const HREmailLog = require('../../email/hrEmailLog.model');
+const EmailTemplate = require('../../email/model/emailTemplate.model');
+const HREmailLog = require('../../email/model/hrEmailLog.model');
 const { sendEmailForCompany } = require('../../../services/companyEmailService');
 const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
 const {

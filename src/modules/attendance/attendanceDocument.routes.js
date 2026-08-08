@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const attachmentController = require('./attendanceDocument.controller');
+const attachmentController = require('./controllers/attendanceDocument.controller');
 const { protect } = require('../../common/middleware/authMiddleware');
 const { uploadAttendanceDocuments } = require('../../config/cloudinary');
 

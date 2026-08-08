@@ -4,7 +4,7 @@ const Company = require('../../company/company.model');
 const User = require('../../user/user.model');
 const Role = require('../../user/role.model');
 const EmployeeProfile = require('../../dossier/employeeProfile.model');
-const HREmailLog = require('../../email/hrEmailLog.model');
+const HREmailLog = require('../../email/model/hrEmailLog.model');
 const { sendEmailForCompany } = require('../../../services/companyEmailService');
 const { getCompanyEmailBranding } = require('./onboardingEmailController');
 const {

@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
-const Company = require('../company/company.model');
-const AuditLog = require('../system/auditLog.model');
+const Company = require('../../company/company.model');
+const AuditLog = require('../../system/auditLog.model');
 const {
     encrypt,
     decrypt,
     encryptIfNeeded,
     isEncryptionConfigured
-} = require('../../common/utils/encryption');
+} = require('../../../common/utils/encryption');
 const {
     clearCompanyEmailConfigCache,
     LEGACY_EMAIL_ACCOUNT_ID,
@@ -14,7 +14,7 @@ const {
     normalizeStoredEmailAccounts,
     resolveStoredAccountConfig,
     sendEmailForCompany
-} = require('../../services/companyEmailService');
+} = require('../../../services/companyEmailService');
 
 const BREVO_MASK = '••••••••';
 const SMTP_MASK = '••••••••';

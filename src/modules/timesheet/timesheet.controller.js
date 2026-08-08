@@ -1,7 +1,7 @@
 const Timesheet = require('./timesheet.model');
 const Project = require('../project/project.model');
 const User = require('../../modules/user/user.model');
-const Attendance = require('../../modules/attendance/attendance.model');
+const Attendance = require('../../modules/attendance/model/attendance.model');
 const { startOfDay } = require('date-fns');
 const WorkLog = require('./workLog.model');
 const Task = require('../task/task.model');

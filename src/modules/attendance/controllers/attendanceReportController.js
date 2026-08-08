@@ -1,4 +1,4 @@
-const Attendance = require('../attendance.model');
+const Attendance = require('../model/attendance.model');
 const User = require('../../user/user.model');
 const Company = require('../../company/company.model');
 const Holiday = require('../../holiday/holiday.model');

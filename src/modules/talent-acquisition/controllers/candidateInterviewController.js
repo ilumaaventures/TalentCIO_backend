@@ -1,6 +1,6 @@
 const Candidate = require('../candidate.model');
 const { HiringRequest } = require('../hiringRequest.model');
-const EmailTemplate = require('../../email/emailTemplate.model');
+const EmailTemplate = require('../../email/model/emailTemplate.model');
 const TAEmailLog = require('../taEmailLog.model');
 const NotificationService = require('../../../services/notificationService');
 const { sendEmailForCompany } = require('../../../services/companyEmailService');

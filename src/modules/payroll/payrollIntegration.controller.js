@@ -1,5 +1,5 @@
 const { format } = require('date-fns');
-const Attendance = require('../../modules/attendance/attendance.model');
+const Attendance = require('../../modules/attendance/model/attendance.model');
 const Holiday = require('../holiday/holiday.model');
 const LeaveRequest = require('../leave/leaveRequest.model');
 const LeaveConfig = require('../leave/leaveConfig.model');

@@ -1,24 +1,24 @@
 const axios = require('axios');
 const mongoose = require('mongoose');
-const User = require('../user/user.model');
-const EmployeeProfile = require('../dossier/employeeProfile.model');
-const EmailTemplate = require('../email/emailTemplate.model');
-const HREmailLog = require('../email/hrEmailLog.model');
-const Company = require('../company/company.model');
-const { cloudinary } = require('../../config/cloudinary');
-const { extractPublicIdFromUrl } = require('../../utils/cloudinaryHelper');
-const { syncDocumentSubmissionStatus } = require('../dossier/dossierUtils');
+const User = require('../../user/user.model');
+const EmployeeProfile = require('../../dossier/employeeProfile.model');
+const EmailTemplate = require('../model/emailTemplate.model');
+const HREmailLog = require('../model/hrEmailLog.model');
+const Company = require('../../company/company.model');
+const { cloudinary } = require('../../../config/cloudinary');
+const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
+const { syncDocumentSubmissionStatus } = require('../../dossier/dossierUtils');
 const {
     PLATFORM_EMAIL_ACCOUNT_ID,
     getCompanyEmailSettings,
     sendEmailForCompany
-} = require('../../services/companyEmailService');
+} = require('../../../services/companyEmailService');
 const {
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     renderTemplateBody,
     resolveTemplate,
     validateTemplateSyntax
-} = require('../email/templateResolver');
+} = require('../templateResolver');
 
 const ALLOWED_DOSSIER_CATEGORIES = new Set([
     'Resume',

@@ -1,5 +1,5 @@
-const Attendance = require('../attendance.model');
-const AttendanceRegularization = require('../attendanceRegularization.model');
+const Attendance = require('../model/attendance.model');
+const AttendanceRegularization = require('../model/attendanceRegularization.model');
 const User = require('../../user/user.model');
 const Company = require('../../company/company.model');
 const NotificationService = require('../../../services/notificationService');

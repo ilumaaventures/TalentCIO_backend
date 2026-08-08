@@ -1,5 +1,5 @@
 const User = require('../user/user.model');
-const Attendance = require('../attendance/attendance.model');
+const Attendance = require('../attendance/model/attendance.model');
 const Project = require('../project/project.model');
 const Company = require('../company/company.model');
 const LeaveRequest = require('../leave/leaveRequest.model');

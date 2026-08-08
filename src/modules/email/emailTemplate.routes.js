@@ -2,7 +2,7 @@ const express = require('express');
 const { requireModule } = require('../../common/middleware/moduleGuard');
 const { protect } = require('../../common/middleware/authMiddleware');
 const { authorizeAny } = require('../../common/middleware/authorize');
-const controller = require('./emailTemplate.controller');
+const controller = require('./controller/emailTemplate.controller');
 
 const router = express.Router();
 const emailTemplatePermissions = ['ta.email_template.manage'];

@@ -1,6 +1,6 @@
-require('../../config/cloudinary');
+require('../../../config/cloudinary');
 const cloudinary = require('cloudinary').v2;
-const Company = require('../company/company.model');
+const Company = require('../../company/company.model');
 
 const DEFAULT_LOGO_WIDTH = 200;
 const DEFAULT_LOGO_HEIGHT = 44;

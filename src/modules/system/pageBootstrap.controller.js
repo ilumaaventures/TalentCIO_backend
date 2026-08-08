@@ -1,6 +1,6 @@
 const { startOfMonth, endOfMonth, format } = require('date-fns');
 const { Types: { ObjectId: MongooseObjectId } } = require('mongoose'); // MED-6: moved from inside aggregation
-const Attendance = require('../attendance/attendance.model');
+const Attendance = require('../attendance/model/attendance.model');
 const Candidate = require('../talent-acquisition/candidate.model');
 const BusinessUnit = require('../business-unit/businessUnit.model');
 const Client = require('../client/client.model');

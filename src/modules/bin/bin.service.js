@@ -16,7 +16,7 @@ const ApprovalWorkflow = require('../workflow/approvalWorkflow.model');
 const InterviewWorkflow = require('../talent-acquisition/interviewWorkflow.model');
 const LeaveConfig = require('../leave/leaveConfig.model');
 const QueryType = require('../helpdesk/queryType.model');
-const EmailTemplate = require('../email/emailTemplate.model');
+const EmailTemplate = require('../email/model/emailTemplate.model');
 const OnboardingTemplateBin = require('../onboarding/onboardingTemplateBin.model');
 const OnboardingPolicyBin = require('../onboarding/onboardingPolicyBin.model');
 

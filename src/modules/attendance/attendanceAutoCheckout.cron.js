@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const mongoose = require('mongoose');
-const Attendance = require('./attendance.model');
+const Attendance = require('./model/attendance.model');
 const Company = require('../company/company.model');
 const User = require('../user/user.model');
 const {

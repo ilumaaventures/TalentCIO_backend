@@ -1,4 +1,4 @@
-const AttendanceDocument = require('../../attendance/attendanceDocument.model');
+const AttendanceDocument = require('../../attendance/model/attendanceDocument.model');
 const User = require('../../../modules/user/user.model');
 
 const isAdminLikeUser = (user = {}) => {

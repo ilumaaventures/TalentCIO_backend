@@ -1,4 +1,4 @@
-const Attendance = require('../attendance.model');
+const Attendance = require('../model/attendance.model');
 const Company = require('../../company/company.model');
 const { getISTTime, getStartOfDayIST, buildAttendancePolicy, isWithinShiftWindow } = require('../attendancePolicy');
 const {

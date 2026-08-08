@@ -8,7 +8,7 @@ const {
     getTemplates,
     sendHREmail,
     getHistory
-} = require('./hrEmail.controller');
+} = require('./controller/hrEmail.controller');
 
 const router = express.Router();
 const upload = multer({

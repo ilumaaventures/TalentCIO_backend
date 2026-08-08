@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
-const EmailTemplate = require('../email/emailTemplate.model');
+const EmailTemplate = require('../model/emailTemplate.model');
 const {
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     TEMPLATE_PLACEHOLDERS,
     validateTemplateSyntax
-} = require('../email/templateResolver');
+} = require('../templateResolver');
 
 const getTemplateScope = (req) => req.templateScope === 'general' ? 'general' : 'ta';
 const normalizeTemplateType = (value) => {

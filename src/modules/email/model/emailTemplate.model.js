@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const softDeletePlugin = require('../../common/utils/softDeletePlugin');
+const softDeletePlugin = require('../../../common/utils/softDeletePlugin');
 
 const emailTemplateSchema = new mongoose.Schema({
     companyId: {

@@ -1,9 +1,9 @@
-const AttendanceDocument = require('./attendanceDocument.model');
-const User = require('../user/user.model');
-const Role = require('../user/role.model');
-const NotificationService = require('../../services/notificationService');
-const { cloudinary } = require('../../config/cloudinary');
-const { extractPublicIdFromUrl } = require('../../utils/cloudinaryHelper');
+const AttendanceDocument = require('../model/attendanceDocument.model');
+const User = require('../../user/user.model');
+const Role = require('../../user/role.model');
+const NotificationService = require('../../../services/notificationService');
+const { cloudinary } = require('../../../config/cloudinary');
+const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
 
 const getRoleNames = (user = {}) => (
     Array.isArray(user.roles)
