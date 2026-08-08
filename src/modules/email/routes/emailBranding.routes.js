@@ -1,8 +1,8 @@
 const express = require('express');
 const multer = require('multer');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorize } = require('../../common/middleware/authorize');
-const controller = require('./controller/emailBranding.controller');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorize } = require('../../../common/middleware/authorize');
+const controller = require('../controller/emailBranding.controller');
 
 const router = express.Router();
 

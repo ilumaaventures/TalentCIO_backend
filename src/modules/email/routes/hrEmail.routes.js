@@ -1,14 +1,14 @@
 const express = require('express');
 const multer = require('multer');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorize } = require('../../common/middleware/authorize');
-const { requireModule } = require('../../common/middleware/moduleGuard');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorize } = require('../../../common/middleware/authorize');
+const { requireModule } = require('../../../common/middleware/moduleGuard');
 const {
     getEmployees,
     getTemplates,
     sendHREmail,
     getHistory
-} = require('./controller/hrEmail.controller');
+} = require('../controller/hrEmail.controller');
 
 const router = express.Router();
 const upload = multer({

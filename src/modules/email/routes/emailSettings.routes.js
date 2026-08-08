@@ -1,9 +1,9 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
-const emailSettingsController = require('./controller/emailSettings.controller');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorize, authorizeAny } = require('../../common/middleware/authorize');
+const emailSettingsController = require('../controller/emailSettings.controller');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorize, authorizeAny } = require('../../../common/middleware/authorize');
 
 const router = express.Router();
 

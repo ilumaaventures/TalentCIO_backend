@@ -1,7 +1,7 @@
 const express = require('express');
-const { protect } = require('../../common/middleware/authMiddleware');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const controller = require('./controller/emailTemplate.controller');
+const { protect } = require('../../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../../common/middleware/authorize');
+const controller = require('../controller/emailTemplate.controller');
 
 const router = express.Router();
 
