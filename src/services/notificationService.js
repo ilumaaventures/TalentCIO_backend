@@ -1,7 +1,7 @@
-const Company = require('../models/Company');
-const Notification = require('../models/Notification');
-const User = require('../models/User');
-const { normalizeNotificationSettings, NOTIFICATION_EVENT_MAP } = require('../constants/notificationSettings');
+const Company = require('../modules/company/company.model');
+const Notification = require('../modules/notification/notification.model');
+const User = require('../modules/user/user.model');
+const { normalizeNotificationSettings, NOTIFICATION_EVENT_MAP } = require('../common/constants/notificationSettings');
 const { sendEmailForCompany } = require('./companyEmailService');
 
 const NOTIFICATION_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;

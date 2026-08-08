@@ -1,4 +1,4 @@
-const Role = require('../models/Role');
+const Role = require('../modules/user/role.model');
 
 const ADMIN_ROLE_FILTER = {
     $or: [

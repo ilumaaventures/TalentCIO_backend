@@ -1,0 +1,307 @@
+const { HiringRequest } = require('../../hiringRequest.model');
+const Candidate = require('../../candidate.model');
+const mongoose = require('mongoose');
+
+exports.getPreviousCandidates = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
+        if (!currentReq) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const candidateSelect = [
+            'candidateName',
+            'email',
+            'mobile',
+            'source',
+            'totalExperience',
+            'currentCTC',
+            'expectedCTC',
+            'noticePeriod',
+            'status',
+            'decision',
+            'createdAt',
+            'hiringRequestId',
+            'remark',
+            'profileShared'
+        ].join(' ');
+
+        const otherReqs = await HiringRequest.find({
+            companyId: req.companyId,
+            _id: { $ne: id },
+            client: currentReq.client
+        }).select('_id requestId roleDetails.jobTitle status');
+
+        const otherReqIds = otherReqs.map(r => r._id);
+
+        let candidates = [];
+        if (otherReqIds.length > 0) {
+            candidates = await Candidate.find({
+                companyId: req.companyId,
+                hiringRequestId: { $in: otherReqIds }
+            })
+                .select(candidateSelect)
+                .populate('hiringRequestId', 'requestId roleDetails.jobTitle')
+                .sort({ createdAt: -1 })
+                .lean();
+        }
+
+        res.json({
+            currentRequisition: {
+                _id: currentReq._id,
+                requestId: currentReq.requestId,
+                jobTitle: currentReq.roleDetails?.jobTitle,
+                client: currentReq.client
+            },
+            matchingRequisitionsCount: otherReqs.length,
+            candidates
+        });
+
+    } catch (error) {
+        console.error('Error fetching previous candidates:', error);
+        res.status(500).json({ message: 'Failed to fetch previous candidates', error: error.message });
+    }
+};
+
+exports.transferCandidate = async (req, res) => {
+    try {
+        const { candidateId } = req.params;
+        const { targetRequisitionId } = req.body;
+
+        if (!targetRequisitionId) {
+            return res.status(400).json({ message: 'Target hiring request ID is required' });
+        }
+
+        const candidate = await Candidate.findOne({ _id: candidateId, companyId: req.companyId });
+        if (!candidate) {
+            return res.status(404).json({ message: 'Candidate not found' });
+        }
+
+        const targetReq = await HiringRequest.findOne({ _id: targetRequisitionId, companyId: req.companyId, status: { $in: ['Approved'] } });
+        if (!targetReq) {
+            return res.status(404).json({ message: 'Target hiring request not found or not active' });
+        }
+
+        if (candidate.hiringRequestId.toString() === targetRequisitionId.toString()) {
+            return res.status(400).json({ message: 'Candidate is already in this requisition' });
+        }
+
+        const duplicateCandidateConditions = [];
+        if (candidate.email) {
+            duplicateCandidateConditions.push({ email: String(candidate.email).trim().toLowerCase() });
+        }
+        if (candidate.mobile) {
+            duplicateCandidateConditions.push({ mobile: String(candidate.mobile).trim() });
+        }
+
+        const existingCandidateInTarget = duplicateCandidateConditions.length
+            ? await Candidate.findOne({
+                companyId: req.companyId,
+                hiringRequestId: targetRequisitionId,
+                $or: duplicateCandidateConditions
+            })
+            : null;
+
+        if (existingCandidateInTarget) {
+            return res.status(409).json({ message: 'This candidate already exists in the target requisition' });
+        }
+
+        const newCandidate = new Candidate({
+            hiringRequestId: targetRequisitionId,
+            companyId: req.companyId,
+            applicantId: candidate.applicantId || undefined,
+            publicApplicationId: candidate.publicApplicationId || undefined,
+            profileSnapshot: candidate.profileSnapshot || undefined,
+            candidateName: candidate.candidateName,
+            email: String(candidate.email || '').trim().toLowerCase(),
+            mobile: String(candidate.mobile || '').trim(),
+            source: candidate.source || 'Transfer',
+            totalExperience: candidate.totalExperience || 0,
+            currentCTC: candidate.currentCTC || '',
+            expectedCTC: candidate.expectedCTC || '',
+            noticePeriod: candidate.noticePeriod || '',
+            resumeUrl: candidate.resumeUrl || '',
+            resumePublicId: candidate.resumePublicId || '',
+            uploadedBy: req.user._id,
+            profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
+            remark: `Transferred from ${candidate.hiringRequestId}. Original remark: ${candidate.remark || 'None'}`,
+            status: 'Total Sourced',
+            profileShared: false,
+            decision: 'None',
+            phase2Decision: 'None',
+            phase3Decision: 'None',
+            isTransferred: true,
+            transferredFrom: candidate.hiringRequestId
+        });
+
+        await newCandidate.save();
+
+        res.status(201).json({
+            message: `Candidate ${candidate.candidateName} transferred successfully to ${targetReq.requestId}`,
+            newCandidate
+        });
+
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ message: 'This candidate already exists in the target requisition' });
+        }
+        console.error('Error transferring candidate:', error);
+        res.status(500).json({ message: 'Failed to transfer candidate', error: error.message });
+    }
+};
+
+exports.transferCandidateToRequisition = async (req, res) => {
+    try {
+        const { targetRequisitionId, candidateId } = req.params;
+
+        req.body = { ...req.body, targetRequisitionId };
+        return exports.transferCandidate(req, res);
+    } catch (error) {
+        console.error('Error transferring candidate via path param:', error);
+        res.status(500).json({ message: 'Failed to transfer candidate', error: error.message });
+    }
+};
+
+exports.transferCandidatesBulk = async (req, res) => {
+    try {
+        const { candidateIds, targetRequisitionId } = req.body;
+
+        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+            return res.status(400).json({ message: 'An array of candidateIds is required' });
+        }
+
+        if (!targetRequisitionId) {
+            return res.status(400).json({ message: 'Target hiring request ID is required' });
+        }
+
+        const targetReq = await HiringRequest.findOne({
+            _id: targetRequisitionId,
+            companyId: req.companyId,
+            status: { $in: ['Approved'] }
+        });
+
+        if (!targetReq) {
+            return res.status(404).json({ message: 'Target hiring request not found or not active' });
+        }
+
+        const sourceCandidates = await Candidate.find({
+            _id: { $in: candidateIds },
+            companyId: req.companyId
+        });
+
+        if (sourceCandidates.length === 0) {
+            return res.status(404).json({ message: 'No valid source candidates found' });
+        }
+
+        const targetCandidates = await Candidate.find({
+            hiringRequestId: targetRequisitionId,
+            companyId: req.companyId
+        }).select('email mobile');
+
+        const existingEmails = new Set(targetCandidates.map(c => c.email ? String(c.email).trim().toLowerCase() : '').filter(Boolean));
+        const existingMobiles = new Set(targetCandidates.map(c => c.mobile ? String(c.mobile).trim() : '').filter(Boolean));
+
+        const results = {
+            transferred: [],
+            skipped: [],
+            failed: []
+        };
+
+        for (const candidate of sourceCandidates) {
+            try {
+                if (candidate.hiringRequestId.toString() === targetRequisitionId.toString()) {
+                    results.skipped.push({
+                        candidateId: candidate._id,
+                        name: candidate.candidateName,
+                        reason: 'Candidate already belongs to target requisition'
+                    });
+                    continue;
+                }
+
+                const candidateEmail = candidate.email ? String(candidate.email).trim().toLowerCase() : '';
+                const candidateMobile = candidate.mobile ? String(candidate.mobile).trim() : '';
+
+                const isEmailDuplicate = candidateEmail && existingEmails.has(candidateEmail);
+                const isMobileDuplicate = candidateMobile && existingMobiles.has(candidateMobile);
+
+                if (isEmailDuplicate || isMobileDuplicate) {
+                    results.skipped.push({
+                        candidateId: candidate._id,
+                        name: candidate.candidateName,
+                        reason: 'Candidate with matching email or phone already exists in target requisition'
+                    });
+                    continue;
+                }
+
+                const newCandidate = new Candidate({
+                    hiringRequestId: targetRequisitionId,
+                    companyId: req.companyId,
+                    applicantId: candidate.applicantId || undefined,
+                    publicApplicationId: candidate.publicApplicationId || undefined,
+                    profileSnapshot: candidate.profileSnapshot || undefined,
+                    candidateName: candidate.candidateName,
+                    email: candidateEmail,
+                    mobile: candidateMobile,
+                    source: candidate.source || 'Transfer',
+                    totalExperience: candidate.totalExperience || 0,
+                    currentCTC: candidate.currentCTC || '',
+                    expectedCTC: candidate.expectedCTC || '',
+                    noticePeriod: candidate.noticePeriod || '',
+                    resumeUrl: candidate.resumeUrl || '',
+                    resumePublicId: candidate.resumePublicId || '',
+                    uploadedBy: req.user._id,
+                    profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
+                    remark: `Bulk transferred from ${candidate.hiringRequestId}. Original remark: ${candidate.remark || 'None'}`,
+                    status: 'Total Sourced',
+                    profileShared: false,
+                    decision: 'None',
+                    phase2Decision: 'None',
+                    phase3Decision: 'None',
+                    isTransferred: true,
+                    transferredFrom: candidate.hiringRequestId
+                });
+
+                await newCandidate.save();
+
+                if (candidateEmail) existingEmails.add(candidateEmail);
+                if (candidateMobile) existingMobiles.add(candidateMobile);
+
+                results.transferred.push({
+                    candidateId: candidate._id,
+                    newCandidateId: newCandidate._id,
+                    name: candidate.candidateName
+                });
+
+            } catch (err) {
+                if (err.code === 11000) {
+                    results.skipped.push({
+                        candidateId: candidate._id,
+                        name: candidate.candidateName,
+                        reason: 'Duplicate entry error'
+                    });
+                } else {
+                    results.failed.push({
+                        candidateId: candidate._id,
+                        name: candidate.candidateName,
+                        error: err.message
+                    });
+                }
+            }
+        }
+
+        res.status(200).json({
+            message: `Bulk transfer completed: ${results.transferred.length} transferred, ${results.skipped.length} skipped, ${results.failed.length} failed.`,
+            targetRequisition: {
+                _id: targetReq._id,
+                requestId: targetReq.requestId,
+                jobTitle: targetReq.roleDetails?.jobTitle
+            },
+            results
+        });
+
+    } catch (error) {
+        console.error('Error in bulk transfer candidates:', error);
+        res.status(500).json({ message: 'Failed to complete bulk transfer', error: error.message });
+    }
+};

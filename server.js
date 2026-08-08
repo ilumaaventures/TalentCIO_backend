@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { initializeLogger, loggerMiddleware } = require('./src/utils/logger');
+const { initializeLogger, loggerMiddleware } = require('./src/common/utils/logger');
 initializeLogger();
 
 const express = require('express');
@@ -202,88 +202,43 @@ io.on('connection', (socket) => {
 app.use(express.json());
 app.use(loggerMiddleware);
 
-require('./src/models/Permission');
-require('./src/models/Role');
-require('./src/models/User');
-require('./src/models/EmployeeProfile');
-require('./src/models/AuditLog');
-require('./src/models/Attendance');
-require('./src/models/AttendanceDocument');
-require('./src/models/Project');
-require('./src/models/Timesheet');
-require('./src/models/LeaveConfig');
-require('./src/models/LeaveBalance');
-require('./src/models/LeaveRequest');
-require('./src/models/Candidate');
-require('./src/models/EmailTemplate');
-require('./src/models/Applicant');
-require('./src/models/PublicApplication');
-require('./src/models/HandoffToken');
-require('./src/models/InterviewWorkflow');
-require('./src/models/Notification');
-require('./src/models/Company');
-require('./src/models/Plan');
-require('./src/models/ActivityLog');
-require('./src/models/SuperAdminUser');
-require('./src/models/OnboardingEmployee');
-require('./src/models/PhaseTemplate');
-require('./src/models/Announcement');
-require('./src/models/OffboardingRecord');
-require('./src/models/HREmailLog');
+require('./src/modules/user/permission.model');
+require('./src/modules/user/role.model');
+require('./src/modules/user/user.model');
+require('./src/modules/dossier/employeeProfile.model');
+require('./src/modules/system/auditLog.model');
+require('./src/modules/attendance/attendance.model');
+require('./src/modules/attendance/attendanceDocument.model');
+require('./src/modules/project/project.model');
+require('./src/modules/timesheet/timesheet.model');
+require('./src/modules/leave/leaveConfig.model');
+require('./src/modules/leave/leaveBalance.model');
+require('./src/modules/leave/leaveRequest.model');
+require('./src/modules/talent-acquisition/candidate.model');
+require('./src/modules/email/emailTemplate.model');
+require('./src/modules/auth/applicant.model');
+require('./src/modules/talent-acquisition/publicApplication.model');
+require('./src/modules/auth/handoffToken.model');
+require('./src/modules/talent-acquisition/interviewWorkflow.model');
+require('./src/modules/notification/notification.model');
+require('./src/modules/company/company.model');
+require('./src/modules/plan/plan.model');
+require('./src/modules/system/activityLog.model');
+require('./src/modules/auth/superAdminUser.model');
+require('./src/modules/onboarding/onboardingEmployee.model');
+require('./src/modules/talent-acquisition/phaseTemplate.model');
+require('./src/modules/announcement/announcement.model');
+require('./src/modules/offboarding/offboardingRecord.model');
+require('./src/modules/email/hrEmailLog.model');
 
 const syncPermissions = require('./src/services/permissionSync');
-const startEscalationCron = require('./src/services/escalationCron');
-const startAutoCheckoutCron = require('./src/services/attendanceAutoCheckoutCron');
+const startAutoCheckoutCron = require('./src/modules/attendance/attendanceAutoCheckout.cron');
 const cleanupStaleIndexes = require('./src/services/indexCleanup');
-const { startBinAutoPurgeCron } = require('./src/services/binAutoPurgeCron');
-const startAnnouncementScheduler = require('./src/services/announcementScheduler');
+const { startBinAutoPurgeCron } = require('./src/modules/bin/binAutoPurge.cron');
+const startAnnouncementScheduler = require('./src/modules/announcement/announcement.scheduler');
+const startEscalationCron = require('./src/modules/helpdesk/escalation.cron');
 
-const authRoutes = require('./src/routes/authRoutes');
-const attendanceRoutes = require('./src/routes/attendanceRoutes');
-const rgAttendanceRoutes = require('./src/features/rg-attendance/routes/rgAttendanceRoutes');
-const timesheetRoutes = require('./src/routes/timesheetRoutes');
-const adminRoutes = require('./src/routes/adminRoutes');
-const projectRoutes = require('./src/routes/projectRoutes');
-const dashboardRoutes = require('./src/routes/dashboardRoutes');
-const holidayRoutes = require('./src/routes/holidayRoutes');
-const leaveRoutes = require('./src/routes/leaveRoutes');
-const dossierRoutes = require('./src/routes/dossierRoutes');
-const talentAcquisitionRoutes = require('./src/routes/talentAcquisitionRoutes');
-const emailTemplateRoutes = require('./src/routes/emailTemplateRoutes');
-const candidateRoutes = require('./src/routes/candidateRoutes');
-const workflowRoutes = require('./src/routes/workflowRoutes');
-const meetingRoutes = require('./src/routes/meetingRoutes');
-const helpdeskRoutes = require('./src/routes/helpdeskRoutes');
-const interviewWorkflowRoutes = require('./src/routes/interviewWorkflowRoutes');
-const notificationRoutes = require('./src/routes/notificationRoutes');
-const discussionRoutes = require('./src/routes/discussionRoutes');
-const announcementRoutes = require('./src/routes/announcementRoutes');
-const onboardingRoutes = require('./src/routes/onboardingRoutes');
-const offboardingRoutes = require('./src/routes/offboardingRoutes');
-const hrEmailRoutes = require('./src/routes/hrEmailRoutes');
-const attendanceDocumentRoutes = require('./src/routes/attendanceDocumentRoutes');
-const publicRoutes = require('./src/routes/publicRoutes');
-const payrollIntegrationRoutes = require('./src/routes/payrollIntegrationRoutes');
-const payrollRoutes = require('./src/routes/payrollRoutes');
-
-const phaseTemplateRoutes = require('./src/routes/phaseTemplateRoutes');
-const candidateDynamicPhaseRoutes = require('./src/routes/candidateDynamicPhaseRoutes');
-const binRoutes = require('./src/routes/binRoutes');
-const emailSettingsRoutes = require('./src/routes/emailSettingsRoutes');
-const notificationSettingsRoutes = require('./src/routes/notificationSettingsRoutes');
-const emailBrandingRoutes = require('./src/routes/emailBrandingRoutes');
-const emailBrandingTemplateRoutes = require('./src/routes/emailBrandingTemplateRoutes');
-
-const superAdminAuthRoutes = require('./src/routes/superAdminRoutes');
-const companyRoutes = require('./src/routes/companyRoutes');
-const globalUserRoutes = require('./src/routes/globalUserRoutes');
-const analyticsRoutes = require('./src/routes/analyticsRoutes');
-const planRoutes = require('./src/routes/planRoutes');
-const superAdminMiscRoutes = require('./src/routes/superAdminMiscRoutes');
-
-const tenantMiddleware = require('./src/middlewares/tenantMiddleware');
-const planGuard = require('./src/middlewares/planGuard');
-const { globalLimiter } = require('./src/middlewares/rateLimitMiddleware');
+const apiRoutes = require('./src/routes');
 
 const initServer = async () => {
     await connectDB();
@@ -299,62 +254,7 @@ const initServer = async () => {
     });
 };
 
-app.use('/api', (req, res, next) => {
-    if (req.path.startsWith('/superadmin')) return next();
-    globalLimiter(req, res, next);
-});
-
-app.use('/api/public', publicRoutes);
-
-app.use('/api', (req, res, next) => {
-    if (req.path.startsWith('/superadmin') || req.path.startsWith('/v1')) return next();
-    tenantMiddleware(req, res, (err) => {
-        if (err) return next(err);
-        planGuard(req, res, next);
-    });
-});
-
-app.use('/api/auth', authRoutes);
-app.use('/api/v1', payrollIntegrationRoutes);
-app.use('/api/payroll', payrollRoutes);
-
-app.use('/api/attendance/rg', rgAttendanceRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/attendance/attachments', attendanceDocumentRoutes);
-app.use('/api/timesheet', timesheetRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/projects', projectRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/holidays', holidayRoutes);
-app.use('/api/leaves', leaveRoutes);
-app.use('/api/dossier', dossierRoutes);
-app.use('/api/ta', talentAcquisitionRoutes);
-app.use('/api/ta', phaseTemplateRoutes);
-app.use('/api/ta/email-templates', emailTemplateRoutes);
-app.use('/api/ta/candidates', candidateRoutes);
-app.use('/api/ta', candidateDynamicPhaseRoutes);
-app.use('/api/ta/interview-workflows', interviewWorkflowRoutes);
-app.use('/api/workflows', workflowRoutes);
-app.use('/api/meetings', meetingRoutes);
-app.use('/api/helpdesk', helpdeskRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/discussions', discussionRoutes);
-app.use('/api/announcements', announcementRoutes);
-app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/offboarding', offboardingRoutes);
-app.use('/api/hr-email', hrEmailRoutes);
-app.use('/api/bin', binRoutes);
-app.use('/api/company/email-settings', emailSettingsRoutes);
-app.use('/api/company/notification-settings', notificationSettingsRoutes);
-app.use('/api/email-branding', emailBrandingRoutes);
-app.use('/api/email-templates', emailBrandingTemplateRoutes);
-
-app.use('/api/superadmin/auth', superAdminAuthRoutes);
-app.use('/api/superadmin/companies', companyRoutes);
-app.use('/api/superadmin/users', globalUserRoutes);
-app.use('/api/superadmin/analytics', analyticsRoutes);
-app.use('/api/superadmin/plans', planRoutes);
-app.use('/api/superadmin', superAdminMiscRoutes);
+app.use('/api', apiRoutes);
 
 app.get('/', (req, res) => {
     res.json({ message: 'TalentCio API is running' });
