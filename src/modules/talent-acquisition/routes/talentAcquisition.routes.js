@@ -36,6 +36,7 @@ const taController = {
     getTAEmailHistoryById: taMailController.getTAEmailHistoryById,
     downloadTAEmailAttachment: taMailController.downloadTAEmailAttachment,
     resendTAEmail: taMailController.resendTAEmail,
+    resendTAEmailBulk: taMailController.resendTAEmailBulk,
 
     getTAClients: clientController.getTAClients
 };
@@ -136,6 +137,7 @@ router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.
 router.get('/email-history', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistory);
 router.get('/email-history/:id', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistoryById);
 router.get('/email-history/:id/attachment/:attachmentIndex', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.downloadTAEmailAttachment);
+router.post('/email-history/bulk-resend', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.resendTAEmailBulk);
 router.post('/email-history/:id/resend', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.resendTAEmail);
 
 // Analytics
