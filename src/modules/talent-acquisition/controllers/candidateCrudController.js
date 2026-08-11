@@ -15,7 +15,6 @@ const {
     normalizeSkillList,
     normalizePhase2InterviewStatus,
     hasMeaningfulOfferValue,
-    findDuplicateCandidateInCompany,
     isCandidateOwnedByUser,
     canOverrideDuplicateCandidateOwnership,
     buildDuplicateCandidateMessage,
@@ -27,6 +26,7 @@ const {
     hasCandidateMovedToPhase2,
     hasRealResume,
     applyDynamicImportedStatus,
+    isProfileSharedCandidate,
     canAccessHiringRequest,
     enrichCandidatesWithPublicProfiles,
     serializeCandidateForViewer,
@@ -149,11 +149,7 @@ const createCandidate = async (req, res) => {
 
         if (candidate) {
             const ownedByCurrentUser = isCandidateOwnedByUser(candidate, req.user?._id);
-            const hasDuplicateOverrideAccess = await canOverrideDuplicateCandidateOwnership({
-                user: req.user,
-                companyId: req.companyId,
-                hiringRequest
-            });
+            const hasDuplicateOverrideAccess = canOverrideDuplicateCandidateOwnership(req.user);
             const canAutoUpdateExistingCandidate = allowOwnedDuplicateUpdate && (ownedByCurrentUser || hasDuplicateOverrideAccess || isInterviewerForCandidate);
 
             if (!canAutoUpdateExistingCandidate) {
@@ -445,11 +441,38 @@ const getCandidatesByHiringRequest = async (req, res) => {
             .lean();
 
         const enrichedCandidates = await enrichCandidatesWithPublicProfiles(candidates, req.companyId);
-        const serializedCandidates = enrichedCandidates.map((candidate) => serializeCandidateForViewer({
+        let serializedCandidates = enrichedCandidates.map((candidate) => serializeCandidateForViewer({
             candidate,
             user: req.user,
             hiringRequest
         }));
+
+        const targetPhase = Number(req.query.activePhase) || 1;
+        if (targetPhase === 2) {
+            serializedCandidates = serializedCandidates.filter(isProfileSharedCandidate);
+        } else if (targetPhase === 3) {
+            serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Selected');
+        }
+
+        const filterStatus = String(req.query.filterStatus || 'All').trim();
+        if (filterStatus !== 'All') {
+            const mainStatuses = ['Interested', 'Not Interested', 'Not Relevant', 'Not Picking', 'High expectation', 'Long Notice period', 'Location Not suitable'];
+            if (['Other', 'None', 'OTH'].includes(filterStatus)) {
+                serializedCandidates = serializedCandidates.filter(c => !mainStatuses.includes(c.status));
+            } else {
+                serializedCandidates = serializedCandidates.filter(c => c.status === filterStatus);
+            }
+        }
+
+        const filterDecision = String(req.query.filterDecision || 'All').trim();
+        if (filterDecision !== 'All') {
+            serializedCandidates = serializedCandidates.filter(c => (c.decision || 'None') === filterDecision);
+        }
+
+        const search = String(req.query.search || '').trim().toLowerCase();
+        if (search) {
+            serializedCandidates = serializedCandidates.filter(c => String(c.candidateName || '').toLowerCase().includes(search));
+        }
 
         if (parseBooleanQueryValue(paginate)) {
             const paginatedResponse = buildLegacyCandidateListResponse({
@@ -688,7 +711,6 @@ const getCandidateDetailsById = async (req, res) => {
 const updateCandidate = async (req, res) => {
     try {
         const { id } = req.params;
-        const updateData = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -700,18 +722,114 @@ const updateCandidate = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
-        // Track status change for history
-        if (updateData.status && updateData.status !== candidate.status) {
-            candidate.statusHistory.push({
-                status: updateData.status,
-                changedBy: req.user._id,
-                changedAt: new Date(),
-                remark: updateData.remark || ''
-            });
+        const {
+            candidateName,
+            name,
+            email,
+            mobile,
+            source,
+            referralName,
+            profilePulledBy,
+            calledBy,
+            rate,
+            currentCTC,
+            expectedCTC,
+            inHandOffer,
+            offerCompany,
+            offerCTC,
+            offerJoiningDate,
+            preference,
+            totalExperience,
+            qualification,
+            currentCompany,
+            pastExperience,
+            currentLocation,
+            preferredLocation,
+            tatToJoin,
+            noticePeriod,
+            lastWorkingDay,
+            status,
+            decision,
+            profileShared,
+            phase2Decision,
+            remark,
+            phase2InterviewerFeedback,
+            phase2InterviewStatus,
+            mustHaveSkills,
+            niceToHaveSkills,
+            resumeUrl,
+            resumePublicId
+        } = req.body || {};
+
+        // Handle status updates for dynamic vs legacy hiring requests
+        if (hasMeaningfulStatus(status)) {
+            const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId: req.companyId });
+            if (isDynamicHiringRequest(hiringRequest)) {
+                const dynamicStatusApplied = applyDynamicImportedStatus(candidate, hiringRequest, status);
+                if (!dynamicStatusApplied) {
+                    return res.status(400).json({
+                        message: `Status "${status}" is not valid for the current dynamic phase`
+                    });
+                }
+            } else if (status !== candidate.status) {
+                candidate.statusHistory.push({
+                    status,
+                    changedBy: req.user._id,
+                    changedAt: new Date(),
+                    remark: remark || ''
+                });
+                candidate.status = status;
+            }
         }
 
-        // Apply updates
-        Object.assign(candidate, updateData);
+        const nameToSet = candidateName !== undefined ? candidateName : name;
+        if (nameToSet !== undefined) candidate.candidateName = nameToSet;
+        if (email !== undefined) candidate.email = email;
+        if (mobile !== undefined) candidate.mobile = mobile;
+
+        if (source !== undefined) {
+            candidate.source = String(source || '').trim();
+            if (candidate.source === 'Referral' && referralName !== undefined) {
+                candidate.referralName = String(referralName || '').trim();
+            } else if (candidate.source !== 'Referral') {
+                candidate.referralName = '';
+            }
+        } else if (referralName !== undefined) {
+            candidate.referralName = String(referralName || '').trim();
+        }
+
+        if (profilePulledBy !== undefined) candidate.profilePulledBy = profilePulledBy;
+        if (calledBy !== undefined) candidate.calledBy = calledBy;
+        if (rate !== undefined) candidate.rate = rate;
+        if (currentCTC !== undefined) candidate.currentCTC = currentCTC;
+        if (expectedCTC !== undefined) candidate.expectedCTC = expectedCTC;
+        if (inHandOffer !== undefined) candidate.inHandOffer = inHandOffer;
+        if (offerCompany !== undefined) candidate.offerCompany = offerCompany;
+        if (offerCTC !== undefined) candidate.offerCTC = offerCTC;
+        if (offerJoiningDate !== undefined) candidate.offerJoiningDate = offerJoiningDate;
+        if (preference !== undefined) candidate.preference = preference;
+        if (totalExperience !== undefined) candidate.totalExperience = totalExperience;
+        if (qualification !== undefined) candidate.qualification = qualification;
+        if (currentCompany !== undefined) candidate.currentCompany = currentCompany;
+        if (pastExperience !== undefined) candidate.pastExperience = pastExperience;
+        if (currentLocation !== undefined) candidate.currentLocation = currentLocation;
+        if (preferredLocation !== undefined) candidate.preferredLocation = preferredLocation;
+        if (tatToJoin !== undefined) candidate.tatToJoin = tatToJoin;
+        if (noticePeriod !== undefined) candidate.noticePeriod = noticePeriod;
+        if (lastWorkingDay !== undefined) candidate.lastWorkingDay = lastWorkingDay;
+        if (decision !== undefined) candidate.decision = decision;
+        if (profileShared !== undefined) candidate.profileShared = profileShared;
+        if (phase2Decision !== undefined) candidate.phase2Decision = phase2Decision;
+        if (remark !== undefined) candidate.remark = remark;
+        if (phase2InterviewerFeedback !== undefined) candidate.phase2InterviewerFeedback = phase2InterviewerFeedback;
+        if (phase2InterviewStatus !== undefined) {
+            candidate.phase2InterviewStatus = normalizePhase2InterviewStatus(phase2InterviewStatus);
+        }
+        if (mustHaveSkills !== undefined) candidate.mustHaveSkills = normalizeSkillList(mustHaveSkills);
+        if (niceToHaveSkills !== undefined) candidate.niceToHaveSkills = normalizeSkillList(niceToHaveSkills);
+        if (resumeUrl !== undefined) candidate.resumeUrl = resumeUrl;
+        if (resumePublicId !== undefined) candidate.resumePublicId = resumePublicId;
+
         await candidate.save();
 
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })

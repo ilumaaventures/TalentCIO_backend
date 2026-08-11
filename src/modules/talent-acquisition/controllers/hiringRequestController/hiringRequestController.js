@@ -21,6 +21,12 @@ const {
 
 const HIRING_REQUEST_SEQUENCE_KEY = 'hiring_request';
 
+const parseBooleanQueryValue = (val) => {
+    if (val === true || val === 'true' || val === 1 || val === '1') return true;
+    if (val === false || val === 'false' || val === 0 || val === '0') return false;
+    return undefined;
+};
+
 const formatHiringRequestId = (counter) => {
     return `REQ-${String(counter).padStart(4, '0')}`;
 };
@@ -40,6 +46,8 @@ exports.createHiringRequest = async (req, res) => {
         const {
             roleDetails,
             employmentDetails,
+            hiringDetails,
+            requirements,
             recruitmentTeam,
             approvalChain,
             jdFileUrl,
@@ -50,34 +58,85 @@ exports.createHiringRequest = async (req, res) => {
         } = req.body;
 
         const requestingUserId = req.user._id;
+        const isDraft = req.query.submit === 'false' || req.body.submit === false;
 
-        if (!roleDetails?.jobTitle || !employmentDetails?.numberOfPositions || !employmentDetails?.workLocation) {
+        let jobTitle = (roleDetails?.title || roleDetails?.jobTitle || req.body.jobTitle || '').trim();
+        let numberOfPositions = hiringDetails?.openPositions ?? hiringDetails?.numberOfOpenings ?? employmentDetails?.numberOfPositions ?? req.body.openPositions ?? req.body.numberOfPositions;
+        let workLocation = (requirements?.location || requirements?.workLocation || employmentDetails?.workLocation || req.body.location || '').trim();
+
+        if (isDraft) {
+            if (!jobTitle) jobTitle = 'Untitled Position';
+            if (numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions))) numberOfPositions = 1;
+            if (!workLocation) workLocation = 'Not Specified';
+        }
+
+        if (!jobTitle || numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions)) || !workLocation) {
             return res.status(400).json({ message: 'Job title, number of positions, and work location are required' });
         }
 
-        const normalizedClientName = client ? client.trim() : null;
+        const normalizedClientName = client ? client.trim() : 'General';
 
-        const defaultAssignedRecruiters = recruitmentTeam?.assignedRecruiters || [];
-        const clientAssignedRecruiterIds = normalizedClientName
-            ? await getClientAssignedUserIds(req.companyId, normalizedClientName)
-            : [];
-        const assignedRecruiters = mergeAssignedUsersWithClientAssignments(
-            defaultAssignedRecruiters,
-            clientAssignedRecruiterIds
-        );
-
-        const workflow = await ApprovalWorkflow.findOne({
+        const assignedRecruiters = await mergeAssignedUsersWithClientAssignments({
             companyId: req.companyId,
-            module: 'talent_acquisition',
-            isActive: true
+            clientName: normalizedClientName,
+            assignedUsers: recruitmentTeam?.assignedRecruiters || []
         });
 
+        const rawWorkflowId = req.body.workflowId;
+        const rawInterviewWorkflowId = req.body.interviewWorkflowId;
+
+        const validWorkflowId = (rawWorkflowId && mongoose.Types.ObjectId.isValid(rawWorkflowId))
+            ? new mongoose.Types.ObjectId(rawWorkflowId)
+            : null;
+
+        const validInterviewWorkflowId = (rawInterviewWorkflowId && mongoose.Types.ObjectId.isValid(rawInterviewWorkflowId))
+            ? new mongoose.Types.ObjectId(rawInterviewWorkflowId)
+            : null;
+
+        let workflow = null;
+        if (validWorkflowId) {
+            workflow = await ApprovalWorkflow.findOne({
+                _id: validWorkflowId,
+                companyId: req.companyId,
+                isActive: true
+            });
+        }
+        if (!workflow) {
+            workflow = await ApprovalWorkflow.findOne({
+                companyId: req.companyId,
+                module: { $in: ['TA', 'talent_acquisition'] },
+                isActive: true
+            });
+        }
+
         let hiringRequestData = {
+            ...req.body,
             companyId: req.companyId,
             requestor: requestingUserId,
+            createdBy: requestingUserId,
             client: normalizedClientName,
-            roleDetails,
-            employmentDetails,
+            workflowId: validWorkflowId || (workflow ? workflow._id : null),
+            interviewWorkflowId: validInterviewWorkflowId,
+            roleDetails: {
+                department: 'General',
+                employmentType: 'Full-time',
+                ...roleDetails,
+                title: jobTitle
+            },
+            purpose: req.body.purpose || 'New Position',
+            requirements: {
+                ...requirements,
+                location: workLocation
+            },
+            hiringDetails: {
+                openPositions: Number(numberOfPositions),
+                originalOpenPositions: Number(numberOfPositions),
+                ...hiringDetails
+            },
+            ownership: {
+                hiringManager: req.body.ownership?.hiringManager || requestingUserId,
+                interviewPanel: req.body.ownership?.interviewPanel || []
+            },
             recruitmentTeam: {
                 ...recruitmentTeam,
                 assignedRecruiters
@@ -88,27 +147,53 @@ exports.createHiringRequest = async (req, res) => {
             remarks
         };
 
-        if (workflow && workflow.levels && workflow.levels.length > 0) {
+        const isSubmit = parseBooleanQueryValue(req.query.submit) ?? true;
+
+        if (!isSubmit) {
+            hiringRequestData.status = 'Draft';
+            hiringRequestData.currentApprovalLevel = 1;
+        } else if (workflow && Array.isArray(workflow.levels) && workflow.levels.length > 0) {
             hiringRequestData.status = 'Pending Approval';
             hiringRequestData.currentApprovalLevel = 1;
+            hiringRequestData.workflowId = workflow._id;
 
-            hiringRequestData.approvalChain = workflow.levels.map(level => ({
-                level: level.level,
-                approverRole: level.role,
-                specificApprover: level.specificUser || null,
-                status: 'Pending'
-            }));
+            hiringRequestData.approvalChain = workflow.levels.map((lvl, index) => {
+                const approverList = (Array.isArray(lvl.approvers) && lvl.approvers.length > 0)
+                    ? lvl.approvers
+                    : (lvl.specificUser ? [lvl.specificUser] : []);
+                return {
+                    level: lvl.levelCheck || (index + 1),
+                    role: lvl.role,
+                    approvers: approverList,
+                    specificApprover: approverList[0] || lvl.specificUser || null,
+                    status: 'Pending'
+                };
+            });
         } else if (approvalChain && Array.isArray(approvalChain) && approvalChain.length > 0) {
             hiringRequestData.status = 'Pending Approval';
             hiringRequestData.currentApprovalLevel = 1;
-            hiringRequestData.approvalChain = approvalChain.map((approver, index) => ({
-                level: index + 1,
-                specificApprover: approver.userId,
-                status: 'Pending'
-            }));
+            hiringRequestData.approvalChain = approvalChain.map((approver, index) => {
+                const specApp = approver.userId || approver.specificApprover || null;
+                const approverList = (Array.isArray(approver.approvers) && approver.approvers.length > 0)
+                    ? approver.approvers
+                    : (specApp ? [specApp] : []);
+                return {
+                    level: approver.level || (index + 1),
+                    specificApprover: specApp,
+                    approvers: approverList,
+                    status: 'Pending'
+                };
+            });
         } else {
-            hiringRequestData.status = 'Approved';
-            hiringRequestData.approvalChain = [];
+            const defaultApprover = req.body.ownership?.hiringManager || requestingUserId;
+            hiringRequestData.status = 'Pending Approval';
+            hiringRequestData.currentApprovalLevel = 1;
+            hiringRequestData.approvalChain = [{
+                level: 1,
+                specificApprover: defaultApprover,
+                approvers: [defaultApprover],
+                status: 'Pending'
+            }];
         }
 
         let savedRequest = null;
@@ -188,18 +273,57 @@ exports.getHiringRequests = async (req, res) => {
     try {
         res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=30');
         const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
-        const requests = await HiringRequest.find(accessibleQuery)
+
+        const { search, status, client, page, limit } = req.query;
+
+        const filterQuery = { ...accessibleQuery };
+
+        if (status && status !== 'All') {
+            filterQuery.status = status;
+        }
+
+        if (client && client.trim()) {
+            filterQuery.client = client.trim();
+        }
+
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            filterQuery.$or = [
+                { requestId: searchRegex },
+                { client: searchRegex },
+                { 'roleDetails.title': searchRegex },
+                { 'roleDetails.jobTitle': searchRegex },
+                { 'roleDetails.department': searchRegex }
+            ];
+        }
+
+        const totalRequests = await HiringRequest.countDocuments(filterQuery);
+
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || (limit === 'all' ? Math.max(1, totalRequests) : 50);
+        const totalPages = Math.ceil(totalRequests / limitNum) || 1;
+        const skip = (pageNum - 1) * limitNum;
+
+        const requests = await HiringRequest.find(filterQuery)
             .populate('requestor', 'firstName lastName email')
+            .populate('createdBy', 'firstName lastName email')
+            .populate('ownership.hiringManager', 'firstName lastName email')
             .populate('recruitmentTeam.hiringManager', 'firstName lastName email')
             .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
-
             .populate('approvalChain.specificApprover', 'firstName lastName email')
-
             .populate('approvalChain.actionBy', 'firstName lastName email')
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
             .lean();
 
-        res.json(requests);
+        res.json({
+            requests,
+            totalPages,
+            totalRequests,
+            page: pageNum,
+            limit: limitNum
+        });
     } catch (error) {
         console.error('Error fetching hiring requests:', error);
         res.status(500).json({ message: 'Failed to fetch hiring requests', error: error.message });
@@ -231,6 +355,8 @@ exports.getHiringRequestById = async (req, res) => {
             companyId: req.companyId
         })
             .populate('requestor', 'firstName lastName email')
+            .populate('createdBy', 'firstName lastName email')
+            .populate('ownership.hiringManager', 'firstName lastName email')
             .populate('recruitmentTeam.hiringManager', 'firstName lastName email')
             .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
             .populate('approvalChain.specificApprover', 'firstName lastName email')
@@ -283,32 +409,46 @@ exports.updateHiringRequest = async (req, res) => {
 
         if (roleDetails) hiringRequest.roleDetails = { ...hiringRequest.roleDetails, ...roleDetails };
         if (employmentDetails) hiringRequest.employmentDetails = { ...hiringRequest.employmentDetails, ...employmentDetails };
+        if (req.body.hiringDetails) hiringRequest.hiringDetails = { ...hiringRequest.hiringDetails, ...req.body.hiringDetails };
+        if (req.body.requirements) hiringRequest.requirements = { ...hiringRequest.requirements, ...req.body.requirements };
+
+        if (req.body.workflowId !== undefined) {
+            hiringRequest.workflowId = (req.body.workflowId && mongoose.Types.ObjectId.isValid(req.body.workflowId))
+                ? req.body.workflowId
+                : null;
+        }
+        if (req.body.interviewWorkflowId !== undefined) {
+            hiringRequest.interviewWorkflowId = (req.body.interviewWorkflowId && mongoose.Types.ObjectId.isValid(req.body.interviewWorkflowId))
+                ? req.body.interviewWorkflowId
+                : null;
+        }
 
         if (client !== undefined) {
             hiringRequest.client = client ? client.trim() : null;
         }
 
         if (recruitmentTeam) {
-            const defaultAssignedRecruiters = recruitmentTeam.assignedRecruiters || [];
-            const clientAssignedRecruiterIds = hiringRequest.client
-                ? await getClientAssignedUserIds(req.companyId, hiringRequest.client)
-                : [];
-
-            const assignedRecruiters = mergeAssignedUsersWithClientAssignments(
-                defaultAssignedRecruiters,
-                clientAssignedRecruiterIds
-            );
+            const assignedRecruiters = await mergeAssignedUsersWithClientAssignments({
+                companyId: req.companyId,
+                clientName: hiringRequest.client,
+                assignedUsers: recruitmentTeam.assignedRecruiters || []
+            });
 
             hiringRequest.recruitmentTeam = {
                 ...recruitmentTeam,
                 assignedRecruiters
             };
         } else if (client !== undefined && hiringRequest.client) {
-            const clientAssignedRecruiterIds = await getClientAssignedUserIds(req.companyId, hiringRequest.client);
-            hiringRequest.recruitmentTeam.assignedRecruiters = mergeAssignedUsersWithClientAssignments(
-                hiringRequest.recruitmentTeam?.assignedRecruiters || [],
-                clientAssignedRecruiterIds
-            );
+            const assignedRecruiters = await mergeAssignedUsersWithClientAssignments({
+                companyId: req.companyId,
+                clientName: hiringRequest.client,
+                assignedUsers: hiringRequest.recruitmentTeam?.assignedRecruiters || []
+            });
+
+            hiringRequest.recruitmentTeam = {
+                ...(hiringRequest.recruitmentTeam || {}),
+                assignedRecruiters
+            };
         }
 
         if (jdFileUrl !== undefined) hiringRequest.jdFileUrl = jdFileUrl;
@@ -352,7 +492,68 @@ exports.updateHiringRequest = async (req, res) => {
             });
         }
 
-        if (status && ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Closed'].includes(status)) {
+        const isSubmit = parseBooleanQueryValue(req.query.submit);
+
+        if (isSubmit === false || status === 'Draft') {
+            hiringRequest.status = 'Draft';
+        } else if (isSubmit === true || (hiringRequest.status === 'Draft' && !status)) {
+            const rawWorkflowId = req.body.workflowId || hiringRequest.workflowId;
+            let workflow = null;
+            if (rawWorkflowId && mongoose.Types.ObjectId.isValid(rawWorkflowId)) {
+                workflow = await ApprovalWorkflow.findOne({
+                    _id: rawWorkflowId,
+                    companyId: req.companyId,
+                    isActive: true
+                });
+            }
+            if (!workflow) {
+                workflow = await ApprovalWorkflow.findOne({
+                    companyId: req.companyId,
+                    module: { $in: ['TA', 'talent_acquisition'] },
+                    isActive: true
+                });
+            }
+
+            hiringRequest.status = 'Pending Approval';
+            hiringRequest.currentApprovalLevel = 1;
+
+            if (workflow && Array.isArray(workflow.levels) && workflow.levels.length > 0) {
+                hiringRequest.workflowId = workflow._id;
+                hiringRequest.approvalChain = workflow.levels.map((lvl, index) => {
+                    const approverList = (Array.isArray(lvl.approvers) && lvl.approvers.length > 0)
+                        ? lvl.approvers
+                        : (lvl.specificUser ? [lvl.specificUser] : []);
+                    return {
+                        level: lvl.levelCheck || (index + 1),
+                        role: lvl.role,
+                        approvers: approverList,
+                        specificApprover: approverList[0] || lvl.specificUser || null,
+                        status: 'Pending'
+                    };
+                });
+            } else if (req.body.approvalChain && Array.isArray(req.body.approvalChain) && req.body.approvalChain.length > 0) {
+                hiringRequest.approvalChain = req.body.approvalChain.map((approver, index) => {
+                    const specApp = approver.userId || approver.specificApprover || null;
+                    const approverList = (Array.isArray(approver.approvers) && approver.approvers.length > 0)
+                        ? approver.approvers
+                        : (specApp ? [specApp] : []);
+                    return {
+                        level: approver.level || (index + 1),
+                        specificApprover: specApp,
+                        approvers: approverList,
+                        status: 'Pending'
+                    };
+                });
+            } else {
+                const defaultApprover = hiringRequest.ownership?.hiringManager || req.user._id;
+                hiringRequest.approvalChain = [{
+                    level: 1,
+                    specificApprover: defaultApprover,
+                    approvers: [defaultApprover],
+                    status: 'Pending'
+                }];
+            }
+        } else if (status && ['Pending Approval', 'Approved', 'Rejected', 'Closed', 'On_Hold'].includes(status)) {
             hiringRequest.status = status;
         }
 
@@ -444,13 +645,15 @@ exports.approveHiringRequest = async (req, res) => {
                 nextApproverUserIds = usersWithRole.map(u => u._id);
             }
 
+            const reqTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Requisition';
+
             for (const nextUserId of nextApproverUserIds) {
                 await NotificationService.createNotification(io, {
                     user: nextUserId,
                     companyId: req.companyId,
                     preferenceKey: 'ta_hiring_request_pending',
                     title: 'Hiring Request Approval Needed',
-                    message: `Hiring Request (${hiringRequest.requestId} - ${hiringRequest.roleDetails.jobTitle}) requires your level ${nextLevel.level} approval.`,
+                    message: `Hiring Request (${hiringRequest.requestId} - ${reqTitle}) requires your level ${nextLevel.level} approval.`,
                     type: 'Approval',
                     link: `/talent-acquisition/hiring-requests/${hiringRequest._id}`,
                     origin: req.headers.origin
@@ -458,13 +661,14 @@ exports.approveHiringRequest = async (req, res) => {
             }
         } else {
             hiringRequest.status = 'Approved';
+            const reqTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Requisition';
 
             await NotificationService.createNotification(io, {
-                user: hiringRequest.requestor,
+                user: hiringRequest.requestor || hiringRequest.createdBy,
                 companyId: req.companyId,
                 preferenceKey: 'ta_hiring_request_approved',
                 title: 'Hiring Request Approved!',
-                message: `Your Hiring Request (${hiringRequest.requestId} - ${hiringRequest.roleDetails.jobTitle}) has been fully approved.`,
+                message: `Your Hiring Request (${hiringRequest.requestId} - ${reqTitle}) has been fully approved.`,
                 type: 'Success',
                 link: `/talent-acquisition/hiring-requests/${hiringRequest._id}`,
                 origin: req.headers.origin
@@ -581,11 +785,11 @@ exports.closeHiringRequest = async (req, res) => {
 
 exports.toggleJobVisibility = async (req, res) => {
     try {
-        const { isJobVisible } = req.body;
+        const rawVal = req.body.isJobVisible !== undefined
+            ? req.body.isJobVisible
+            : (req.body.isPublic !== undefined ? req.body.isPublic : req.body.isResourceGatewayPublic);
 
-        if (typeof isJobVisible !== 'boolean') {
-            return res.status(400).json({ message: 'isJobVisible must be a boolean value' });
-        }
+        const isJobVisible = parseBooleanQueryValue(rawVal) ?? (typeof rawVal === 'boolean' ? rawVal : Boolean(rawVal));
 
         const hiringRequest = await HiringRequest.findOne({
             _id: req.params.id,
@@ -601,12 +805,28 @@ exports.toggleJobVisibility = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this hiring request' });
         }
 
-        hiringRequest.isJobVisible = isJobVisible;
+        if (req.body.isPublic !== undefined || req.body.isJobVisible !== undefined) {
+            hiringRequest.isPublic = isJobVisible;
+            hiringRequest.isJobVisible = isJobVisible;
+            if (isJobVisible) {
+                hiringRequest.wasEverPublished = true;
+            }
+        }
+
+        if (req.body.isResourceGatewayPublic !== undefined) {
+            const isRgPublic = parseBooleanQueryValue(req.body.isResourceGatewayPublic) ?? Boolean(req.body.isResourceGatewayPublic);
+            hiringRequest.isResourceGatewayPublic = isRgPublic;
+            if (isRgPublic) {
+                hiringRequest.wasEverPublished = true;
+            }
+        }
+
         await hiringRequest.save();
 
         res.json({
             message: `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`,
-            hiringRequest
+            hiringRequest,
+            job: hiringRequest
         });
     } catch (error) {
         console.error('Error toggling job visibility:', error);

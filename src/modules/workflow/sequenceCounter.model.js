@@ -25,4 +25,16 @@ const sequenceCounterSchema = new mongoose.Schema({
 
 sequenceCounterSchema.index({ companyId: 1, key: 1, year: 1 }, { unique: true });
 
+sequenceCounterSchema.statics.getNextSequence = async function (companyId, key, step = 1, session = null) {
+    const year = new Date().getFullYear();
+    const query = { companyId, key, year };
+    const update = { $inc: { seq: step } };
+    const options = { new: true, upsert: true, setDefaultsOnInsert: true };
+    if (session) {
+        options.session = session;
+    }
+    const doc = await this.findOneAndUpdate(query, update, options);
+    return doc.seq;
+};
+
 module.exports = mongoose.model('SequenceCounter', sequenceCounterSchema);

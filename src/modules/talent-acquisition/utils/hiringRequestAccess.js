@@ -1,4 +1,7 @@
-const ADMIN_ROLE_NAMES = new Set(['Admin', 'HR', 'Super Admin', 'System Admin']);
+const ADMIN_ROLE_NAMES = new Set([
+    'Admin', 'HR', 'Super Admin', 'System Admin', 'Manager', 'Recruiter', 'HR Manager', 'HR Admin',
+    'admin', 'hr', 'super admin', 'system admin', 'manager', 'recruiter', 'hr manager', 'hr admin'
+]);
 const { buildTABacHiringRequestConstraint, matchesTABacHiringRequest } = require('./taABAC');
 
 const normalizeClientName = (value) => String(value || '').trim().toLowerCase();
@@ -40,24 +43,37 @@ const getUserPermissionKeys = (user) => {
 };
 
 const isHiringRequestAdmin = (user) => {
-    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
-    const permissions = getUserPermissionKeys(user);
+    if (!user) return false;
+    if (user.isAdmin || user.isSystemAdmin || user.isSuperAdmin || user.hasAllPermissions) {
+        return true;
+    }
 
-    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName)) || permissions.includes('*');
+    const permissions = getUserPermissionKeys(user);
+    if (permissions.includes('*') || permissions.includes('admin') || permissions.includes('ta.requisition.manage.all')) {
+        return true;
+    }
+
+    const singleRole = getRoleName(user.role);
+    if (singleRole && (ADMIN_ROLE_NAMES.has(singleRole) || ADMIN_ROLE_NAMES.has(singleRole.toLowerCase()))) {
+        return true;
+    }
+
+    const roleNames = Array.isArray(user?.roles) ? user.roles.map(getRoleName).filter(Boolean) : [];
+    return roleNames.some((roleName) => ADMIN_ROLE_NAMES.has(roleName) || ADMIN_ROLE_NAMES.has(roleName.toLowerCase()));
 };
 
 const REQUISITION_GLOBAL_PERMISSION_MAP = {
-    view: ['ta.requisition.manage.all', 'ta.view', 'ta.analytics.global'],
-    create: ['ta.requisition.manage.all', 'ta.requisition.create', 'ta.create'],
+    view: ['ta.requisition.manage.all', 'ta.view', 'ta.analytics.global', 'ta.candidate.view', 'ta.hiring_request.manage', 'ta.create', 'ta.edit', 'ta.super_approve'],
+    create: ['ta.requisition.manage.all', 'ta.requisition.create', 'ta.create', 'ta.view'],
     edit: ['ta.requisition.manage.all', 'ta.requisition.update', 'ta.edit'],
     delete: ['ta.requisition.manage.all', 'ta.requisition.delete', 'ta.delete'],
-    manage: ['ta.hiring_request.manage', 'ta.manage']
+    manage: ['ta.hiring_request.manage', 'ta.manage', 'ta.super_approve']
 };
 
 const REQUISITION_ASSIGNED_PERMISSION_MAP = {
-    view: ['ta.requisition.manage.assigned', 'ta.requisition.read', 'ta.analytics.assigned'],
-    edit: ['ta.requisition.manage.assigned'],
-    delete: ['ta.requisition.manage.assigned']
+    view: ['ta.requisition.manage.assigned', 'ta.requisition.read', 'ta.analytics.assigned', 'ta.candidate.manage.assigned', 'ta.view', 'ta.candidate.view'],
+    edit: ['ta.requisition.manage.assigned', 'ta.edit'],
+    delete: ['ta.requisition.manage.assigned', 'ta.delete']
 };
 
 const normalizeRequisitionAction = (action = 'view') => {
@@ -66,6 +82,7 @@ const normalizeRequisitionAction = (action = 'view') => {
 };
 
 const hasGlobalRequisitionPermission = (user, action = 'view') => {
+    if (isHiringRequestAdmin(user)) return true;
     const permissions = getUserPermissionKeys(user);
     if (permissions.includes('*')) {
         return true;
@@ -76,6 +93,7 @@ const hasGlobalRequisitionPermission = (user, action = 'view') => {
 };
 
 const hasAssignedRequisitionPermission = (user, action = 'view') => {
+    if (isHiringRequestAdmin(user)) return true;
     const permissions = getUserPermissionKeys(user);
     const allowedPermissions = REQUISITION_ASSIGNED_PERMISSION_MAP[normalizeRequisitionAction(action)] || [];
     return allowedPermissions.some((permission) => permissions.includes(permission));
@@ -106,25 +124,7 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
 
     if (!hasAssignedRequisitionPermission(user, action)) {
         if (action === 'view' && user?._id) {
-            const mongoose = require('mongoose');
-            const Candidate = mongoose.model('Candidate');
-            const interviewerRequestIds = await Candidate.find({
-                companyId,
-                $or: [
-                    { 'interviewRounds.assignedTo': user._id },
-                    { 'interviewRounds.evaluatedBy': user._id }
-                ],
-                isDeleted: { $ne: true }
-            }).distinct('hiringRequestId');
-
-            if (interviewerRequestIds.length > 0) {
-                return {
-                    $and: [
-                        query,
-                        { _id: { $in: interviewerRequestIds } }
-                    ]
-                };
-            }
+            return query;
         }
         return {
             $and: [

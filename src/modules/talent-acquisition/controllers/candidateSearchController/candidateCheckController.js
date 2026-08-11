@@ -47,11 +47,7 @@ exports.checkDuplicateCandidate = async (req, res) => {
             ? isCandidateOwnedByUser(duplicateCandidate, req.user?._id)
             : false;
         const hasDuplicateOverrideAccess = duplicateCandidate
-            ? await canOverrideDuplicateCandidateOwnership({
-                user: req.user,
-                companyId: req.companyId,
-                hiringRequest
-            })
+            ? canOverrideDuplicateCandidateOwnership(req.user)
             : false;
         const canAutoUpdate = Boolean(allowOwnedDuplicateUpdate) && (ownedByCurrentUser || hasDuplicateOverrideAccess);
 

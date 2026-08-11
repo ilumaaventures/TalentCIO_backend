@@ -21,8 +21,8 @@ exports.getTodayStatus = async (req, res) => {
                 $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
             }
         })
-        .select('user clockIn clockInIST clockOut clockOutIST status attendanceMode shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours autoCheckoutAt autoCheckoutReason')
-        .lean();
+            .select('user clockIn clockInIST clockOut clockOutIST status attendanceMode shiftCode shiftName shiftType shiftStartTime shiftEndTime maxWorkingHours autoCheckoutAt autoCheckoutReason')
+            .lean();
         res.json(attendance || { status: 'Not Clocked In' });
     } catch (error) {
         console.error('getTodayStatus error:', error);
@@ -48,7 +48,12 @@ exports.clockIn = async (req, res) => {
             return res.status(403).json({ message: periodEditability.message });
         }
 
-        const policy = buildAttendancePolicy(company, req.user, today, now);
+        const policy = buildAttendancePolicy({
+            company,
+            user: req.user,
+            attendanceDate: today,
+            currentTime: now
+        });
 
         if (!policy.canClockIn) {
             return res.status(400).json({

@@ -188,9 +188,16 @@ exports.getCandidateCardFilters = async (req, res) => {
             },
             phase2Metrics: {
                 totalShortlisted: structuralPhase2Candidates.length,
-                totalScreened: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected').length,
-                selected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Selected').length,
-                rejected: structuralPhase2Candidates.filter((candidate) => candidate?.phase2Decision === 'Rejected').length,
+                totalScreened: structuralPhase2Candidates.filter((candidate) =>
+                    candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected' ||
+                    candidate?.decision === 'Shortlisted' || candidate?.decision === 'Selected'
+                ).length,
+                selected: structuralPhase2Candidates.filter((candidate) =>
+                    candidate?.phase2Decision === 'Selected' || candidate?.decision === 'Selected'
+                ).length,
+                rejected: structuralPhase2Candidates.filter((candidate) =>
+                    candidate?.phase2Decision === 'Rejected' || candidate?.decision === 'Rejected'
+                ).length,
                 interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length,
                 interviewRoundsSummary: interviewRoundsSummaryPhase2
             },
@@ -263,7 +270,6 @@ exports.getCandidateInterviewDetails = async (req, res) => {
         applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
 
         const candidates = await Candidate.find(candidateQuery)
-            .select('_id candidateName email mobile status decision phase2Decision phase3Decision phase2InterviewStatus phase2InterviewerFeedback profileShared isTransferred interviewRounds preference totalExperience uploadedAt profilePulledBy uploadedBy resumeUrl')
             .populate('uploadedBy', 'firstName lastName')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
@@ -280,14 +286,6 @@ exports.getCandidateInterviewDetails = async (req, res) => {
             `${c?.uploadedBy?.firstName || ''} ${c?.uploadedBy?.lastName || ''}`.trim();
         const getCandidateUploadType = (c) =>
             (typeof c?.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
-        const isProfileSharedCandidate = (c) => Boolean(
-            c?.profileShared === true ||
-            c?.decision === 'Shortlisted' ||
-            c?.decision === 'Profile Shared' ||
-            (c?.phase2Decision && c?.phase2Decision !== 'None') ||
-            (c?.phase2InterviewStatus && c?.phase2InterviewStatus !== 'None') ||
-            Boolean(c?.phase2InterviewerFeedback)
-        );
 
         const filtered = candidates.filter((c) => {
             if (normalizedSearch && !String(c?.candidateName || '').toLowerCase().includes(normalizedSearch)) return false;

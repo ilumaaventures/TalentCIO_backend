@@ -1,13 +1,14 @@
 const Attendance = require('../model/attendance.model');
 const AttendanceRegularization = require('../model/attendanceRegularization.model');
 const User = require('../../user/user.model');
+const Role = require('../../user/role.model');
 const Company = require('../../company/company.model');
 const NotificationService = require('../../../services/notificationService');
 const { getISTTime, getStartOfDayIST } = require('../attendancePolicy');
 
 exports.requestRegularization = async (req, res) => {
     try {
-        const { date, reason, clockIn, clockOut } = req.body;
+        const { date, reason, clockIn, clockOut, requestedClockIn, requestedClockOut, type } = req.body;
 
         if (!date || !reason) {
             return res.status(400).json({ message: 'Date and reason are required.' });
@@ -28,29 +29,54 @@ exports.requestRegularization = async (req, res) => {
             return res.status(400).json({ message: 'A regularization request is already pending for this date.' });
         }
 
+        const rawClockIn = requestedClockIn || clockIn;
+        const rawClockOut = requestedClockOut || clockOut;
+        const finalClockIn = rawClockIn ? new Date(rawClockIn) : null;
+        const finalClockOut = rawClockOut ? new Date(rawClockOut) : null;
+
+        let finalType = type;
+        if (!finalType) {
+            if (finalClockIn && finalClockOut) finalType = 'BOTH';
+            else if (finalClockIn) finalType = 'IN';
+            else if (finalClockOut) finalType = 'OUT';
+            else finalType = 'PRESENT';
+        }
+
         const regularization = await AttendanceRegularization.create({
             companyId: req.companyId,
             user: req.user._id,
             date: startOfDayDate,
+            type: finalType,
             reason,
-            requestedClockIn: clockIn ? new Date(clockIn) : null,
-            requestedClockOut: clockOut ? new Date(clockOut) : null,
+            requestedClockIn: finalClockIn,
+            requestedClockOut: finalClockOut,
             status: 'PENDING'
         });
 
         const io = req.app.get('io');
         const userWithDept = await User.findById(req.user._id).select('department firstName lastName').lean();
+        
+        const targetRoles = await Role.find({
+            companyId: req.companyId,
+            name: { $in: ['Admin', 'Manager', 'HR Admin', 'System Admin'] },
+            isActive: true
+        }).select('_id').lean();
+
+        const roleIds = targetRoles.map(r => r._id);
+        const orConditions = [];
+        if (roleIds.length > 0) {
+            orConditions.push({ roles: { $in: roleIds } });
+        }
+        if (userWithDept?.department) {
+            orConditions.push({ department: userWithDept.department });
+        }
+
         const managerQuery = {
             companyId: req.companyId,
-            isActive: true,
-            $or: [
-                { roles: { $in: ['Admin', 'Manager', 'HR Admin', 'System Admin'] } },
-                { permissions: { $in: ['attendance.approve', '*'] } }
-            ]
+            isActive: true
         };
-
-        if (userWithDept?.department) {
-            managerQuery.$or.push({ department: userWithDept.department });
+        if (orConditions.length > 0) {
+            managerQuery.$or = orConditions;
         }
 
         const managers = await User.find(managerQuery).select('_id').lean();
@@ -63,7 +89,7 @@ exports.requestRegularization = async (req, res) => {
                 title: 'New Regularization Request',
                 message: `${userWithDept?.firstName || 'An employee'} requested attendance regularization for ${startOfDayDate.toLocaleDateString()}.`,
                 type: 'Info',
-                link: '/attendance/approvals'
+                link: '/attendance?tab=regularize'
             })));
         }
 
@@ -116,9 +142,19 @@ exports.getRegularizationRequests = async (req, res) => {
 exports.processRegularizationRequest = async (req, res) => {
     try {
         const { id } = req.params;
-        const { action, adminComment } = req.body;
+        const { action, status, adminComment, rejectionReason } = req.body;
 
-        if (!['APPROVE', 'REJECT'].includes(action)) {
+        const rawAction = action || status;
+        const normalized = String(rawAction || '').trim().toUpperCase();
+
+        let effectiveAction = '';
+        if (['APPROVE', 'APPROVED'].includes(normalized)) {
+            effectiveAction = 'APPROVE';
+        } else if (['REJECT', 'REJECTED'].includes(normalized)) {
+            effectiveAction = 'REJECT';
+        }
+
+        if (!effectiveAction) {
             return res.status(400).json({ message: 'Action must be APPROVE or REJECT.' });
         }
 
@@ -132,14 +168,18 @@ exports.processRegularizationRequest = async (req, res) => {
             return res.status(404).json({ message: 'Pending regularization request not found.' });
         }
 
-        regularization.status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        const finalComment = adminComment || rejectionReason || '';
+        regularization.status = effectiveAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
         regularization.approvedBy = req.user._id;
         regularization.approvedAt = new Date();
-        if (adminComment) regularization.adminComment = adminComment;
+        if (finalComment) {
+            regularization.adminComment = finalComment;
+            regularization.rejectionReason = finalComment;
+        }
 
         await regularization.save();
 
-        if (action === 'APPROVE') {
+        if (effectiveAction === 'APPROVE') {
             const startOfDayDate = getStartOfDayIST(regularization.date);
             let attendance = await Attendance.findOne({
                 user: regularization.user,
@@ -177,16 +217,20 @@ exports.processRegularizationRequest = async (req, res) => {
         }
 
         const io = req.app.get('io');
-        await NotificationService.createNotification(io, {
-            user: regularization.user,
-            companyId: req.companyId,
-            title: `Regularization Request ${action === 'APPROVE' ? 'Approved' : 'Rejected'}`,
-            message: `Your attendance regularization request for ${regularization.date.toLocaleDateString()} has been ${action.toLowerCase()}d.`,
-            type: action === 'APPROVE' ? 'Success' : 'Warning',
-            link: '/attendance/me'
-        });
+        try {
+            await NotificationService.createNotification(io, {
+                user: regularization.user,
+                companyId: req.companyId,
+                title: `Regularization Request ${effectiveAction === 'APPROVE' ? 'Approved' : 'Rejected'}`,
+                message: `Your attendance regularization request for ${regularization.date.toLocaleDateString()} has been ${effectiveAction.toLowerCase()}d.`,
+                type: effectiveAction === 'APPROVE' ? 'Approval' : 'Alert',
+                link: '/attendance?tab=regularize'
+            });
+        } catch (notifErr) {
+            console.error('Notification error in processRegularizationRequest:', notifErr);
+        }
 
-        res.json({ message: `Regularization request ${action.toLowerCase()}d successfully.`, regularization });
+        res.json({ message: `Regularization request ${effectiveAction.toLowerCase()}d successfully.`, regularization });
     } catch (error) {
         console.error('processRegularizationRequest error:', error);
         res.status(500).json({ message: 'Server Error processing regularization request.' });

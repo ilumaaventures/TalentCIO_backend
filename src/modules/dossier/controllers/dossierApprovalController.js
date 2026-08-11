@@ -12,19 +12,22 @@ exports.getHRISRequests = async (req, res) => {
         }
 
         console.log('[getHRISRequests] User:', req.user?.email, 'companyId:', req.companyId, 'permissions:', req.user?.permissions);
-        let query = { 'hris.status': { $in: ['Pending Approval', 'Approved', 'Rejected'] } };
+        let query = {
+            $or: [
+                { 'hris.status': { $in: ['Pending Approval', 'Approved', 'Rejected'] } },
+                { 'hris.isDeclared': true },
+                { pendingUpdates: { $ne: null } }
+            ]
+        };
 
-        console.log('[getHRISRequests] Query:', { ...query, companyId: req.companyId });
         const requests = await EmployeeProfile.find({ ...query, companyId: req.companyId })
             .populate('user', 'firstName lastName employeeCode department');
 
-        console.log('[getHRISRequests] Raw profiles found:', requests.length);
-
         const formattedRequests = requests.map(reqProfile => {
             if (!reqProfile.user) {
-                console.log('[getHRISRequests] Profile has no user populated:', reqProfile._id);
                 return null;
             }
+            const status = reqProfile.hris?.status || (reqProfile.pendingUpdates ? 'Pending Approval' : (reqProfile.hris?.isDeclared ? 'Approved' : 'Draft'));
             return {
                 _id: reqProfile.user._id,
                 firstName: reqProfile.user.firstName,
@@ -33,9 +36,11 @@ exports.getHRISRequests = async (req, res) => {
                 department: reqProfile.user.department,
                 employeeProfile: {
                     hris: {
-                        submittedAt: reqProfile.hris?.submittedAt,
-                        status: reqProfile.hris?.status
-                    }
+                        submittedAt: reqProfile.hris?.submittedAt || reqProfile.updatedAt,
+                        status: status,
+                        isDeclared: Boolean(reqProfile.hris?.isDeclared)
+                    },
+                    pendingUpdates: reqProfile.pendingUpdates
                 }
             };
         }).filter(r => r !== null);

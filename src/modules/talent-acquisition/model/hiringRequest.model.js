@@ -126,10 +126,15 @@ const HiringRequestSchema = new mongoose.Schema({
         priority: { type: String, enum: ['High', 'Medium', 'Low'], default: 'Medium' }
     },
 
-    // 5. Ownership
+    // 5. Ownership & Recruitment Team
+    requestor: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ownership: {
         hiringManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         interviewPanel: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Optional at this stage
+    },
+    recruitmentTeam: {
+        hiringManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        assignedRecruiters: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
     },
     assignedUsers: [{
         type: mongoose.Schema.Types.ObjectId,
@@ -145,7 +150,7 @@ const HiringRequestSchema = new mongoose.Schema({
     interviewWorkflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'InterviewWorkflow' }, // Default interview template
     status: {
         type: String,
-        enum: ['Draft', 'Submitted', 'Pending_L1', 'Pending_Final', 'Approved', 'Rejected', 'On_Hold', 'Closed', 'Pending_Approval'],
+        enum: ['Draft', 'Submitted', 'Pending_L1', 'Pending_Final', 'Approved', 'Rejected', 'On_Hold', 'Closed', 'Pending_Approval', 'Pending Approval', 'Pending'],
         default: 'Draft'
     },
     isPublic: { type: Boolean, default: false },
@@ -177,6 +182,8 @@ const HiringRequestSchema = new mongoose.Schema({
         status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
         approvers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // List of authorized approvers
         approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // The actual user who approved
+        specificApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        actionBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         date: Date,
         comments: String
     }],
@@ -228,6 +235,30 @@ HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1
 HiringRequestSchema.index({ companyId: 1, isDeleted: 1 });
 
 HiringRequestSchema.plugin(softDeletePlugin);
+
+HiringRequestSchema.pre('save', function (next) {
+    if (!this.requestor && this.createdBy) {
+        this.requestor = this.createdBy;
+    }
+    if (!this.createdBy && this.requestor) {
+        this.createdBy = this.requestor;
+    }
+    if (!this.ownership) {
+        this.ownership = {};
+    }
+    if (!this.recruitmentTeam) {
+        this.recruitmentTeam = {};
+    }
+    if (this.ownership.hiringManager && !this.recruitmentTeam.hiringManager) {
+        this.recruitmentTeam.hiringManager = this.ownership.hiringManager;
+    }
+    if (this.recruitmentTeam.hiringManager && !this.ownership.hiringManager) {
+        this.ownership.hiringManager = this.recruitmentTeam.hiringManager;
+    }
+    if (typeof next === 'function') {
+        next();
+    }
+});
 
 // Audit Logs for this specific request
 const HRRAuditLogSchema = new mongoose.Schema({

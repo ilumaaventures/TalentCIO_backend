@@ -18,8 +18,10 @@ const ANNOUNCEMENT_FIELD_LIMITS = {
     commentText: 1200
 };
 
-const setPrivateCache = (res, maxAgeSeconds = 20) => {
-    res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
+const setPrivateCache = (res) => {
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
 };
 
 const monthDayFormatter = new Intl.DateTimeFormat('en-IN', {
@@ -417,9 +419,10 @@ const formatAnnouncementResponse = (announcementDoc, user = {}) => {
         audienceEmploymentTypes: announcement.audienceEmploymentTypes || [],
         audienceUserIds,
         audienceSummary,
-        isPinned: Boolean(announcement.isPinned),
+        pinned: Boolean(announcement.pinned || announcement.isPinned),
+        isPinned: Boolean(announcement.pinned || announcement.isPinned),
         pinnedAt: announcement.pinnedAt || null,
-        pinExpiresAt: announcement.pinExpiresAt || null,
+        pinExpiresAt: announcement.pinExpiresAt || announcement.expiresAt || null,
         scheduledFor: announcement.scheduledFor || null,
         publishedAt: announcement.publishedAt || null,
         isRecurring: Boolean(announcement.isRecurring),
@@ -439,6 +442,7 @@ const formatAnnouncementResponse = (announcementDoc, user = {}) => {
         userReactionType: userReaction ? userReaction.type : null,
         reactions: formattedReactions,
         comments: formattedComments,
+        canManage: isManager,
         canEdit: isManager,
         canDelete: isManager,
         canComment: canCommentOnAnnouncement(user),
@@ -524,6 +528,103 @@ const notifyPublishedAnnouncement = async ({ req, announcement }) => {
     }
 };
 
+const buildVisibleAnnouncementQuery = ({ companyId, user = {} } = {}) => {
+    return buildAnnouncementScopeQuery(companyId, user);
+};
+
+const serializeAnnouncement = (announcementDoc, user = {}, isManager = false) => {
+    const isUserManager = isManager || canManageAnnouncements(user);
+    const response = formatAnnouncementResponse(announcementDoc, user);
+    response.canManage = isUserManager;
+    response.canEdit = isUserManager;
+    response.canDelete = isUserManager;
+    return response;
+};
+
+const serializeCommunityMember = (user = {}, extra = {}) => {
+    return {
+        ...sanitizeUser(user),
+        ...extra
+    };
+};
+
+const isAnnouncementExpired = (announcement = {}) => {
+    if (!announcement.expiresAt && !announcement.pinExpiresAt) return false;
+    const expiry = announcement.expiresAt || announcement.pinExpiresAt;
+    const expiryDate = toValidDate(expiry);
+    return Boolean(expiryDate && expiryDate.getTime() < Date.now());
+};
+
+const buildUploadedAttachment = (file) => {
+    if (!file) return null;
+    const url = file.path || file.secure_url || file.url || '';
+    const publicId = file.filename || file.public_id || '';
+    return {
+        url,
+        name: file.originalname || file.name || 'Attachment',
+        publicId,
+        resourceType: file.resource_type || (file.mimetype?.startsWith('image/') ? 'image' : 'raw'),
+        mimeType: file.mimetype || file.mimeType || '',
+        size: file.size || 0,
+        uploadedAt: new Date()
+    };
+};
+
+const destroyAnnouncementAttachment = async (attachment) => {
+    if (!attachment || !attachment.publicId) return;
+    try {
+        const cloudinary = require('cloudinary').v2;
+        await cloudinary.uploader.destroy(attachment.publicId, {
+            resource_type: attachment.resourceType || 'raw'
+        });
+    } catch (err) {
+        console.error('destroyAnnouncementAttachment error:', err);
+    }
+};
+
+const buildAnnouncementPayload = (body = {}) => {
+    const isPinnedValue = parseBoolean(body.pinned !== undefined ? body.pinned : body.isPinned);
+    return {
+        title: normalizeString(body.title),
+        summary: normalizeString(body.summary),
+        content: normalizeString(body.content),
+        category: normalizeString(body.category) || 'General',
+        priority: normalizeString(body.priority) || 'medium',
+        status: normalizeString(body.status) || 'published',
+        audienceType: normalizeString(body.audienceType) || 'all',
+        audienceDepartments: parseArrayValue(body.audienceDepartments),
+        audienceEmploymentTypes: parseArrayValue(body.audienceEmploymentTypes),
+        audienceUserIds: normalizeAudienceUserObjectIds(parseArrayValue(body.audienceUserIds)),
+        pinned: isPinnedValue,
+        isPinned: isPinnedValue,
+        pinnedAt: isPinnedValue ? new Date() : null,
+        pinExpiresAt: toValidDate(body.pinExpiresAt || body.expiresAt),
+        expiresAt: toValidDate(body.expiresAt || body.pinExpiresAt),
+        scheduledFor: toValidDate(body.scheduledFor),
+        isRecurring: parseBoolean(body.isRecurring),
+        recurringInterval: normalizeString(body.recurringInterval) || null,
+        requireAcknowledgement: parseBoolean(body.requireAcknowledgement)
+    };
+};
+
+const validateAnnouncementPayload = async (payload = {}) => {
+    if (!payload.title) return 'Announcement title is required.';
+    if (exceedsMaxLength(payload.title, ANNOUNCEMENT_FIELD_LIMITS.title)) {
+        return `Title cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.title} characters.`;
+    }
+    if (payload.summary && exceedsMaxLength(payload.summary, ANNOUNCEMENT_FIELD_LIMITS.summary)) {
+        return `Summary cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.summary} characters.`;
+    }
+    if (!payload.content) return 'Announcement content is required.';
+    if (exceedsMaxLength(payload.content, ANNOUNCEMENT_FIELD_LIMITS.content)) {
+        return `Content cannot exceed ${ANNOUNCEMENT_FIELD_LIMITS.content} characters.`;
+    }
+    if (payload.category && !ANNOUNCEMENT_CATEGORIES.includes(payload.category)) {
+        return `Invalid category. Must be one of: ${ANNOUNCEMENT_CATEGORIES.join(', ')}.`;
+    }
+    return null;
+};
+
 module.exports = {
     ANNOUNCEMENT_CATEGORIES,
     AUDIENCE_TYPES,
@@ -561,6 +662,14 @@ module.exports = {
     isUserInAudience,
     buildUserDisplayName,
     buildAnnouncementScopeQuery,
+    buildVisibleAnnouncementQuery,
+    serializeAnnouncement,
+    serializeCommunityMember,
+    isAnnouncementExpired,
+    buildUploadedAttachment,
+    destroyAnnouncementAttachment,
+    buildAnnouncementPayload,
+    validateAnnouncementPayload,
     sanitizeUser,
     formatReactionItem,
     formatCommentItem,

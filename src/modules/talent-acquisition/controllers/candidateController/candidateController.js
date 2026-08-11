@@ -5,10 +5,34 @@ const mongoose = require('mongoose');
 exports.getPreviousCandidates = async (req, res) => {
     try {
         const { id } = req.params;
-        const currentReq = await HiringRequest.findOne({ _id: id, companyId: req.companyId });
-        if (!currentReq) {
-            return res.status(404).json({ message: 'Hiring request not found' });
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.json([]);
         }
+
+        const currentReq = await HiringRequest.findById(id);
+        if (!currentReq || !currentReq.previousRequestId) {
+            return res.json([]);
+        }
+
+        // Trace previous requisitions in chain
+        const prevReqIds = [];
+        let cur = currentReq;
+        while (cur && cur.previousRequestId) {
+            const prevId = cur.previousRequestId._id || cur.previousRequestId;
+            if (!prevId || !mongoose.Types.ObjectId.isValid(prevId)) break;
+            if (prevReqIds.includes(String(prevId))) break;
+            prevReqIds.push(String(prevId));
+            cur = await HiringRequest.findById(prevId).select('previousRequestId');
+        }
+
+        if (prevReqIds.length === 0) {
+            return res.json([]);
+        }
+
+        const otherReqs = await HiringRequest.find({
+            companyId: currentReq.companyId || req.companyId,
+            _id: { $in: prevReqIds }
+        }).sort({ createdAt: -1 });
 
         const candidateSelect = [
             'candidateName',
@@ -27,36 +51,28 @@ exports.getPreviousCandidates = async (req, res) => {
             'profileShared'
         ].join(' ');
 
-        const otherReqs = await HiringRequest.find({
-            companyId: req.companyId,
-            _id: { $ne: id },
-            client: currentReq.client
-        }).select('_id requestId roleDetails.jobTitle status');
-
-        const otherReqIds = otherReqs.map(r => r._id);
-
-        let candidates = [];
-        if (otherReqIds.length > 0) {
-            candidates = await Candidate.find({
-                companyId: req.companyId,
-                hiringRequestId: { $in: otherReqIds }
+        const openings = await Promise.all(otherReqs.map(async (r) => {
+            const candidates = await Candidate.find({
+                hiringRequestId: r._id
             })
                 .select(candidateSelect)
-                .populate('hiringRequestId', 'requestId roleDetails.jobTitle')
                 .sort({ createdAt: -1 })
                 .lean();
-        }
 
-        res.json({
-            currentRequisition: {
-                _id: currentReq._id,
-                requestId: currentReq.requestId,
-                jobTitle: currentReq.roleDetails?.jobTitle,
-                client: currentReq.client
-            },
-            matchingRequisitionsCount: otherReqs.length,
-            candidates
-        });
+            return {
+                requisition: {
+                    _id: r._id,
+                    requestId: r.requestId || `REQ-${String(r._id).slice(-4)}`,
+                    title: r.roleDetails?.title || r.roleDetails?.jobTitle || 'Requisition',
+                    status: r.status || 'Closed',
+                    createdAt: r.createdAt || new Date(),
+                    closedAt: r.closedAt || r.updatedAt
+                },
+                candidates: candidates || []
+            };
+        }));
+
+        res.json(openings);
 
     } catch (error) {
         console.error('Error fetching previous candidates:', error);

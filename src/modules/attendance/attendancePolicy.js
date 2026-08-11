@@ -117,7 +117,18 @@ const resolveShiftForUser = ({ company, user }) => {
     return { shifts, shift };
 };
 
-const buildAttendancePolicy = ({ company, user, attendanceDate = new Date(), clockInTime = null }) => {
+const buildAttendancePolicy = (options = {}) => {
+    let company, user, attendanceDate, clockInTime, currentTime;
+    if (options && (options.settings || options.name || options.roles || options._id) && !options.company && !options.user) {
+        company = arguments[0];
+        user = arguments[1];
+        attendanceDate = arguments[2] || new Date();
+        clockInTime = arguments[3] || null;
+        currentTime = arguments[4] || new Date();
+    } else {
+        ({ company, user, attendanceDate = new Date(), clockInTime = null, currentTime = new Date() } = options || {});
+    }
+
     const mode = getAttendanceModeForUser({ company, user });
     const { shift } = resolveShiftForUser({ company, user });
     const shiftStartAt = shift?.shiftType === 'general'
@@ -145,7 +156,7 @@ const buildAttendancePolicy = ({ company, user, attendanceDate = new Date(), clo
         ), cutoffCandidates[0]);
     }
 
-    return {
+    const policyObj = {
         mode,
         shift,
         shiftStartAt,
@@ -153,6 +164,15 @@ const buildAttendancePolicy = ({ company, user, attendanceDate = new Date(), clo
         maxWorkingHours,
         endOfDayAt,
         autoCheckoutAt
+    };
+
+    const canClockIn = isWithinShiftWindow({ policy: policyObj, currentTime });
+    const denialReason = canClockIn ? null : 'Clock-in is not permitted for your shift right now.';
+
+    return {
+        ...policyObj,
+        canClockIn,
+        denialReason
     };
 };
 

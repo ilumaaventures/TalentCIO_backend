@@ -14,19 +14,19 @@ const TA_CAPABILITIES = {
 };
 
 const GLOBAL_CAPABILITY_PERMISSION_MAP = {
-    [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.all', 'ta.view'],
-    [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.all', 'ta.edit'],
-    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.all', 'ta.edit'],
-    [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.all', 'ta.interview.evaluate'],
-    [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.all'],
+    [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.all', 'ta.view', 'ta.candidate.view', 'ta.create', 'ta.edit', 'ta.hiring_request.manage'],
+    [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.all', 'ta.edit', 'ta.create'],
+    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.all', 'ta.edit', 'ta.schedule_interview'],
+    [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.all', 'ta.interview.evaluate', 'ta.candidate.edit'],
+    [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.all', 'ta.candidate.make_decision', 'ta.edit'],
     [TA_CAPABILITIES.TRANSFER]: ['ta.candidate.manage.all', 'ta.bulk_transfer'],
-    [TA_CAPABILITIES.CONFIG_ACCESS]: ['ta.config.view', 'ta.config.edit']
+    [TA_CAPABILITIES.CONFIG_ACCESS]: ['ta.config.view', 'ta.config.edit', 'ta.hiring_request.manage']
 };
 
 const ASSIGNED_CAPABILITY_PERMISSION_MAP = {
-    [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.view'],
-    [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
-    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.edit'],
+    [TA_CAPABILITIES.VIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.view', 'ta.view'],
+    [TA_CAPABILITIES.EDIT]: ['ta.candidate.manage.assigned', 'ta.candidate.edit', 'ta.edit'],
+    [TA_CAPABILITIES.SCHEDULE_INTERVIEW]: ['ta.candidate.manage.assigned', 'ta.candidate.edit', 'ta.edit'],
     [TA_CAPABILITIES.EVALUATE_ROUND]: ['ta.candidate.manage.assigned', 'ta.interview.evaluate', 'ta.candidate.edit'],
     [TA_CAPABILITIES.MAKE_DECISION]: ['ta.candidate.manage.assigned', 'ta.candidate.make_decision', 'ta.candidate.edit', 'ta.interview.evaluate'],
     [TA_CAPABILITIES.TRANSFER]: ['ta.candidate.manage.assigned', 'ta.candidate.transfer']
@@ -74,16 +74,12 @@ const normalizeId = (value) => {
 };
 
 const hasUnrestrictedCandidateCapabilityPermission = (user, capability) => {
-    const permissions = getUserPermissionKeys(user);
-    if (permissions.includes('*')) {
+    if (!user) return false;
+    if (user.isAdmin || user.isSystemAdmin || user.isSuperAdmin || user.hasAllPermissions || isHiringRequestAdmin(user)) {
         return true;
     }
-
-    if (capability === TA_CAPABILITIES.CONFIG_ACCESS) {
-        return false;
-    }
-
-    return permissions.includes('ta.candidate.manage.all');
+    const permissions = getUserPermissionKeys(user);
+    return permissions.includes('*') || permissions.includes('admin');
 };
 
 const findAccessibleHiringRequestIds = async ({
@@ -301,17 +297,13 @@ const canAccessCandidateThroughHiringRequest = async ({
         return false;
     }
 
-    if (isHiringRequestAdmin(user)) {
-        return true;
-    }
-
     let resolvedHiringRequest = hiringRequest;
     if (!resolvedHiringRequest) {
         resolvedHiringRequest = await HiringRequest.findOne({
             _id: candidate.hiringRequestId?._id || candidate.hiringRequestId,
             companyId
         })
-            .select('createdBy ownership assignedUsers analyticsViewers')
+            .select('createdBy ownership assignedUsers analyticsViewers client clientConfidential hiringDetails companyId')
             .lean();
     }
 
@@ -328,8 +320,13 @@ const canAccessCandidateThroughHiringRequest = async ({
         return true;
     }
 
-    if (hasUnrestrictedCandidateCapabilityPermission(user, capability) || hasGlobalCapabilityPermission(user, capability)) {
-        return true;
+    if (isHiringRequestAdmin(user) || hasUnrestrictedCandidateCapabilityPermission(user, capability) || hasGlobalCapabilityPermission(user, capability)) {
+        return matchesTABacHiringRequest({
+            companyId: companyId || resolvedHiringRequest?.companyId,
+            user,
+            hiringRequest: resolvedHiringRequest,
+            action: getTABacActionForCapability(capability)
+        });
     }
 
     return canAccessHiringRequestForCapability(resolvedHiringRequest, user, capability, companyId);
@@ -405,22 +402,33 @@ const buildAccessibleCandidateQueryForCapability = async (
             return baseQuery;
         }
 
-        const globalAccessOr = [
-            { hiringRequestId: { $nin: restrictedAssignedRequestIds } },
-            { hiringRequestId: { $in: restrictedAssignedRequestIds } }
+        const accessOr = [
+            { hiringRequestId: { $nin: restrictedAssignedRequestIds } }
         ];
 
-        if (capability === TA_CAPABILITIES.VIEW) {
-            globalAccessOr.push(
-                { 'interviewRounds.assignedTo': user._id },
-                { 'interviewRounds.evaluatedBy': user._id }
-            );
+        if (
+            [
+                TA_CAPABILITIES.VIEW,
+                TA_CAPABILITIES.EDIT,
+                TA_CAPABILITIES.SCHEDULE_INTERVIEW,
+                TA_CAPABILITIES.EVALUATE_ROUND,
+                TA_CAPABILITIES.MAKE_DECISION
+            ].includes(capability) ||
+            hasAssignedCapabilityPermission(user, capability)
+        ) {
+            accessOr.push({
+                hiringRequestId: { $in: restrictedAssignedRequestIds },
+                $or: [
+                    { 'interviewRounds.assignedTo': user._id },
+                    { 'interviewRounds.evaluatedBy': user._id }
+                ]
+            });
         }
 
         return {
             $and: [
                 baseQuery,
-                { $or: globalAccessOr }
+                { $or: accessOr }
             ]
         };
     }

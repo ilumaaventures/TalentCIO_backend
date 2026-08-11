@@ -268,7 +268,7 @@ onboardingEmployeeSchema.methods.matchPassword = async function (enteredPassword
 };
 
 const seedOnboardingEmployeeSequenceCounter = async (companyId, year) => {
-    const SequenceCounter = require('./SequenceCounter');
+    const SequenceCounter = require('../../workflow/sequenceCounter.model');
     const existingCounter = await SequenceCounter.findOne({
         companyId,
         key: 'onboarding_emp',
@@ -316,7 +316,7 @@ const seedOnboardingEmployeeSequenceCounter = async (companyId, year) => {
 
 // Generate Temp Employee ID — atomic via SequenceCounter to prevent race conditions
 onboardingEmployeeSchema.statics.generateTempId = async function (companyId) {
-    const SequenceCounter = require('./SequenceCounter');
+    const SequenceCounter = require('../../workflow/sequenceCounter.model');
     const year = parseInt(new Date().toLocaleString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' }), 10);
 
     await seedOnboardingEmployeeSequenceCounter(companyId, year);

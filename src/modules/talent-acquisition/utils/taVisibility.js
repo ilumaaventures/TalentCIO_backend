@@ -77,6 +77,22 @@ const canViewAllInterviewFeedback = (user) => {
         || permissions.includes('*');
 };
 
+const canViewCandidateDetailsPage = (user) => {
+    if (!user) return false;
+    if (isHiringRequestAdmin(user) || user.isAdmin || user.isSystemAdmin || user.isSuperAdmin || user.hasAllPermissions) {
+        return true;
+    }
+    const permissions = getUserPermissionKeys(user);
+    return permissions.includes('*')
+        || permissions.includes('admin')
+        || permissions.includes('ta.candidate.manage.all')
+        || permissions.includes('ta.candidate.manage.assigned')
+        || permissions.includes('ta.candidate.view')
+        || permissions.includes('ta.view')
+        || permissions.includes('ta.create')
+        || permissions.includes('ta.edit');
+};
+
 const normalizeId = (value) => {
     if (!value) return '';
     if (typeof value === 'string') return value;
@@ -236,6 +252,14 @@ const serializeCandidateForViewer = ({
 };
 
 module.exports = {
+    canViewConfidentialClient,
+    canViewCandidatePII,
+    canViewBudget,
+    canDownloadResume,
+    canViewOfferDetails,
+    canViewAllInterviewFeedback,
+    canViewRoundFeedback,
+    canViewCandidateDetailsPage,
     serializeCandidateForViewer,
     serializeHiringRequestForViewer
 };

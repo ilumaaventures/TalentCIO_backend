@@ -277,9 +277,29 @@ const getPhaseDecisionOption = (phase, decisionValue) => (
     (phase?.decisionOptions || []).find((option) => option.value === decisionValue) || null
 );
 
-const getPhaseStatusOption = (phase, statusValue) => (
-    (phase?.statusOptions || []).find((option) => option.value === statusValue) || null
-);
+const getPhaseStatusOption = (phase, statusValue) => {
+    if (!phase || !statusValue || typeof statusValue !== 'string') {
+        return null;
+    }
+    const trimmed = statusValue.trim();
+    if (!trimmed) {
+        return null;
+    }
+    const normalized = normalizeValue(trimmed);
+    return (phase.statusOptions || []).find((option) => (
+        option.value === trimmed ||
+        (option.label && option.label.toLowerCase() === trimmed.toLowerCase()) ||
+        normalizeValue(option.value) === normalized ||
+        normalizeValue(option.label) === normalized
+    )) || null;
+};
+
+const getValidStatusesForPhase = (phase) => {
+    if (!phase || !Array.isArray(phase.statusOptions)) {
+        return [];
+    }
+    return phase.statusOptions.map((opt) => opt.value);
+};
 
 const calculateDaysSpent = (enteredAt, exitedAt) => {
     const start = enteredAt ? new Date(enteredAt) : null;
@@ -305,6 +325,7 @@ module.exports = {
     getDefaultStatusOption,
     getPhaseDecisionOption,
     getPhaseStatusOption,
+    getValidStatusesForPhase,
     isActiveHiringRequestStatus,
     isDynamicHiringRequest,
     isPlainObject,

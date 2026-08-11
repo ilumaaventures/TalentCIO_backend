@@ -407,6 +407,17 @@ candidateSchema.index(
     }
 );
 
+candidateSchema.index(
+    { hiringRequestId: 1, mobile: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            isDeleted: { $ne: true },
+            mobile: { $exists: true, $ne: '' }
+        }
+    }
+);
+
 // Performance Indexes
 candidateSchema.index({ hiringRequestId: 1, status: 1 });
 candidateSchema.index({ hiringRequestId: 1, decision: 1 });
@@ -430,7 +441,7 @@ candidateSchema.pre('save', async function candidatePreSave() {
         return;
     }
 
-    const { HiringRequest } = require('./HiringRequest');
+    const { HiringRequest } = require('./hiringRequest.model');
     const hiringRequest = await HiringRequest.findOne({
         _id: this.hiringRequestId,
         companyId: this.companyId
