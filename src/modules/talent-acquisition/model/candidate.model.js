@@ -301,6 +301,8 @@ const candidateSchema = new mongoose.Schema({
         emailAccountId: { type: String, trim: true, default: null },
         cc: { type: String, trim: true, default: '' },
         bcc: { type: String, trim: true, default: '' },
+        customSubject: { type: String, default: '' },
+        customHtmlBody: { type: String, default: '' },
         mailSent: { type: Boolean, default: false },
         mailSentAt: { type: Date, default: null },
         lastMailDetails: {

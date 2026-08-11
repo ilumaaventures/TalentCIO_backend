@@ -110,18 +110,36 @@ const getCompanyEmailBranding = async (companyId, company = null) => {
 exports.sendMassMail = async (req, res) => {
     try {
         const { id } = req.params;
-        const {
+        let {
             candidateIds,
+            filters,
             templateId,
             emailSubject,
+            customSubject,
+            subject,
             emailHtmlBody,
+            customHtmlBody,
+            body,
+            customNote,
             emailAccountId,
             cc,
             bcc
         } = req.body;
 
-        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
-            return res.status(400).json({ message: 'At least one candidate must be selected.' });
+        if (typeof candidateIds === 'string') {
+            try {
+                candidateIds = JSON.parse(candidateIds);
+            } catch (e) {
+                candidateIds = candidateIds ? [candidateIds] : [];
+            }
+        }
+
+        if (typeof filters === 'string') {
+            try {
+                filters = JSON.parse(filters);
+            } catch (e) {
+                filters = {};
+            }
         }
 
         const hiringRequest = await HiringRequest.findOne({
@@ -138,11 +156,23 @@ exports.sendMassMail = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to email candidates for this request.' });
         }
 
-        const candidates = await Candidate.find({
-            _id: { $in: candidateIds },
+        let query = {
             hiringRequestId: id,
             companyId: req.companyId
-        });
+        };
+
+        if (Array.isArray(candidateIds) && candidateIds.length > 0) {
+            query._id = { $in: candidateIds };
+        } else if (filters && typeof filters === 'object' && Object.keys(filters).length > 0) {
+            if (Array.isArray(filters.status) && filters.status.length > 0) query.status = { $in: filters.status };
+            if (Array.isArray(filters.decision) && filters.decision.length > 0) query.decision = { $in: filters.decision };
+            if (Array.isArray(filters.phase2Decision) && filters.phase2Decision.length > 0) query.phase2Decision = { $in: filters.phase2Decision };
+            if (Array.isArray(filters.phase3Decision) && filters.phase3Decision.length > 0) query.phase3Decision = { $in: filters.phase3Decision };
+        } else {
+            return res.status(400).json({ message: 'At least one candidate must be selected.' });
+        }
+
+        const candidates = await Candidate.find(query);
 
         if (candidates.length === 0) {
             return res.status(404).json({ message: 'No valid candidates found for this hiring request.' });
@@ -157,19 +187,28 @@ exports.sendMassMail = async (req, res) => {
                 templateType: 'talent_acquisition',
                 isActive: true
             }).lean();
-
-            if (!selectedTemplate) {
-                return res.status(404).json({ message: 'Selected email template was not found.' });
-            }
         }
 
+        const incomingSubject = (customSubject !== undefined && customSubject !== null && String(customSubject).trim() !== '')
+            ? customSubject
+            : ((emailSubject !== undefined && emailSubject !== null && String(emailSubject).trim() !== '')
+                ? emailSubject
+                : ((subject !== undefined && subject !== null && String(subject).trim() !== '') ? subject : ''));
+
+        const incomingHtmlBody = (customHtmlBody !== undefined && customHtmlBody !== null && String(customHtmlBody).trim() !== '')
+            ? customHtmlBody
+            : ((emailHtmlBody !== undefined && emailHtmlBody !== null && String(emailHtmlBody).trim() !== '')
+                ? emailHtmlBody
+                : ((body !== undefined && body !== null && String(body).trim() !== '') ? body : ''));
+
         const subjectTemplate = String(
-            emailSubject
+            incomingSubject
             || selectedTemplate?.subject
             || DEFAULT_MASS_MAIL_SUBJECT
         ).trim();
+
         const bodyTemplate = String(
-            emailHtmlBody
+            incomingHtmlBody
             || selectedTemplate?.htmlBody
             || DEFAULT_MASS_MAIL_BODY
         );
@@ -234,7 +273,8 @@ exports.sendMassMail = async (req, res) => {
                     candidate,
                     hiringRequest,
                     companyName,
-                    recruiterName
+                    recruiterName,
+                    customData: { customNote: customNote || '' }
                 });
 
                 const resolvedSubject = resolveTemplate(subjectTemplate, templateData);
@@ -353,7 +393,7 @@ exports.sendMassMail = async (req, res) => {
         res.json({
             message: `Mass mail process completed. Sent: ${sentCount}, Failed: ${failedCount}`,
             summary: {
-                totalRequested: candidateIds.length,
+                totalRequested: candidateIds?.length || candidates.length,
                 totalTargeted: candidates.length,
                 sentCount,
                 failedCount
@@ -369,15 +409,28 @@ exports.sendMassMail = async (req, res) => {
 
 exports.sendMassMailBulk = async (req, res) => {
     try {
-        const {
+        let {
             candidateIds,
             templateId,
             emailSubject,
+            customSubject,
+            subject,
             emailHtmlBody,
+            customHtmlBody,
+            body,
+            customNote,
             emailAccountId,
             cc,
             bcc
         } = req.body;
+
+        if (typeof candidateIds === 'string') {
+            try {
+                candidateIds = JSON.parse(candidateIds);
+            } catch (e) {
+                candidateIds = candidateIds ? [candidateIds] : [];
+            }
+        }
 
         if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
             return res.status(400).json({ message: 'At least one candidate must be selected.' });
@@ -412,19 +465,28 @@ exports.sendMassMailBulk = async (req, res) => {
                 templateType: 'talent_acquisition',
                 isActive: true
             }).lean();
-
-            if (!selectedTemplate) {
-                return res.status(404).json({ message: 'Selected email template was not found.' });
-            }
         }
 
+        const incomingSubject = (customSubject !== undefined && customSubject !== null && String(customSubject).trim() !== '')
+            ? customSubject
+            : ((emailSubject !== undefined && emailSubject !== null && String(emailSubject).trim() !== '')
+                ? emailSubject
+                : ((subject !== undefined && subject !== null && String(subject).trim() !== '') ? subject : ''));
+
+        const incomingHtmlBody = (customHtmlBody !== undefined && customHtmlBody !== null && String(customHtmlBody).trim() !== '')
+            ? customHtmlBody
+            : ((emailHtmlBody !== undefined && emailHtmlBody !== null && String(emailHtmlBody).trim() !== '')
+                ? emailHtmlBody
+                : ((body !== undefined && body !== null && String(body).trim() !== '') ? body : ''));
+
         const subjectTemplate = String(
-            emailSubject
+            incomingSubject
             || selectedTemplate?.subject
             || DEFAULT_MASS_MAIL_SUBJECT
         ).trim();
+
         const bodyTemplate = String(
-            emailHtmlBody
+            incomingHtmlBody
             || selectedTemplate?.htmlBody
             || DEFAULT_MASS_MAIL_BODY
         );
@@ -492,7 +554,8 @@ exports.sendMassMailBulk = async (req, res) => {
                     candidate,
                     hiringRequest,
                     companyName,
-                    recruiterName
+                    recruiterName,
+                    customData: { customNote: customNote || '' }
                 });
 
                 const resolvedSubject = resolveTemplate(subjectTemplate, templateData);

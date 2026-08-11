@@ -296,7 +296,7 @@ const addInterviewRound = async (req, res) => {
         }
 
         const FIXED_ASSIGN_AFTER_STAGES = new Set([
-            'Total Sourced', 'Interested', 'Shortlisted', 'Profile Shared', 'Selected', 'Rejected', 'Offer Sent', 'Offer Accepted', 'Joined', 'Offer Released'
+            'Total Sourced', 'Interested', 'Interview Scheduled', 'Shortlisted', 'Profile Shared', 'Offer Released', 'In Interview'
         ]);
         const normalizedAssignAfter = String(assignAfterStage || 'Shortlisted').trim();
         const existingRoundNames = new Set(
@@ -319,7 +319,9 @@ const addInterviewRound = async (req, res) => {
             emailTemplateId: emailTemplateId || null,
             emailAccountId: emailAccountId || null,
             cc: cc || '',
-            bcc: bcc || ''
+            bcc: bcc || '',
+            customSubject: customSubject || '',
+            customHtmlBody: customHtmlBody || ''
         };
 
         candidate.interviewRounds.push(newRound);
@@ -375,7 +377,9 @@ const addInterviewRound = async (req, res) => {
                 user: req.user,
                 cc,
                 bcc,
-                emailAccountId
+                emailAccountId,
+                customSubject,
+                customHtmlBody
             });
         }
 
@@ -394,7 +398,7 @@ const addInterviewRound = async (req, res) => {
 const updateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, status, rating, feedback, evaluatedBy } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, status, rating, feedback, evaluatedBy, customSubject, customHtmlBody } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -417,7 +421,9 @@ const updateInterviewRound = async (req, res) => {
                 status: status || candidate.phase2InterviewStatus || 'Scheduled',
                 feedback: feedback !== undefined ? feedback : (candidate.phase2InterviewerFeedback || ''),
                 rating: (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined,
-                customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : []
+                customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : [],
+                customSubject: customSubject || '',
+                customHtmlBody: customHtmlBody || ''
             };
             if (!Array.isArray(candidate.interviewRounds)) {
                 candidate.interviewRounds = [];
@@ -455,6 +461,8 @@ const updateInterviewRound = async (req, res) => {
         if (emailAccountId !== undefined) round.emailAccountId = emailAccountId || null;
         if (cc !== undefined) round.cc = cc || '';
         if (bcc !== undefined) round.bcc = bcc || '';
+        if (customSubject !== undefined) round.customSubject = customSubject || '';
+        if (customHtmlBody !== undefined) round.customHtmlBody = customHtmlBody || '';
 
         if (status !== undefined) round.status = status;
         if (rating !== undefined) round.rating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined;
@@ -496,7 +504,9 @@ const updateInterviewRound = async (req, res) => {
                 user: req.user,
                 cc,
                 bcc,
-                emailAccountId
+                emailAccountId,
+                customSubject: customSubject !== undefined ? customSubject : round.customSubject,
+                customHtmlBody: customHtmlBody !== undefined ? customHtmlBody : round.customHtmlBody
             });
         }
 
