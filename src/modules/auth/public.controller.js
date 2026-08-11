@@ -98,7 +98,11 @@ const verifyGoogleCredential = async (idToken) => {
 const buildPublicJobsQuery = ({ location, type, department, search }) => {
     const query = {
         isPublic: true,
-        status: { $in: ['Approved', 'Closed'] }
+        status: { $in: ['Approved', 'Closed'] },
+        $or: [
+            { reopenedToId: { $exists: false } },
+            { reopenedToId: null }
+        ]
     };
 
     if (location) {
@@ -118,10 +122,14 @@ const buildPublicJobsQuery = ({ location, type, department, search }) => {
 
     if (search) {
         const regex = { $regex: escapeRegex(search), $options: 'i' };
-        query.$or = [
-            { 'roleDetails.title': regex },
-            { 'roleDetails.department': regex },
-            { client: regex }
+        query.$and = [
+            {
+                $or: [
+                    { 'roleDetails.title': regex },
+                    { 'roleDetails.department': regex },
+                    { client: regex }
+                ]
+            }
         ];
     }
 

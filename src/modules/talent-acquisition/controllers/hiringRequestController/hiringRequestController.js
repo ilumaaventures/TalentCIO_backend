@@ -109,6 +109,14 @@ exports.createHiringRequest = async (req, res) => {
             });
         }
 
+        let previousReq = null;
+        if (req.body.previousRequestId && mongoose.Types.ObjectId.isValid(req.body.previousRequestId)) {
+            previousReq = await HiringRequest.findOne({
+                _id: req.body.previousRequestId,
+                companyId: req.companyId
+            });
+        }
+
         let hiringRequestData = {
             ...req.body,
             companyId: req.companyId,
@@ -117,6 +125,11 @@ exports.createHiringRequest = async (req, res) => {
             client: normalizedClientName,
             workflowId: validWorkflowId || (workflow ? workflow._id : null),
             interviewWorkflowId: validInterviewWorkflowId,
+            previousRequestId: previousReq ? previousReq._id : undefined,
+            isPublic: req.body.isPublic !== undefined ? Boolean(req.body.isPublic) : (previousReq ? Boolean(previousReq.isPublic) : false),
+            isJobVisible: req.body.isJobVisible !== undefined ? Boolean(req.body.isJobVisible) : (previousReq ? Boolean(previousReq.isJobVisible ?? previousReq.isPublic) : false),
+            isResourceGatewayPublic: req.body.isResourceGatewayPublic !== undefined ? Boolean(req.body.isResourceGatewayPublic) : (previousReq ? Boolean(previousReq.isResourceGatewayPublic) : false),
+            wasEverPublished: req.body.wasEverPublished !== undefined ? Boolean(req.body.wasEverPublished) : (previousReq ? Boolean(previousReq.wasEverPublished || previousReq.isPublic) : false),
             roleDetails: {
                 department: 'General',
                 employmentType: 'Full-time',
@@ -220,6 +233,12 @@ exports.createHiringRequest = async (req, res) => {
             }
         }
 
+        if (previousReq) {
+            await HiringRequest.findByIdAndUpdate(previousReq._id, {
+                reopenedToId: savedRequest._id
+            });
+        }
+
         try {
             await copyTemplatePhasesForHiringRequest(savedRequest, req.companyId, req.user._id);
         } catch (copyErr) {
@@ -312,6 +331,8 @@ exports.getHiringRequests = async (req, res) => {
             .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
             .populate('approvalChain.specificApprover', 'firstName lastName email')
             .populate('approvalChain.actionBy', 'firstName lastName email')
+            .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
+            .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
@@ -360,7 +381,9 @@ exports.getHiringRequestById = async (req, res) => {
             .populate('recruitmentTeam.hiringManager', 'firstName lastName email')
             .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
             .populate('approvalChain.specificApprover', 'firstName lastName email')
-            .populate('approvalChain.actionBy', 'firstName lastName email');
+            .populate('approvalChain.actionBy', 'firstName lastName email')
+            .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
+            .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt');
 
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
@@ -407,10 +430,10 @@ exports.updateHiringRequest = async (req, res) => {
             client
         } = req.body;
 
-        if (roleDetails) hiringRequest.roleDetails = { ...hiringRequest.roleDetails, ...roleDetails };
-        if (employmentDetails) hiringRequest.employmentDetails = { ...hiringRequest.employmentDetails, ...employmentDetails };
-        if (req.body.hiringDetails) hiringRequest.hiringDetails = { ...hiringRequest.hiringDetails, ...req.body.hiringDetails };
-        if (req.body.requirements) hiringRequest.requirements = { ...hiringRequest.requirements, ...req.body.requirements };
+        if (roleDetails) hiringRequest.roleDetails = { ...(hiringRequest.roleDetails?.toObject?.() || hiringRequest.roleDetails || {}), ...roleDetails };
+        if (employmentDetails) hiringRequest.employmentDetails = { ...(hiringRequest.employmentDetails?.toObject?.() || hiringRequest.employmentDetails || {}), ...employmentDetails };
+        if (req.body.hiringDetails) hiringRequest.hiringDetails = { ...(hiringRequest.hiringDetails?.toObject?.() || hiringRequest.hiringDetails || {}), ...req.body.hiringDetails };
+        if (req.body.requirements) hiringRequest.requirements = { ...(hiringRequest.requirements?.toObject?.() || hiringRequest.requirements || {}), ...req.body.requirements };
 
         if (req.body.workflowId !== undefined) {
             hiringRequest.workflowId = (req.body.workflowId && mongoose.Types.ObjectId.isValid(req.body.workflowId))
@@ -661,6 +684,14 @@ exports.approveHiringRequest = async (req, res) => {
             }
         } else {
             hiringRequest.status = 'Approved';
+            if (hiringRequest.isPublic && hiringRequest.previousRequestId) {
+                const prevId = hiringRequest.previousRequestId._id || hiringRequest.previousRequestId;
+                await HiringRequest.findByIdAndUpdate(prevId, {
+                    isPublic: false,
+                    isJobVisible: false,
+                    isResourceGatewayPublic: false
+                });
+            }
             const reqTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Requisition';
 
             await NotificationService.createNotification(io, {
@@ -773,7 +804,41 @@ exports.closeHiringRequest = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to close this hiring request' });
         }
 
-        hiringRequest.status = 'Closed';
+        const { mode, closeCount, unpublishFromJobBoard } = req.body;
+
+        if (unpublishFromJobBoard) {
+            hiringRequest.isPublic = false;
+            hiringRequest.isJobVisible = false;
+            hiringRequest.isResourceGatewayPublic = false;
+        }
+
+        if (!hiringRequest.hiringDetails) {
+            hiringRequest.hiringDetails = {};
+        }
+
+        const openPositions = Math.max(Number(hiringRequest.hiringDetails.openPositions) || 0, 0);
+        const closedPositions = Math.max(Number(hiringRequest.hiringDetails.closedPositions) || 0, 0);
+        const originalPositions = Math.max(Number(hiringRequest.hiringDetails.originalOpenPositions) || 0, openPositions + closedPositions, 1);
+
+        if (mode === 'partial') {
+            const countToClose = Math.min(Math.max(Number(closeCount) || 1, 1), openPositions);
+            const newOpenPositions = Math.max(openPositions - countToClose, 0);
+            const newClosedPositions = closedPositions + countToClose;
+
+            hiringRequest.hiringDetails.openPositions = newOpenPositions;
+            hiringRequest.hiringDetails.closedPositions = newClosedPositions;
+            hiringRequest.hiringDetails.originalOpenPositions = originalPositions;
+
+            if (newOpenPositions === 0) {
+                hiringRequest.status = 'Closed';
+            }
+        } else {
+            hiringRequest.hiringDetails.openPositions = 0;
+            hiringRequest.hiringDetails.closedPositions = originalPositions;
+            hiringRequest.hiringDetails.originalOpenPositions = originalPositions;
+            hiringRequest.status = 'Closed';
+        }
+
         await hiringRequest.save();
 
         res.json({ message: 'Hiring request closed successfully', hiringRequest });
@@ -810,6 +875,19 @@ exports.toggleJobVisibility = async (req, res) => {
             hiringRequest.isJobVisible = isJobVisible;
             if (isJobVisible) {
                 hiringRequest.wasEverPublished = true;
+                if (hiringRequest.previousRequestId) {
+                    const prevId = hiringRequest.previousRequestId._id || hiringRequest.previousRequestId;
+                    await HiringRequest.findByIdAndUpdate(prevId, { isPublic: false, isJobVisible: false });
+                }
+            } else {
+                if (hiringRequest.previousRequestId) {
+                    const prevId = hiringRequest.previousRequestId._id || hiringRequest.previousRequestId;
+                    await HiringRequest.findByIdAndUpdate(prevId, { isPublic: false, isJobVisible: false });
+                }
+                if (hiringRequest.reopenedToId) {
+                    const reopenedId = hiringRequest.reopenedToId._id || hiringRequest.reopenedToId;
+                    await HiringRequest.findByIdAndUpdate(reopenedId, { isPublic: false, isJobVisible: false });
+                }
             }
         }
 
@@ -818,6 +896,19 @@ exports.toggleJobVisibility = async (req, res) => {
             hiringRequest.isResourceGatewayPublic = isRgPublic;
             if (isRgPublic) {
                 hiringRequest.wasEverPublished = true;
+                if (hiringRequest.previousRequestId) {
+                    const prevId = hiringRequest.previousRequestId._id || hiringRequest.previousRequestId;
+                    await HiringRequest.findByIdAndUpdate(prevId, { isResourceGatewayPublic: false });
+                }
+            } else {
+                if (hiringRequest.previousRequestId) {
+                    const prevId = hiringRequest.previousRequestId._id || hiringRequest.previousRequestId;
+                    await HiringRequest.findByIdAndUpdate(prevId, { isResourceGatewayPublic: false });
+                }
+                if (hiringRequest.reopenedToId) {
+                    const reopenedId = hiringRequest.reopenedToId._id || hiringRequest.reopenedToId;
+                    await HiringRequest.findByIdAndUpdate(reopenedId, { isResourceGatewayPublic: false });
+                }
             }
         }
 
