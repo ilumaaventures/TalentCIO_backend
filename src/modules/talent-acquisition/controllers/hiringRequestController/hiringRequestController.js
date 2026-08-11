@@ -54,8 +54,8 @@ const populateFullHiringRequestDoc = (query) => {
         .populate('approvalChain.approvers', 'firstName lastName email employeeCode profilePicture')
         .populate('assignedUsers', 'firstName lastName email employeeCode profilePicture')
         .populate('analyticsViewers', 'firstName lastName email employeeCode profilePicture')
-        .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
-        .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt');
+        .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt closedAt updatedAt')
+        .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt closedAt updatedAt');
 };
 
 exports.createHiringRequest = async (req, res) => {
@@ -842,12 +842,18 @@ exports.closeHiringRequest = async (req, res) => {
 
             if (newOpenPositions === 0) {
                 hiringRequest.status = 'Closed';
+                if (!hiringRequest.closedAt) {
+                    hiringRequest.closedAt = new Date();
+                }
             }
         } else {
             hiringRequest.hiringDetails.openPositions = 0;
             hiringRequest.hiringDetails.closedPositions = originalPositions;
             hiringRequest.hiringDetails.originalOpenPositions = originalPositions;
             hiringRequest.status = 'Closed';
+            if (!hiringRequest.closedAt) {
+                hiringRequest.closedAt = new Date();
+            }
         }
 
         await hiringRequest.save();

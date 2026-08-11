@@ -835,3 +835,115 @@ exports.downloadTAEmailAttachment = async (req, res) => {
         res.status(500).json({ message: 'Failed to download attachment', error: error.message });
     }
 };
+
+exports.resendTAEmail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const originalLog = await TAEmailLog.findOne({
+            _id: id,
+            companyId: req.companyId
+        }).populate('candidateId').populate('hiringRequestId');
+
+        if (!originalLog) {
+            return res.status(404).json({ message: 'Email log not found.' });
+        }
+
+        const payload = req.body || {};
+        const recipientEmail = (payload.recipientEmail || originalLog.recipientEmail || originalLog.candidateId?.email || '').trim();
+        if (!recipientEmail) {
+            return res.status(400).json({ message: 'Recipient email is missing.' });
+        }
+
+        const subject = payload.subject || originalLog.subject || 'No Subject';
+        const body = payload.body || originalLog.body || '';
+        const cc = payload.cc !== undefined ? payload.cc : (originalLog.cc || '');
+        const bcc = payload.bcc !== undefined ? payload.bcc : (originalLog.bcc || '');
+
+        const company = await Company.findById(req.companyId).select('name logoUrl subdomain').lean();
+        const branding = await getCompanyEmailBranding(req.companyId, company);
+
+        const delivery = await resolveNotificationEmailDelivery(
+            req.companyId,
+            'ta_mass_mail_sent',
+            originalLog.emailAccountId
+        );
+
+        if (!delivery.shouldSendEmail) {
+            return res.status(400).json({ message: 'TA email delivery is disabled in notification settings.' });
+        }
+
+        const attachments = (originalLog.attachments || []).map(att => ({
+            filename: att.filename,
+            path: att.url || att.path || att.cloudinaryUrl
+        })).filter(att => att.path);
+
+        const emailHtml = body;
+        const emailText = hasHtmlMarkup(emailHtml) ? stripHtml(emailHtml) : emailHtml;
+
+        let sendResult = null;
+        let lastErr = null;
+        try {
+            sendResult = await sendEmailForCompany({
+                companyId: req.companyId,
+                emailAccountId: delivery.emailAccountId,
+                to: recipientEmail,
+                cc: cc || undefined,
+                bcc: bcc || undefined,
+                subject,
+                html: emailHtml,
+                text: emailText,
+                attachments,
+                ...branding
+            });
+        } catch (err) {
+            lastErr = err;
+        }
+
+        const senderName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || 'Recruiter';
+
+        const newLog = await TAEmailLog.create({
+            companyId: req.companyId,
+            hiringRequestId: originalLog.hiringRequestId?._id || originalLog.hiringRequestId || null,
+            hiringRequestTitle: originalLog.hiringRequestTitle || '',
+            candidateId: originalLog.candidateId?._id || originalLog.candidateId || null,
+            recipientName: originalLog.recipientName || 'Candidate',
+            recipientEmail,
+            sentBy: req.user._id,
+            senderName,
+            senderEmail: req.user.email || '',
+            templateId: originalLog.templateId || null,
+            templateName: originalLog.templateName || 'General Mail',
+            emailAccountId: delivery.emailAccountId || 'platform',
+            emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
+            cc,
+            bcc,
+            subject,
+            body: emailHtml,
+            attachments: originalLog.attachments || [],
+            status: sendResult ? 'Sent' : 'Failed',
+            errorReason: lastErr ? lastErr.message : '',
+            errorMessage: lastErr ? lastErr.message : '',
+            sentAt: new Date()
+        });
+
+        if (!sendResult && lastErr) {
+            return res.status(500).json({
+                message: `Failed to resend email: ${lastErr.message}`,
+                log: newLog
+            });
+        }
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`company_${req.companyId}`).emit('ta_email_logged', { log: newLog });
+        }
+
+        res.json({
+            message: `Email successfully resent to ${recipientEmail}`,
+            log: newLog
+        });
+    } catch (error) {
+        console.error('Error resending TA email:', error);
+        res.status(500).json({ message: 'Failed to resend email', error: error.message });
+    }
+};
