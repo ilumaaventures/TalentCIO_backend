@@ -8,7 +8,19 @@ const mongoose = require('mongoose');
 const { TA_CAPABILITIES, buildAccessibleCandidateQuery } = require('../utils/candidateAccess');
 const { ensureCandidateCapability } = require('../utils/candidateAccess');
 
-const sendInterviewScheduleEmails = async ({ companyId, candidate, round, user, cc, bcc, emailAccountId, customSubject, customHtmlBody }) => {
+const sendInterviewScheduleEmails = async ({
+    companyId,
+    candidate,
+    round,
+    user,
+    cc,
+    bcc,
+    emailAccountId,
+    customSubject,
+    customHtmlBody,
+    sendCandidateEmail = true,
+    sendInterviewerEmail = true
+}) => {
     try {
         if (!candidate) return;
 
@@ -143,7 +155,7 @@ Talent Acquisition Team`;
             </div>
         `;
 
-        if (candidate.email) {
+        if (sendCandidateEmail !== false && candidate.email) {
             const rawSubjectText = effectiveCustomSubject || template?.subject;
             const rawBodyText = effectiveCustomHtmlBody || template?.htmlBody;
 
@@ -224,7 +236,7 @@ Talent Acquisition Team`;
             }
         }
 
-        if (Array.isArray(round.assignedTo) && round.assignedTo.length > 0) {
+        if (sendInterviewerEmail !== false && Array.isArray(round.assignedTo) && round.assignedTo.length > 0) {
             for (const interviewerObj of round.assignedTo) {
                 const email = typeof interviewerObj === 'object' ? interviewerObj.email : null;
                 const interviewerName = typeof interviewerObj === 'object'
@@ -368,8 +380,11 @@ const addInterviewRound = async (req, res) => {
             });
         }
 
-        // Send email notifications to Candidate and Interviewer(s) ONLY if explicitly requested
-        if (req.body.sendEmail) {
+        // Send email notifications to Candidate and/or Interviewer(s)
+        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined ? Boolean(req.body.sendCandidateEmail) : Boolean(req.body.sendEmail);
+        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined ? Boolean(req.body.sendInterviewerEmail) : Boolean(req.body.sendEmail);
+
+        if (shouldSendCandidate || shouldSendInterviewer) {
             sendInterviewScheduleEmails({
                 companyId: req.companyId,
                 candidate: updatedCandidate,
@@ -379,7 +394,9 @@ const addInterviewRound = async (req, res) => {
                 bcc,
                 emailAccountId,
                 customSubject,
-                customHtmlBody
+                customHtmlBody,
+                sendCandidateEmail: shouldSendCandidate,
+                sendInterviewerEmail: shouldSendInterviewer
             });
         }
 
@@ -558,6 +575,9 @@ const sendInterviewRoundEmail = async (req, res) => {
 
         const updatedRound = updatedCandidate.interviewRounds.id(roundId);
 
+        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined ? Boolean(req.body.sendCandidateEmail) : (req.body.sendInterviewerEmail === undefined ? true : false);
+        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined ? Boolean(req.body.sendInterviewerEmail) : (req.body.sendCandidateEmail === undefined ? true : false);
+
         await sendInterviewScheduleEmails({
             companyId: req.companyId,
             candidate: updatedCandidate,
@@ -567,7 +587,9 @@ const sendInterviewRoundEmail = async (req, res) => {
             bcc: bcc !== undefined ? bcc : round.bcc,
             emailAccountId: emailAccountId || round.emailAccountId,
             customSubject,
-            customHtmlBody
+            customHtmlBody,
+            sendCandidateEmail: shouldSendCandidate,
+            sendInterviewerEmail: shouldSendInterviewer
         });
 
         res.status(200).json({
@@ -1049,12 +1071,21 @@ const bulkScheduleInterview = async (req, res) => {
 
                     const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
 
-                    const shouldSendEmail = roundConfig.sendEmail !== false && roundConfig.sendEmail !== 'false';
-                    const isSelectedForEmail = Array.isArray(roundConfig.emailCandidateIds)
+                    const shouldSendCandidateEmail = roundConfig.sendCandidateEmail !== undefined
+                        ? (roundConfig.sendCandidateEmail !== false && roundConfig.sendCandidateEmail !== 'false')
+                        : (roundConfig.sendEmail !== false && roundConfig.sendEmail !== 'false');
+
+                    const shouldSendInterviewerEmail = roundConfig.sendInterviewerEmail !== undefined
+                        ? (roundConfig.sendInterviewerEmail !== false && roundConfig.sendInterviewerEmail !== 'false')
+                        : (roundConfig.sendEmail !== false && roundConfig.sendEmail !== 'false');
+
+                    const isCandidateSelectedForEmail = Array.isArray(roundConfig.emailCandidateIds)
                         ? roundConfig.emailCandidateIds.map(String).includes(String(candidate._id))
                         : true;
 
-                    if (shouldSendEmail && isSelectedForEmail) {
+                    const effectiveSendCandidate = shouldSendCandidateEmail && isCandidateSelectedForEmail;
+
+                    if (effectiveSendCandidate || shouldSendInterviewerEmail) {
                         sendInterviewScheduleEmails({
                             companyId: req.companyId,
                             candidate: updatedCandidate,
@@ -1064,7 +1095,9 @@ const bulkScheduleInterview = async (req, res) => {
                             bcc: roundConfig.bcc,
                             emailAccountId: roundConfig.emailAccountId,
                             customSubject: roundConfig.customSubject,
-                            customHtmlBody: roundConfig.customHtmlBody
+                            customHtmlBody: roundConfig.customHtmlBody,
+                            sendCandidateEmail: effectiveSendCandidate,
+                            sendInterviewerEmail: shouldSendInterviewerEmail
                         });
                     }
                 }
