@@ -309,6 +309,22 @@ exports.updateEmployee = async (req, res) => {
             return res.status(404).json({ message: 'Employee not found' });
         }
 
+        // Handle email update separately — must check for duplicates first
+        if (req.body.email !== undefined) {
+            const newEmail = String(req.body.email).toLowerCase().trim();
+            if (newEmail && newEmail !== employee.email) {
+                const existing = await OnboardingEmployee.findOne({
+                    email: newEmail,
+                    companyId: req.companyId,
+                    _id: { $ne: employee._id }
+                });
+                if (existing) {
+                    return res.status(400).json({ message: 'An onboarding entry with this email already exists' });
+                }
+                employee.email = newEmail;
+            }
+        }
+
         const allowedFields = ['firstName', 'lastName', 'phone', 'designation', 'department', 'joiningDate', 'offerDate', 'documentDeadline', 'workLocation', 'address', 'probationPeriod', 'salary', 'status', 'selectionDraft'];
 
         allowedFields.forEach(field => {
@@ -378,6 +394,7 @@ exports.updateEmployee = async (req, res) => {
         console.error('Error updating onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
+
 };
 
 exports.regenerateCredentials = async (req, res) => {

@@ -195,57 +195,61 @@ exports.getMyOnboarding = async (req, res) => {
         const activeTemplateIds = (employeeObj.requestedDocuments || []).map(d => d.templateId?.toString()).filter(Boolean);
 
         if (activeSectionLabels.length > 0 || activeDocumentLabels.length > 0) {
-            if (activeSectionLabels.length > 0) {
-                if (!activeSectionLabels.includes('Personal Details')) {
-                    delete employeeObj.personalDetails;
-                }
-                if (!activeSectionLabels.includes('Emergency Contact')) {
-                    delete employeeObj.emergencyContact;
-                }
-                if (!activeSectionLabels.includes('Bank Details')) {
-                    delete employeeObj.bankDetails;
-                }
+            // Always gate sections — even if only documents were requested
+            if (!activeSectionLabels.includes('Personal Details')) {
+                delete employeeObj.personalDetails;
+            }
+            if (!activeSectionLabels.includes('Emergency Contact')) {
+                delete employeeObj.emergencyContact;
+            }
+            if (!activeSectionLabels.includes('Bank Details')) {
+                delete employeeObj.bankDetails;
+            }
 
-                const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
-                    activeDocumentLabels.includes('Offer Letter') ||
-                    dynamicTemplates.some(t => {
-                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
-                        if (hasIdAssigned) return true;
-                        return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
-                    });
+            const showOfferDeclaration = activeSectionLabels.includes('Offer Declaration') ||
+                activeDocumentLabels.includes('Offer Letter') ||
+                dynamicTemplates.some(t => {
+                    const idStr = t._id?.toString();
+                    if (idStr && activeTemplateIds.includes(idStr)) return true;
+                    return t.isDeleted !== true && activeDocumentLabels.includes(t.name);
+                });
 
-                if (!showOfferDeclaration) {
-                    delete employeeObj.offerDeclaration;
-                }
+            if (!showOfferDeclaration) {
+                delete employeeObj.offerDeclaration;
             }
 
             if (activeDocumentLabels.length > 0) {
                 if (employeeObj.documents) {
                     employeeObj.documents = employeeObj.documents.filter(doc =>
                         activeDocumentLabels.includes(doc.label) ||
+                        activeDocumentLabels.includes(doc.type) ||
                         activeDocumentLabels.some(al => doc.label.startsWith(al))
                     );
                 }
 
                 policies = policies.filter(p => {
-                    const hasIdAssigned = activeTemplateIds.includes(p._id.toString());
-                    if (hasIdAssigned) return true;
+                    const idStr = p._id?.toString();
+                    if (idStr && activeTemplateIds.includes(idStr)) return true;
                     return p.isDeleted !== true && activeDocumentLabels.includes(p.name);
                 });
 
                 dynamicTemplates = dynamicTemplates.filter(t => {
-                    const reqDoc = (employee.requestedDocuments || []).find(d => 
-                        d.templateId?.toString() === t._id.toString() || d.label === t.name
+                    const idStr = t._id?.toString();
+                    const reqDoc = (employee.requestedDocuments || []).find(d =>
+                        (idStr && d.templateId?.toString() === idStr) || d.label === t.name
                     );
-                    const isAccepted = (employee.offerDeclaration?.acceptedTemplates || []).some(at => at.templateId === t._id.toString());
+                    const isAccepted = idStr && (employee.offerDeclaration?.acceptedTemplates || []).some(at => at.templateId === idStr);
 
                     if (t.isDeleted !== true) {
-                        const hasIdAssigned = activeTemplateIds.includes(t._id.toString());
-                        if (hasIdAssigned) return true;
+                        if (idStr && activeTemplateIds.includes(idStr)) return true;
                         return activeDocumentLabels.includes(t.name);
                     }
                     return (reqDoc && reqDoc.emailSentAt) || isAccepted;
                 });
+            } else {
+                // No documents requested — filter out all policies and templates
+                policies = [];
+                dynamicTemplates = [];
             }
         }
 
