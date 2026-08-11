@@ -757,13 +757,16 @@ exports.getTAEmailHistory = async (req, res) => {
             TAEmailLog.countDocuments(query)
         ]);
 
+        const calculatedTotalPages = Math.ceil(total / limitNum) || 1;
+
         res.json({
             logs,
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
-                pages: Math.ceil(total / limitNum)
+                pages: calculatedTotalPages,
+                totalPages: calculatedTotalPages
             }
         });
 
