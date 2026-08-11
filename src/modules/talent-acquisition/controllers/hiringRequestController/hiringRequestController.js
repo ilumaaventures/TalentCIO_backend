@@ -41,6 +41,23 @@ const getNextHiringRequestId = async (companyId, session = null) => {
     return formatHiringRequestId(counter);
 };
 
+const populateFullHiringRequestDoc = (query) => {
+    return query
+        .populate('requestor', 'firstName lastName email employeeCode profilePicture')
+        .populate('createdBy', 'firstName lastName email employeeCode profilePicture')
+        .populate('ownership.hiringManager', 'firstName lastName email employeeCode profilePicture')
+        .populate('recruitmentTeam.hiringManager', 'firstName lastName email employeeCode profilePicture')
+        .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email employeeCode profilePicture')
+        .populate('approvalChain.specificApprover', 'firstName lastName email employeeCode profilePicture')
+        .populate('approvalChain.actionBy', 'firstName lastName email employeeCode profilePicture')
+        .populate('approvalChain.approvedBy', 'firstName lastName email employeeCode profilePicture')
+        .populate('approvalChain.approvers', 'firstName lastName email employeeCode profilePicture')
+        .populate('assignedUsers', 'firstName lastName email employeeCode profilePicture')
+        .populate('analyticsViewers', 'firstName lastName email employeeCode profilePicture')
+        .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
+        .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt');
+};
+
 exports.createHiringRequest = async (req, res) => {
     try {
         const {
@@ -323,16 +340,9 @@ exports.getHiringRequests = async (req, res) => {
         const totalPages = Math.ceil(totalRequests / limitNum) || 1;
         const skip = (pageNum - 1) * limitNum;
 
-        const requests = await HiringRequest.find(filterQuery)
-            .populate('requestor', 'firstName lastName email')
-            .populate('createdBy', 'firstName lastName email')
-            .populate('ownership.hiringManager', 'firstName lastName email')
-            .populate('recruitmentTeam.hiringManager', 'firstName lastName email')
-            .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
-            .populate('approvalChain.specificApprover', 'firstName lastName email')
-            .populate('approvalChain.actionBy', 'firstName lastName email')
-            .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
-            .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
+        const requests = await populateFullHiringRequestDoc(
+            HiringRequest.find(filterQuery)
+        )
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
@@ -371,19 +381,12 @@ exports.getHiringRequestPhases = async (req, res) => {
 
 exports.getHiringRequestById = async (req, res) => {
     try {
-        const hiringRequest = await HiringRequest.findOne({
-            _id: req.params.id,
-            companyId: req.companyId
-        })
-            .populate('requestor', 'firstName lastName email')
-            .populate('createdBy', 'firstName lastName email')
-            .populate('ownership.hiringManager', 'firstName lastName email')
-            .populate('recruitmentTeam.hiringManager', 'firstName lastName email')
-            .populate('recruitmentTeam.assignedRecruiters', 'firstName lastName email')
-            .populate('approvalChain.specificApprover', 'firstName lastName email')
-            .populate('approvalChain.actionBy', 'firstName lastName email')
-            .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt')
-            .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt');
+        const hiringRequest = await populateFullHiringRequestDoc(
+            HiringRequest.findOne({
+                _id: req.params.id,
+                companyId: req.companyId
+            })
+        );
 
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
@@ -582,9 +585,13 @@ exports.updateHiringRequest = async (req, res) => {
 
         await hiringRequest.save();
 
+        const populatedRequest = await populateFullHiringRequestDoc(
+            HiringRequest.findOne({ _id: hiringRequest._id, companyId: req.companyId })
+        );
+
         res.json({
             message: 'Hiring request updated successfully',
-            hiringRequest
+            hiringRequest: populatedRequest || hiringRequest
         });
     } catch (error) {
         console.error('Error updating hiring request:', error);
@@ -708,9 +715,13 @@ exports.approveHiringRequest = async (req, res) => {
 
         await hiringRequest.save();
 
+        const populatedRequest = await populateFullHiringRequestDoc(
+            HiringRequest.findOne({ _id: hiringRequest._id, companyId: req.companyId })
+        );
+
         res.json({
             message: hasNextLevel ? 'Approved level. Moved to next level.' : 'Hiring request fully approved.',
-            hiringRequest
+            hiringRequest: populatedRequest || hiringRequest
         });
 
     } catch (error) {
@@ -841,7 +852,11 @@ exports.closeHiringRequest = async (req, res) => {
 
         await hiringRequest.save();
 
-        res.json({ message: 'Hiring request closed successfully', hiringRequest });
+        const populatedRequest = await populateFullHiringRequestDoc(
+            HiringRequest.findOne({ _id: hiringRequest._id, companyId: req.companyId })
+        );
+
+        res.json({ message: 'Hiring request closed successfully', hiringRequest: populatedRequest || hiringRequest });
     } catch (error) {
         console.error('Error closing hiring request:', error);
         res.status(500).json({ message: 'Failed to close hiring request', error: error.message });
@@ -914,10 +929,14 @@ exports.toggleJobVisibility = async (req, res) => {
 
         await hiringRequest.save();
 
+        const populatedRequest = await populateFullHiringRequestDoc(
+            HiringRequest.findOne({ _id: hiringRequest._id, companyId: req.companyId })
+        );
+
         res.json({
             message: `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`,
-            hiringRequest,
-            job: hiringRequest
+            hiringRequest: populatedRequest || hiringRequest,
+            job: populatedRequest || hiringRequest
         });
     } catch (error) {
         console.error('Error toggling job visibility:', error);

@@ -83,7 +83,10 @@ exports.getPreviousCandidates = async (req, res) => {
 exports.transferCandidate = async (req, res) => {
     try {
         const { candidateId } = req.params;
-        const { targetRequisitionId } = req.body;
+        const targetRequisitionId = req.body?.targetRequisitionId
+            || req.body?.toRequisitionId
+            || req.params?.targetRequisitionId
+            || req.query?.targetRequisitionId;
 
         if (!targetRequisitionId) {
             return res.status(400).json({ message: 'Target hiring request ID is required' });
@@ -94,9 +97,13 @@ exports.transferCandidate = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
-        const targetReq = await HiringRequest.findOne({ _id: targetRequisitionId, companyId: req.companyId, status: { $in: ['Approved'] } });
+        const targetReq = await HiringRequest.findOne({
+            _id: targetRequisitionId,
+            companyId: req.companyId,
+            status: { $nin: ['Closed', 'Rejected'] }
+        });
         if (!targetReq) {
-            return res.status(404).json({ message: 'Target hiring request not found or not active' });
+            return res.status(404).json({ message: 'Target hiring request not found or is closed' });
         }
 
         if (candidate.hiringRequestId.toString() === targetRequisitionId.toString()) {
@@ -153,6 +160,11 @@ exports.transferCandidate = async (req, res) => {
 
         await newCandidate.save();
 
+        await Candidate.findByIdAndUpdate(candidate._id, {
+            isTransferred: true,
+            transferredTo: targetRequisitionId
+        });
+
         res.status(201).json({
             message: `Candidate ${candidate.candidateName} transferred successfully to ${targetReq.requestId}`,
             newCandidate
@@ -171,7 +183,7 @@ exports.transferCandidateToRequisition = async (req, res) => {
     try {
         const { targetRequisitionId, candidateId } = req.params;
 
-        req.body = { ...req.body, targetRequisitionId };
+        req.body = { ...(req.body || {}), targetRequisitionId };
         return exports.transferCandidate(req, res);
     } catch (error) {
         console.error('Error transferring candidate via path param:', error);
@@ -181,7 +193,12 @@ exports.transferCandidateToRequisition = async (req, res) => {
 
 exports.transferCandidatesBulk = async (req, res) => {
     try {
-        const { candidateIds, targetRequisitionId } = req.body;
+        let { candidateIds, targetRequisitionId, transfers } = req.body || {};
+
+        if (Array.isArray(transfers) && transfers.length > 0) {
+            candidateIds = transfers.map(t => t.candidateId || t._id).filter(Boolean);
+            targetRequisitionId = targetRequisitionId || transfers[0]?.toRequisitionId || transfers[0]?.targetRequisitionId;
+        }
 
         if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
             return res.status(400).json({ message: 'An array of candidateIds is required' });
@@ -194,11 +211,11 @@ exports.transferCandidatesBulk = async (req, res) => {
         const targetReq = await HiringRequest.findOne({
             _id: targetRequisitionId,
             companyId: req.companyId,
-            status: { $in: ['Approved'] }
+            status: { $nin: ['Closed', 'Rejected'] }
         });
 
         if (!targetReq) {
-            return res.status(404).json({ message: 'Target hiring request not found or not active' });
+            return res.status(404).json({ message: 'Target hiring request not found or is closed' });
         }
 
         const sourceCandidates = await Candidate.find({
