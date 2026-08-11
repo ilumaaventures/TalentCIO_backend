@@ -182,12 +182,15 @@ exports.sendMassMail = async (req, res) => {
         if (templateId) {
             selectedTemplate = await EmailTemplate.findOne({
                 _id: templateId,
-                companyId: req.companyId,
-                scope: 'general',
-                templateType: 'talent_acquisition',
-                isActive: true
+                companyId: req.companyId
             }).lean();
+
+            if (!selectedTemplate) {
+                selectedTemplate = await EmailTemplate.findById(templateId).lean();
+            }
         }
+
+        const resolvedTemplateName = selectedTemplate?.name || templateName || (templateId ? 'Saved Template' : 'Custom Mass Mail');
 
         const incomingSubject = (customSubject !== undefined && customSubject !== null && String(customSubject).trim() !== '')
             ? customSubject
@@ -229,7 +232,9 @@ exports.sendMassMail = async (req, res) => {
 
         const company = await Company.findById(req.companyId).select('name logoUrl subdomain').lean();
         const companyName = company?.name || 'TalentCIO';
-        const recruiterName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Talent Acquisition Team';
+        const senderName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || 'Recruiter';
+        const recruiterName = senderName || 'Talent Acquisition Team';
+        const hiringRequestTitle = hiringRequest?.roleDetails?.title || hiringRequest?.roleDetails?.jobTitle || hiringRequest?.positionName || '';
         const branding = await getCompanyEmailBranding(req.companyId, company);
 
         const delivery = await resolveNotificationEmailDelivery(
@@ -325,19 +330,25 @@ exports.sendMassMail = async (req, res) => {
                 await TAEmailLog.create({
                     companyId: req.companyId,
                     hiringRequestId: hiringRequest._id,
+                    hiringRequestTitle,
                     candidateId: candidate._id,
+                    recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                    recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    templateId: selectedTemplate?._id || null,
-                    templateName: selectedTemplate?.name || 'Custom Mass Mail',
+                    senderName,
+                    senderEmail: req.user.email || '',
+                    templateId: selectedTemplate?._id || (templateId || null),
+                    templateName: resolvedTemplateName,
                     emailAccountId: delivery.emailAccountId || 'platform',
                     emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
-                    recipientEmail: candidate.email,
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: resolvedSubject,
                     body: emailHtml,
                     attachments: attachments.map(att => ({
                         filename: att.filename,
+                        url: att.path,
+                        path: att.path,
                         cloudinaryUrl: att.path,
                         publicId: extractPublicIdFromUrl(att.path) || ''
                     })),
@@ -357,23 +368,30 @@ exports.sendMassMail = async (req, res) => {
                 await TAEmailLog.create({
                     companyId: req.companyId,
                     hiringRequestId: hiringRequest._id,
+                    hiringRequestTitle,
                     candidateId: candidate._id,
+                    recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                    recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    templateId: selectedTemplate?._id || null,
-                    templateName: selectedTemplate?.name || 'Custom Mass Mail',
+                    senderName,
+                    senderEmail: req.user.email || '',
+                    templateId: selectedTemplate?._id || (templateId || null),
+                    templateName: resolvedTemplateName,
                     emailAccountId: delivery.emailAccountId || 'platform',
                     emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
-                    recipientEmail: candidate.email,
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: subjectTemplate,
                     body: bodyTemplate,
                     attachments: attachments.map(att => ({
                         filename: att.filename,
+                        url: att.path,
+                        path: att.path,
                         cloudinaryUrl: att.path,
                         publicId: extractPublicIdFromUrl(att.path) || ''
                     })),
                     status: 'Failed',
+                    errorReason: candErr.message,
                     errorMessage: candErr.message,
                     sentAt: new Date()
                 });
@@ -412,6 +430,7 @@ exports.sendMassMailBulk = async (req, res) => {
         let {
             candidateIds,
             templateId,
+            templateName,
             emailSubject,
             customSubject,
             subject,
@@ -460,12 +479,15 @@ exports.sendMassMailBulk = async (req, res) => {
         if (templateId) {
             selectedTemplate = await EmailTemplate.findOne({
                 _id: templateId,
-                companyId: req.companyId,
-                scope: 'general',
-                templateType: 'talent_acquisition',
-                isActive: true
+                companyId: req.companyId
             }).lean();
+
+            if (!selectedTemplate) {
+                selectedTemplate = await EmailTemplate.findById(templateId).lean();
+            }
         }
+
+        const resolvedTemplateName = selectedTemplate?.name || templateName || (templateId ? 'Saved Template' : 'Custom Mass Mail');
 
         const incomingSubject = (customSubject !== undefined && customSubject !== null && String(customSubject).trim() !== '')
             ? customSubject
@@ -507,7 +529,8 @@ exports.sendMassMailBulk = async (req, res) => {
 
         const company = await Company.findById(req.companyId).select('name logoUrl subdomain').lean();
         const companyName = company?.name || 'TalentCIO';
-        const recruiterName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Talent Acquisition Team';
+        const senderName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || 'Recruiter';
+        const recruiterName = senderName || 'Talent Acquisition Team';
         const branding = await getCompanyEmailBranding(req.companyId, company);
 
         const delivery = await resolveNotificationEmailDelivery(
@@ -549,6 +572,7 @@ exports.sendMassMailBulk = async (req, res) => {
             try {
                 const reqId = candidate.hiringRequestId?._id?.toString() || candidate.hiringRequestId?.toString();
                 const hiringRequest = reqMap.get(reqId) || null;
+                const hiringRequestTitle = hiringRequest?.roleDetails?.title || hiringRequest?.roleDetails?.jobTitle || hiringRequest?.positionName || '';
 
                 const templateData = buildTATemplateData({
                     candidate,
@@ -606,10 +630,15 @@ exports.sendMassMailBulk = async (req, res) => {
                 await TAEmailLog.create({
                     companyId: req.companyId,
                     hiringRequestId: hiringRequest?._id || null,
+                    hiringRequestTitle,
                     candidateId: candidate._id,
+                    recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                    recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    templateId: selectedTemplate?._id || null,
-                    templateName: selectedTemplate?.name || 'Custom Mass Mail',
+                    senderName,
+                    senderEmail: req.user.email || '',
+                    templateId: selectedTemplate?._id || (templateId || null),
+                    templateName: resolvedTemplateName,
                     emailAccountId: delivery.emailAccountId || 'platform',
                     emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                     recipientEmail: candidate.email,
@@ -619,6 +648,8 @@ exports.sendMassMailBulk = async (req, res) => {
                     body: emailHtml,
                     attachments: attachments.map(att => ({
                         filename: att.filename,
+                        url: att.path,
+                        path: att.path,
                         cloudinaryUrl: att.path,
                         publicId: extractPublicIdFromUrl(att.path) || ''
                     })),
@@ -637,14 +668,20 @@ exports.sendMassMailBulk = async (req, res) => {
 
                 const reqId = candidate.hiringRequestId?._id?.toString() || candidate.hiringRequestId?.toString();
                 const hiringRequest = reqMap.get(reqId) || null;
+                const hiringRequestTitle = hiringRequest?.roleDetails?.title || hiringRequest?.roleDetails?.jobTitle || hiringRequest?.positionName || '';
 
                 await TAEmailLog.create({
                     companyId: req.companyId,
                     hiringRequestId: hiringRequest?._id || null,
+                    hiringRequestTitle,
                     candidateId: candidate._id,
+                    recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
+                    recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    templateId: selectedTemplate?._id || null,
-                    templateName: selectedTemplate?.name || 'Custom Mass Mail',
+                    senderName,
+                    senderEmail: req.user.email || '',
+                    templateId: selectedTemplate?._id || (templateId || null),
+                    templateName: resolvedTemplateName,
                     emailAccountId: delivery.emailAccountId || 'platform',
                     emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                     recipientEmail: candidate.email,
@@ -654,10 +691,13 @@ exports.sendMassMailBulk = async (req, res) => {
                     body: bodyTemplate,
                     attachments: attachments.map(att => ({
                         filename: att.filename,
+                        url: att.path,
+                        path: att.path,
                         cloudinaryUrl: att.path,
                         publicId: extractPublicIdFromUrl(att.path) || ''
                     })),
                     status: 'Failed',
+                    errorReason: candErr.message,
                     errorMessage: candErr.message,
                     sentAt: new Date()
                 });
