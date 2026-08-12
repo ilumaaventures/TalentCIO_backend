@@ -171,6 +171,12 @@ const candidateSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    relevantExperience: {
+        type: Number,
+        required: false,
+        default: 0,
+        min: 0
+    },
     qualification: {
         type: String,
         trim: true

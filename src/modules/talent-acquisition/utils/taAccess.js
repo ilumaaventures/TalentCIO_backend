@@ -37,6 +37,7 @@ const MINIMUM_INTERVIEWER_CANDIDATE_FIELDS = [
     'candidateName',
     'currentCompany',
     'totalExperience',
+    'relevantExperience',
     'qualification',
     'pastExperience',
     'currentLocation',
