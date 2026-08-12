@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
-const Company = require('../models/Company');
-const { decrypt } = require('../utils/encryption');
+const Company = require('../modules/company/company.model');
+const { decrypt } = require('../common/utils/encryption');
 const {
     getCompanyBranding,
     sendEmail,
