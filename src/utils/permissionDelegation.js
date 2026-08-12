@@ -1,4 +1,4 @@
-const PermissionDelegation = require('../models/PermissionDelegation');
+const PermissionDelegation = require('../modules/user/permissionDelegation.model');
 
 const normalizeId = (value) => {
     if (!value) return '';

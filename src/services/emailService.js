@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
-const Company = require('../models/Company');
+const Company = require('../modules/company/company.model');
 
 const DEFAULT_LOGO_LINK = 'https://talentcio.in';
 const DEFAULT_BRAND_COLOR = '#6366f1';

@@ -1,4 +1,4 @@
-const Permission = require('../models/Permission');
+const Permission = require('../modules/user/permission.model');
 const permissionConfig = require('../config/permissions');
 const {
     assignPermissionsToAdminRoles,
@@ -60,7 +60,7 @@ const syncPermissions = async () => {
         // 3. We will NOT mark permissions not in config as deprecated, 
         // to preserve any custom permissions added via UI, Compass, or other scripts.
 
-        const Role = require('../models/Role');
+        const Role = require('../modules/user/role.model');
         const legacyPermissions = await Permission.find({
             key: { $in: LEGACY_REMOVED_PERMISSION_KEYS }
         }).select('_id key');

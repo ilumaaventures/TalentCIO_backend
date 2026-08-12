@@ -1,5 +1,5 @@
-const Role = require('../models/Role');
-const Permission = require('../models/Permission');
+const Role = require('../modules/user/role.model');
+const Permission = require('../modules/user/permission.model');
 
 const ANNOUNCEMENT_MANAGER_ROLE_NAMES = new Set(['Admin', 'Manager', 'HR Admin', 'System Admin', 'Super Admin']);
 
