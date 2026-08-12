@@ -293,7 +293,7 @@ Talent Acquisition Team`;
 const addInterviewRound = async (req, res) => {
     try {
         const { id } = req.params;
-        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, customSubject, customHtmlBody } = req.body;
 
         const roundLevelName = String(levelName || 'Round 1').trim() || 'Round 1';
 
@@ -357,7 +357,7 @@ const addInterviewRound = async (req, res) => {
                 companyId: req.companyId,
                 preferenceKey: 'interview_assigned',
                 title: 'New Interview Assigned',
-                message: `You have been assigned to evaluate ${candidate.candidateName} for the ${levelName} round.`,
+                message: `You have been assigned to evaluate ${candidate.candidateName} for the ${roundLevelName} round.`,
                 type: 'Interview',
                 link: `/ta/hiring-request/${candidate.hiringRequestId._id || candidate.hiringRequestId}/candidate/${candidate._id}/view?phase=${roundPhase}`,
                 origin: req.headers.origin,
@@ -381,8 +381,12 @@ const addInterviewRound = async (req, res) => {
         }
 
         // Send email notifications to Candidate and/or Interviewer(s)
-        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined ? Boolean(req.body.sendCandidateEmail) : Boolean(req.body.sendEmail);
-        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined ? Boolean(req.body.sendInterviewerEmail) : Boolean(req.body.sendEmail);
+        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined 
+            ? (req.body.sendCandidateEmail !== false && req.body.sendCandidateEmail !== 'false') 
+            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : true);
+        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined 
+            ? (req.body.sendInterviewerEmail !== false && req.body.sendInterviewerEmail !== 'false') 
+            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : true);
 
         if (shouldSendCandidate || shouldSendInterviewer) {
             sendInterviewScheduleEmails({
@@ -575,8 +579,12 @@ const sendInterviewRoundEmail = async (req, res) => {
 
         const updatedRound = updatedCandidate.interviewRounds.id(roundId);
 
-        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined ? Boolean(req.body.sendCandidateEmail) : (req.body.sendInterviewerEmail === undefined ? true : false);
-        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined ? Boolean(req.body.sendInterviewerEmail) : (req.body.sendCandidateEmail === undefined ? true : false);
+        const shouldSendCandidate = req.body.sendCandidateEmail !== undefined 
+            ? (req.body.sendCandidateEmail !== false && req.body.sendCandidateEmail !== 'false') 
+            : (req.body.sendInterviewerEmail === undefined ? true : false);
+        const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined 
+            ? (req.body.sendInterviewerEmail !== false && req.body.sendInterviewerEmail !== 'false') 
+            : (req.body.sendCandidateEmail === undefined ? true : false);
 
         await sendInterviewScheduleEmails({
             companyId: req.companyId,
