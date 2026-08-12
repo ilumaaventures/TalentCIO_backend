@@ -16,6 +16,10 @@ const projectSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Client'
     },
+    businessUnit: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BusinessUnit'
+    },
     manager: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -34,6 +38,10 @@ const projectSchema = new mongoose.Schema({
         type: String,
         enum: ['Active', 'On Hold', 'Completed', 'Inactive'],
         default: 'Active'
+    },
+    hasModules: {
+        type: Boolean,
+        default: true
     },
     startDate: Date,
     dueDate: Date

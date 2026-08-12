@@ -860,6 +860,7 @@ exports.getProjectBootstrap = async (req, res) => {
         const [projects, clients, businessUnits, employees] = await Promise.all([
             Project.find(projectFilter)
                 .populate('client', 'name')
+                .populate('businessUnit', 'name')
                 .populate('members', '_id')
                 .sort({ createdAt: -1 })
                 .lean(),
