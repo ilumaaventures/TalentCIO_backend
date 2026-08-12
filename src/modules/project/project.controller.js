@@ -174,6 +174,7 @@ const getProjects = async (req, res) => {
 
         const projects = await Project.find(query)
             .populate('client', 'name')
+            .populate('businessUnit', 'name')
             .populate('manager', 'firstName lastName')
             .populate('members', 'firstName lastName') // Populate members to show them if needed
             .lean();
@@ -188,6 +189,7 @@ const getProjectHierarchy = async (req, res) => {
         const { id } = req.params;
         const project = await Project.findOne({ _id: id, companyId: req.companyId })
             .populate('client', 'name')
+            .populate('businessUnit', 'name')
             .populate('manager', 'firstName lastName')
             .populate('members', '_id') // Need IDs to check membership
             .lean();
