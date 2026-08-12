@@ -40,6 +40,7 @@ exports.getPreviousCandidates = async (req, res) => {
             'mobile',
             'source',
             'totalExperience',
+            'relevantExperience',
             'currentCTC',
             'expectedCTC',
             'noticePeriod',

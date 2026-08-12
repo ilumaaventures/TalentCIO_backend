@@ -66,6 +66,7 @@ const createCandidate = async (req, res) => {
             offerJoiningDate,
             preference,
             totalExperience,
+            relevantExperience,
             qualification,
             currentCompany,
             pastExperience,
@@ -205,6 +206,7 @@ const createCandidate = async (req, res) => {
                 compareAndUpdate('offerCTC', offerCTC, 'Offer CTC');
                 compareAndUpdate('offerJoiningDate', offerJoiningDate, 'Offer Joining Date');
                 compareAndUpdate('totalExperience', totalExperience, 'Experience');
+                compareAndUpdate('relevantExperience', relevantExperience, 'Relevant Experience');
                 compareAndUpdate('qualification', qualification, 'Qualification');
                 compareAndUpdate('currentCompany', currentCompany, 'Company');
                 compareAndUpdate('currentLocation', currentLocation, 'Location');
@@ -331,6 +333,7 @@ const createCandidate = async (req, res) => {
             offerJoiningDate,
             preference,
             totalExperience,
+            relevantExperience: relevantExperience !== undefined && relevantExperience !== null ? Number(relevantExperience) : 0,
             qualification,
             currentCompany,
             pastExperience,
@@ -550,7 +553,7 @@ const getShortlistedCandidates = async (req, res) => {
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName')
             .populate('interviewRounds.evaluatedBy', 'firstName lastName')
-            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings phase2Decision phase2InterviewerFeedback phase2InterviewStatus')
+            .select('candidateName email mobile status decision profileShared uploadedAt interviewRounds profilePulledBy calledBy rate totalExperience relevantExperience currentCTC expectedCTC pastExperience currentCompany offerCompany offerJoiningDate lastWorkingDay currentLocation preferredLocation noticePeriod tatToJoin qualification remark customRemark mustHaveSkills skillRatings phase2Decision phase2InterviewerFeedback phase2InterviewStatus')
             .sort({ uploadedAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -740,6 +743,7 @@ const updateCandidate = async (req, res) => {
             offerJoiningDate,
             preference,
             totalExperience,
+            relevantExperience,
             qualification,
             currentCompany,
             pastExperience,
@@ -809,6 +813,7 @@ const updateCandidate = async (req, res) => {
         if (offerJoiningDate !== undefined) candidate.offerJoiningDate = offerJoiningDate;
         if (preference !== undefined) candidate.preference = preference;
         if (totalExperience !== undefined) candidate.totalExperience = totalExperience;
+        if (relevantExperience !== undefined) candidate.relevantExperience = relevantExperience;
         if (qualification !== undefined) candidate.qualification = qualification;
         if (currentCompany !== undefined) candidate.currentCompany = currentCompany;
         if (pastExperience !== undefined) candidate.pastExperience = pastExperience;
