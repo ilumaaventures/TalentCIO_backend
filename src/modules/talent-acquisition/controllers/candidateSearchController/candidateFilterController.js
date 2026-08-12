@@ -1,6 +1,17 @@
 const Candidate = require('../../model/candidate.model');
 const { HiringRequest } = require('../../model/hiringRequest.model');
 const mongoose = require('mongoose');
+
+const isRoundScheduledStatus = (status) => {
+    const s = String(status || '').trim().toLowerCase();
+    if (!s || s === 'pending' || s === 'scheduled') return true;
+    const closed = ['passed', 'pass', 'shortlisted', 'failed', 'fail', 'rejected', 'did not turn up', 'did not turnup', 'dntu', 'skipped', 'no show', 'left in between', 'lib'];
+    return !closed.includes(s);
+};
+const isRoundPassedStatus = (status) => {
+    const s = String(status || '').trim().toLowerCase();
+    return s === 'passed' || s === 'pass' || s === 'shortlisted';
+};
 const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
