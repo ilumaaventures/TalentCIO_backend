@@ -26,8 +26,11 @@ const userSchema = new mongoose.Schema({
     department: String,
     employmentType: {
         type: String,
-        enum: ['Full Time', 'Part Time', 'Contract', 'Intern', 'Consultant', 'Freelance', 'Probation'],
         default: 'Full Time'
+    },
+    isTotalWorkforce: {
+        type: Boolean,
+        default: true
     },
     profilePicture: {
         type: String,

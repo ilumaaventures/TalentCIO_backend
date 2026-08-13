@@ -79,6 +79,7 @@ const getDashboardStats = async (req, res) => {
                         lastName: 1,
                         employmentType: 1,
                         workLocation: 1,
+                        isTotalWorkforce: 1,
                         roles: '$rolesResolved',
                         isSystemUser: {
                             $gt: [
@@ -106,7 +107,9 @@ const getDashboardStats = async (req, res) => {
             return !(u.isSystemUser && isPrimaryAccount);
         });
 
-        const nonSystemUserIds = filteredUsers.map(u => u._id);
+        // Exclude users configured as not part of Total Workforce (isTotalWorkforce === false)
+        const totalWorkforceUsers = filteredUsers.filter(u => u.isTotalWorkforce !== false);
+        const nonSystemUserIds = totalWorkforceUsers.map(u => u._id);
         const totalEmployees = nonSystemUserIds.length;
 
         const attendanceQuery = {

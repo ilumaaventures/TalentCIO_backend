@@ -27,7 +27,10 @@ const {
     getOwnBrandingSettings,
     updateOwnBrandingSettings,
     uploadOwnCompanyLogo,
-    removeOwnCompanyLogo
+    removeOwnCompanyLogo,
+    getCustomEmploymentTypes,
+    addCustomEmploymentType,
+    deleteCustomEmploymentType
 } = require('../company/company.controller');
 
 const companyLogoUpload = multer({
@@ -80,5 +83,10 @@ router.get('/company-settings/branding', admin, getOwnBrandingSettings);
 router.put('/company-settings/branding', admin, updateOwnBrandingSettings);
 router.post('/company-settings/branding/logo', admin, companyLogoUpload.single('logo'), uploadOwnCompanyLogo);
 router.delete('/company-settings/branding/logo', admin, removeOwnCompanyLogo);
+
+// Custom Employment Types
+router.get('/employment-types', getCustomEmploymentTypes);
+router.post('/employment-types', addCustomEmploymentType);
+router.delete('/employment-types/:name', deleteCustomEmploymentType);
 
 module.exports = router;

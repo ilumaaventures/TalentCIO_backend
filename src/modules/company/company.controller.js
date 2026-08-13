@@ -910,8 +910,8 @@ const getCompanyAnalytics = async (req, res) => {
         const company = await Company.findById(id);
         if (!company) return res.status(404).json({ message: 'Company not found' });
 
-        const totalEmployees = await User.countDocuments({ companyId: id });
-        const activeUsers = await User.countDocuments({ companyId: id, isActive: true });
+        const totalEmployees = await User.countDocuments({ companyId: id, isTotalWorkforce: { $ne: false } });
+        const activeUsers = await User.countDocuments({ companyId: id, isActive: true, isTotalWorkforce: { $ne: false } });
 
         // Employee growth last 12 months
         const now = new Date();
@@ -938,6 +938,77 @@ const getCompanyAnalytics = async (req, res) => {
     }
 };
 
+// GET /api/admin/employment-types
+const getCustomEmploymentTypes = async (req, res) => {
+    try {
+        const company = await Company.findById(req.companyId).select('customEmploymentTypes').lean();
+        const customTypes = company?.customEmploymentTypes || [];
+        return res.json({ customEmploymentTypes: customTypes });
+    } catch (error) {
+        console.error('getCustomEmploymentTypes error:', error);
+        return res.status(500).json({ message: 'Failed to fetch employment types' });
+    }
+};
+
+// POST /api/admin/employment-types
+const addCustomEmploymentType = async (req, res) => {
+    try {
+        const { name } = req.body;
+        const trimmed = String(name || '').trim();
+        if (!trimmed) {
+            return res.status(400).json({ message: 'Employment type name is required' });
+        }
+
+        const company = await Company.findById(req.companyId);
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        if (!company.customEmploymentTypes) {
+            company.customEmploymentTypes = [];
+        }
+
+        if (!company.customEmploymentTypes.includes(trimmed)) {
+            company.customEmploymentTypes.push(trimmed);
+            await company.save();
+            invalidateTenantCache(company.subdomain);
+        }
+
+        return res.json({
+            message: 'Employment type added successfully',
+            customEmploymentTypes: company.customEmploymentTypes
+        });
+    } catch (error) {
+        console.error('addCustomEmploymentType error:', error);
+        return res.status(500).json({ message: 'Failed to add employment type' });
+    }
+};
+
+// DELETE /api/admin/employment-types/:name
+const deleteCustomEmploymentType = async (req, res) => {
+    try {
+        const typeToDelete = decodeURIComponent(req.params.name).trim();
+        const company = await Company.findById(req.companyId);
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        if (company.customEmploymentTypes) {
+            company.customEmploymentTypes = company.customEmploymentTypes.filter(t => t !== typeToDelete);
+            await company.save();
+            invalidateTenantCache(company.subdomain);
+        }
+
+        return res.json({
+            message: 'Employment type deleted successfully',
+            customEmploymentTypes: company.customEmploymentTypes || []
+        });
+    } catch (error) {
+        console.error('deleteCustomEmploymentType error:', error);
+        return res.status(500).json({ message: 'Failed to delete employment type' });
+    }
+};
+
 module.exports = {
     getAllCompanies,
     getCompanyById,
@@ -951,5 +1022,8 @@ module.exports = {
     getOwnBrandingSettings,
     updateOwnBrandingSettings,
     uploadOwnCompanyLogo,
-    removeOwnCompanyLogo
+    removeOwnCompanyLogo,
+    getCustomEmploymentTypes,
+    addCustomEmploymentType,
+    deleteCustomEmploymentType,
 };

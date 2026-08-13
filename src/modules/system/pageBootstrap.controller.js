@@ -275,7 +275,7 @@ exports.getAttendanceBootstrap = async (req, res) => {
         const today = getStartOfDayIST();
 
         const targetUserPromise = User.findOne({ _id: targetUserId, companyId: req.companyId })
-            .select('firstName lastName email roles employmentType flexWeeklyOffCount customFlexibleOffDays joiningDate reportingManagers attendanceMode attendanceShiftCode')
+            .select('firstName lastName email roles employmentType flexWeeklyOffCount customFlexibleOffDays joiningDate reportingManagers attendanceMode attendanceShiftCode isTotalWorkforce')
             .populate('roles', 'name')
             .lean();
 

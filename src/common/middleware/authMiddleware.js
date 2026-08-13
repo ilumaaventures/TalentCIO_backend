@@ -76,7 +76,7 @@ const protect = async (req, res, next) => {
                 // CRIT-2: Run User fetch and Company fetch in parallel (was sequential)
                 const [userDoc, companyDoc] = await Promise.all([
                     User.findById(decoded.id)
-                        .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients')
+                        .select('firstName lastName email roles reportingManagers companyId tokenVersion joiningDate isActive department workLocation employmentType employeeCode profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode taAssignedClients isTotalWorkforce')
                         .lean(),
                     effectiveCompanyId
                         ? null // already have company on req (from tenantMiddleware)

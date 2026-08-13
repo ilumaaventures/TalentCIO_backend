@@ -84,7 +84,7 @@ const normalizeWorkLocation = (value) => {
     return value.trim();
 };
 
-const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode';
+const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce';
 
 const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
     User.find(
@@ -164,7 +164,7 @@ const getUsers = async (req, res) => {
 // @route   POST /api/users
 // @access  Private (Admin)
 const createUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, reportingManagers, attendanceMode, attendanceShiftCode, salary } = req.body;
+    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, reportingManagers, attendanceMode, attendanceShiftCode, isTotalWorkforce, salary } = req.body;
     console.log('Create User Body:', req.body); // DEBUG LOG
 
     try {
@@ -218,7 +218,8 @@ const createUser = async (req, res) => {
             joiningDate,
             reportingManagers: reportingManagers || [],
             attendanceMode: attendanceMode || 'clock_in_out',
-            attendanceShiftCode: attendanceShiftCode || 'general'
+            attendanceShiftCode: attendanceShiftCode || 'general',
+            isTotalWorkforce: isTotalWorkforce !== false,
         });
 
         // Handle Direct Reports
@@ -332,7 +333,7 @@ const updateUserRole = async (req, res) => {
 // @route   PUT /api/users/:id
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, attendanceMode, attendanceShiftCode, salary } = req.body;
+    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, attendanceMode, attendanceShiftCode, isTotalWorkforce, salary } = req.body;
     console.log('Update User Body:', req.body); // DEBUG LOG
     try {
         const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
@@ -364,6 +365,9 @@ const updateUser = async (req, res) => {
         user.employeeCode = employeeCode || user.employeeCode;
         user.attendanceMode = attendanceMode || user.attendanceMode;
         user.attendanceShiftCode = attendanceShiftCode || user.attendanceShiftCode;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'isTotalWorkforce')) {
+            user.isTotalWorkforce = isTotalWorkforce !== false;
+        }
         if (joiningDate) user.joiningDate = joiningDate;
         if (Object.prototype.hasOwnProperty.call(req.body, 'flexWeeklyOffCount')) {
             user.flexWeeklyOffCount = req.body.flexWeeklyOffCount !== null && req.body.flexWeeklyOffCount !== '' && req.body.flexWeeklyOffCount !== undefined
@@ -621,7 +625,7 @@ const getUserById = async (req, res) => {
             null,
             includeDeleted ? { includeDeleted: true } : undefined
         )
-            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode')
+            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce')
             .populate('roles', 'name isSystem')
             .populate('reportingManagers', 'firstName lastName email')
             .lean();
