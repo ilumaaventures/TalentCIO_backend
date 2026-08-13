@@ -77,6 +77,7 @@ const createCandidate = async (req, res) => {
             lastWorkingDay,
             status,
             remark,
+            customRemark,
             mustHaveSkills,
             niceToHaveSkills,
             interviewRounds
@@ -99,7 +100,7 @@ const createCandidate = async (req, res) => {
         const allowOwnedDuplicateUpdate = Boolean(req.body.allowOwnedDuplicateUpdate);
 
         if (phase2InterviewStatus !== undefined && normalizedPhase2InterviewStatus === null) {
-            return res.status(400).json({ message: 'Phase 2 Interview Status must be Scheduled, Rejected, Shortlisted, or Did not Turn up' });
+            return res.status(400).json({ message: 'Phase 2 Interview Status must be one of: Scheduled, Rejected, Shortlisted, Did not Turn up, Left in between, None' });
         }
 
         // Verify hiring request exists
@@ -231,7 +232,14 @@ const createCandidate = async (req, res) => {
                 if (allowOwnedDuplicateUpdate) {
                     const importedDecision = String(req.body.decision || '').trim() || 'None';
                     forceUpdateField('decision', importedDecision, 'Decision');
-                    forceUpdateField('profileShared', Boolean(profileShared), 'Profile Shared');
+                    // Only force-set profileShared when the import column explicitly provided a value.
+                    // When blank (profileShared=false from no phase2 data), only upgrade to true, never downgrade.
+                    if (profileShared === true) {
+                        forceUpdateField('profileShared', true, 'Profile Shared');
+                    } else if (profileShared === false && req.body._explicitProfileShared === true) {
+                        // Explicit No from column — allow downgrade
+                        forceUpdateField('profileShared', false, 'Profile Shared');
+                    }
                 } else {
                     const phase1Locked = hasCandidateMovedToPhase2(candidate);
                     if (!phase1Locked) {
@@ -241,15 +249,22 @@ const createCandidate = async (req, res) => {
                         compareAndUpdate('profileShared', profileShared, 'Profile Shared');
                     }
                 }
-                compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
+                // Only force-update phase2Decision when import has a real value (not undefined = no data)
+                if (allowOwnedDuplicateUpdate && phase2Decision !== undefined && phase2Decision !== '') {
+                    forceUpdateField('phase2Decision', phase2Decision, 'Phase 2 Decision');
+                } else if (!allowOwnedDuplicateUpdate) {
+                    compareAndUpdate('phase2Decision', phase2Decision, 'Phase 2 Decision');
+                }
                 compareAndUpdate('remark', remark, 'Remark');
+                compareAndUpdate('customRemark', customRemark, 'Custom Remark');
                 if (phase2InterviewerFeedback !== undefined) {
                     compareAndUpdate('phase2InterviewerFeedback', phase2InterviewerFeedback, 'Phase 2 Interviewer Feedback');
                 }
                 if (normalizedPhase2InterviewStatus !== undefined) {
                     compareAndUpdate('phase2InterviewStatus', normalizedPhase2InterviewStatus, 'Phase 2 Interview Status');
                 }
-                if ((shouldMarkProfileSharedForPhase2 || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
+                const isPhase2DecisionActive = Boolean(candidate.phase2Decision && candidate.phase2Decision !== 'None');
+                if ((shouldMarkProfileSharedForPhase2 || isPhase2DecisionActive || Boolean(String(phase2InterviewerFeedback || '').trim())) && !candidate.profileShared) {
                     candidate.profileShared = true;
                     updatedFields.push('Profile Shared');
                 }
@@ -323,7 +338,7 @@ const createCandidate = async (req, res) => {
             rate,
             currentCTC,
             expectedCTC,
-            profileShared: shouldMarkProfileSharedForPhase2 ? true : Boolean(profileShared),
+            profileShared: (shouldMarkProfileSharedForPhase2 || Boolean(phase2Decision && phase2Decision !== 'None')) ? true : Boolean(profileShared),
             phase2Decision,
             phase2InterviewerFeedback,
             phase2InterviewStatus: normalizedPhase2InterviewStatus,
@@ -345,6 +360,7 @@ const createCandidate = async (req, res) => {
             decision: req.body.decision || 'None',
             status: legacySafeStatus,
             remark,
+            customRemark,
             mustHaveSkills: normalizedMustHaveSkills,
             niceToHaveSkills: normalizedNiceToHaveSkills,
             interviewRounds: interviewRounds || [],
@@ -469,7 +485,135 @@ const getCandidatesByHiringRequest = async (req, res) => {
 
         const filterDecision = String(req.query.filterDecision || 'All').trim();
         if (filterDecision !== 'All') {
-            serializedCandidates = serializedCandidates.filter(c => (c.decision || 'None') === filterDecision);
+            if (targetPhase === 2) {
+                if (filterDecision === 'Shortlisted_Selected') {
+                    serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected');
+                } else if (filterDecision === 'Shortlisted') {
+                    serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Shortlisted');
+                } else {
+                    serializedCandidates = serializedCandidates.filter(c => (c.phase2Decision || 'None') === filterDecision);
+                }
+            } else if (targetPhase === 3) {
+                if (filterDecision === 'No Show_Offer Declined') {
+                    serializedCandidates = serializedCandidates.filter(c => c.phase3Decision === 'No Show' || c.phase3Decision === 'Offer Declined');
+                } else if (filterDecision === 'Offer Sent') {
+                    serializedCandidates = serializedCandidates.filter(c => ['Offer Sent', 'Offer Accepted', 'Joined'].includes(c.phase3Decision));
+                } else if (filterDecision === 'Offer Accepted') {
+                    serializedCandidates = serializedCandidates.filter(c => ['Offer Accepted', 'Joined'].includes(c.phase3Decision));
+                } else {
+                    serializedCandidates = serializedCandidates.filter(c => (c.phase3Decision || 'None') === filterDecision);
+                }
+            } else {
+                serializedCandidates = serializedCandidates.filter(c => (c.decision || 'None') === filterDecision);
+            }
+        }
+
+        const filterInterviewStatus = String(req.query.filterInterviewStatus || 'All').trim();
+        if (filterInterviewStatus !== 'All') {
+            if (targetPhase === 2) {
+                if (filterInterviewStatus === 'Scheduled') {
+                    serializedCandidates = serializedCandidates.filter(c =>
+                        (c.phase2InterviewStatus && c.phase2InterviewStatus !== 'None') ||
+                        (Array.isArray(c.interviewRounds) && c.interviewRounds.some(r => Number(r.phase || 1) === 2))
+                    );
+                } else {
+                    serializedCandidates = serializedCandidates.filter(c => (c.phase2InterviewStatus || 'None') === filterInterviewStatus);
+                }
+            } else {
+                if (filterInterviewStatus === 'Scheduled') {
+                    serializedCandidates = serializedCandidates.filter(c => Array.isArray(c.interviewRounds) && c.interviewRounds.length > 0);
+                }
+            }
+        }
+
+        const filterInterviewRound = String(req.query.filterInterviewRound || req.query.interviewRound || '').trim();
+        const filterDynamicStage = String(req.query.filterDynamicStage || '').trim();
+        const isNotScheduledFilter = filterDynamicStage && filterDynamicStage.startsWith('NotScheduled_');
+
+        if (filterInterviewRound && !isNotScheduledFilter) {
+            const targetRound = filterInterviewRound.toLowerCase();
+            serializedCandidates = serializedCandidates.filter(c => {
+                const rounds = Array.isArray(c.interviewRounds)
+                    ? c.interviewRounds.filter(r => Number(r.phase || 1) === targetPhase)
+                    : [];
+                return rounds.some(r => String(r.levelName || '').trim().toLowerCase() === targetRound);
+            });
+        }
+
+        if (filterDynamicStage && filterDynamicStage !== 'All') {
+            const parts = filterDynamicStage.split('_');
+            const statusType = parts[0];
+            const targetRoundName = parts.slice(1).join('_').trim().toLowerCase();
+            serializedCandidates = serializedCandidates.filter(c => {
+                const rounds = Array.isArray(c.interviewRounds)
+                    ? c.interviewRounds.filter(r => Number(r.phase || 1) === targetPhase)
+                    : [];
+
+                if (statusType === 'NotScheduled' || statusType === 'Unscheduled') {
+                    const hasTargetRound = rounds.some(r => String(r.levelName || '').trim().toLowerCase() === targetRoundName);
+                    return !hasTargetRound;
+                }
+                const targetRoundObj = rounds.find(r => String(r.levelName || '').trim().toLowerCase() === targetRoundName);
+                if (!targetRoundObj) return false;
+                const s = String(targetRoundObj.status || 'Pending').trim();
+                if (statusType === 'Cleared') return s === 'Passed' || s === 'Pass' || s === 'Shortlisted';
+                if (statusType === 'Failed') return s === 'Failed' || s === 'Fail' || s === 'Rejected';
+                if (statusType === 'DNTU') return s === 'Did Not Turn Up' || s === 'Did Not Turnup' || s === 'Skipped' || s === 'No Show' || s === 'DNTU';
+                if (statusType === 'LIB') return s === 'Left in between' || s === 'Left In Between' || s === 'LIB';
+                if (statusType === 'Pending') return s === 'Pending' || s === 'Scheduled';
+                return true;
+            });
+        }
+
+        const filterPreference = String(req.query.filterPreference || 'All').trim();
+        if (filterPreference !== 'All') {
+            serializedCandidates = serializedCandidates.filter(c => c.preference === filterPreference);
+        }
+
+        const filterExperience = String(req.query.filterExperience || '').trim();
+        if (filterExperience !== '') {
+            const minExp = Number(filterExperience);
+            if (!isNaN(minExp)) {
+                serializedCandidates = serializedCandidates.filter(c => c.totalExperience !== undefined && c.totalExperience !== null && Number(c.totalExperience) >= minExp);
+            }
+        }
+
+        let filterPulledBy = [];
+        try {
+            if (req.query.filterPulledBy) {
+                filterPulledBy = JSON.parse(req.query.filterPulledBy);
+            }
+        } catch { }
+        if (Array.isArray(filterPulledBy) && filterPulledBy.length > 0) {
+            serializedCandidates = serializedCandidates.filter(c => filterPulledBy.includes(String(c.profilePulledBy || '').trim()));
+        }
+
+        let filterUploadedBy = [];
+        try {
+            if (req.query.filterUploadedBy) {
+                filterUploadedBy = JSON.parse(req.query.filterUploadedBy);
+            }
+        } catch { }
+        if (Array.isArray(filterUploadedBy) && filterUploadedBy.length > 0) {
+            const getUploaderName = (c) => `${c.uploadedBy?.firstName || ''} ${c.uploadedBy?.lastName || ''}`.trim();
+            serializedCandidates = serializedCandidates.filter(c => filterUploadedBy.includes(getUploaderName(c)));
+        }
+
+        const filterUploadType = String(req.query.filterUploadType || 'All').trim();
+        if (filterUploadType !== 'All') {
+            serializedCandidates = serializedCandidates.filter(c => {
+                const type = (typeof c.resumeUrl === 'string' && /^https?:\/\//i.test(c.resumeUrl.trim())) ? 'CV' : 'Excel';
+                return type === filterUploadType;
+            });
+        }
+
+        const filterTransferred = String(req.query.filterTransferred || 'All').trim();
+        if (filterTransferred !== 'All') {
+            if (filterTransferred === 'Transferred') {
+                serializedCandidates = serializedCandidates.filter(c => c.isTransferred === true);
+            } else {
+                serializedCandidates = serializedCandidates.filter(c => c.isTransferred !== true);
+            }
         }
 
         const search = String(req.query.search || '').trim().toLowerCase();
