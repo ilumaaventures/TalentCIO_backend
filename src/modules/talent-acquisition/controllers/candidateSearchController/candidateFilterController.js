@@ -199,15 +199,17 @@ exports.getCandidateCardFilters = async (req, res) => {
             },
             phase2Metrics: {
                 totalShortlisted: structuralPhase2Candidates.length,
+                shortlisted: structuralPhase2Candidates.filter((candidate) =>
+                    candidate?.phase2Decision === 'Shortlisted'
+                ).length,
                 totalScreened: structuralPhase2Candidates.filter((candidate) =>
-                    candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected' ||
-                    candidate?.decision === 'Shortlisted' || candidate?.decision === 'Selected'
+                    candidate?.phase2Decision === 'Shortlisted'
                 ).length,
                 selected: structuralPhase2Candidates.filter((candidate) =>
-                    candidate?.phase2Decision === 'Selected' || candidate?.decision === 'Selected'
+                    candidate?.phase2Decision === 'Selected'
                 ).length,
                 rejected: structuralPhase2Candidates.filter((candidate) =>
-                    candidate?.phase2Decision === 'Rejected' || candidate?.decision === 'Rejected'
+                    candidate?.phase2Decision === 'Rejected'
                 ).length,
                 interviewScheduled: structuralPhase2Candidates.filter((candidate) => hasLegacyPhase2InterviewActivity(candidate)).length,
                 interviewRoundsSummary: interviewRoundsSummaryPhase2
@@ -326,6 +328,8 @@ exports.getCandidateInterviewDetails = async (req, res) => {
                 if (filterDecision !== 'All') {
                     if (filterDecision === 'Shortlisted_Selected') {
                         if (c?.phase2Decision !== 'Shortlisted' && c?.phase2Decision !== 'Selected') return false;
+                    } else if (filterDecision === 'Shortlisted') {
+                        if (c?.phase2Decision !== 'Shortlisted') return false;
                     } else if ((c?.phase2Decision || 'None') !== filterDecision) return false;
                 }
             } else if (targetPhase === 3) {
@@ -341,13 +345,56 @@ exports.getCandidateInterviewDetails = async (req, res) => {
                 }
             }
 
-            if (filterInterviewRound) {
+            if (filterInterviewStatus && filterInterviewStatus !== 'All') {
+                if (targetPhase === 2) {
+                    if (filterInterviewStatus === 'Scheduled') {
+                        const hasActivity = (c?.phase2InterviewStatus && c?.phase2InterviewStatus !== 'None') ||
+                            (Array.isArray(c?.interviewRounds) && c.interviewRounds.some(r => Number(r.phase || 1) === 2));
+                        if (!hasActivity) return false;
+                    } else if ((c?.phase2InterviewStatus || 'None') !== filterInterviewStatus) {
+                        return false;
+                    }
+                } else {
+                    if (filterInterviewStatus === 'Scheduled') {
+                        if (!Array.isArray(c?.interviewRounds) || c.interviewRounds.length === 0) return false;
+                    }
+                }
+            }
+
+            const isNotScheduledFilter = filterDynamicStage && filterDynamicStage.startsWith('NotScheduled_');
+
+            if (filterInterviewRound && !isNotScheduledFilter) {
                 const targetRound = String(filterInterviewRound).trim().toLowerCase();
-                const rounds = Array.isArray(c?.interviewRounds) ? c.interviewRounds : [];
+                const rounds = Array.isArray(c?.interviewRounds)
+                    ? c.interviewRounds.filter(r => Number(r.phase || 1) === targetPhase)
+                    : [];
                 const hasRound = rounds.some((r) =>
                     String(r?.levelName || '').trim().toLowerCase() === targetRound
                 );
                 if (!hasRound) return false;
+            }
+
+            if (filterDynamicStage && filterDynamicStage !== 'All') {
+                const parts = filterDynamicStage.split('_');
+                const statusType = parts[0];
+                const targetRoundName = parts.slice(1).join('_').trim().toLowerCase();
+                const rounds = Array.isArray(c?.interviewRounds)
+                    ? c.interviewRounds.filter(r => Number(r.phase || 1) === targetPhase)
+                    : [];
+
+                if (statusType === 'NotScheduled' || statusType === 'Unscheduled') {
+                    const hasTargetRound = rounds.some(r => String(r.levelName || '').trim().toLowerCase() === targetRoundName);
+                    if (hasTargetRound) return false;
+                } else {
+                    const targetRoundObj = rounds.find(r => String(r.levelName || '').trim().toLowerCase() === targetRoundName);
+                    if (!targetRoundObj) return false;
+                    const s = String(targetRoundObj.status || 'Pending').trim();
+                    if (statusType === 'Cleared' && !['Passed', 'Pass', 'Shortlisted'].includes(s)) return false;
+                    if (statusType === 'Failed' && !['Failed', 'Fail', 'Rejected'].includes(s)) return false;
+                    if (statusType === 'DNTU' && !['Did Not Turn Up', 'Did Not Turnup', 'Skipped', 'No Show', 'DNTU'].includes(s)) return false;
+                    if (statusType === 'LIB' && !['Left in between', 'Left In Between', 'LIB'].includes(s)) return false;
+                    if (statusType === 'Pending' && !['Pending', 'Scheduled'].includes(s)) return false;
+                }
             }
 
             return true;

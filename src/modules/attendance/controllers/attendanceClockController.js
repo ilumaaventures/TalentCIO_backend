@@ -30,6 +30,24 @@ exports.getTodayStatus = async (req, res) => {
     }
 };
 
+const parseReqLocation = (body) => {
+    if (body.location && typeof body.location.lat === 'number' && typeof body.location.lng === 'number') {
+        return {
+            lat: Number(body.location.lat),
+            lng: Number(body.location.lng),
+            accuracy: body.location.accuracy != null ? Number(body.location.accuracy) : undefined
+        };
+    }
+    if (body.latitude != null && body.longitude != null && !Number.isNaN(Number(body.latitude)) && !Number.isNaN(Number(body.longitude))) {
+        return {
+            lat: Number(body.latitude),
+            lng: Number(body.longitude),
+            accuracy: body.accuracy != null ? Number(body.accuracy) : undefined
+        };
+    }
+    return null;
+};
+
 exports.clockIn = async (req, res) => {
     console.log('[DEBUG] Clock-In Request:', { body: req.body, user: req.user?._id, companyId: req.companyId });
     try {
@@ -37,6 +55,7 @@ exports.clockIn = async (req, res) => {
         const attSettings = getAttendanceSettings(company);
         const today = getStartOfDayIST();
         const now = new Date();
+        const locData = parseReqLocation(req.body);
 
         const periodEditability = await ensureTimesheetPeriodEditable({
             company,
@@ -70,12 +89,11 @@ exports.clockIn = async (req, res) => {
         }
 
         if (attSettings.geofencing?.enabled) {
-            const { latitude, longitude } = req.body;
-            if (!latitude || !longitude) {
+            if (!locData) {
                 return res.status(400).json({ message: 'Location data (latitude and longitude) is required for clock-in.' });
             }
             const { latitude: officeLat, longitude: officeLng, radiusMeters } = attSettings.geofencing;
-            const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
+            const distance = calculateDistance(locData.lat, locData.lng, officeLat, officeLng);
             if (distance > radiusMeters) {
                 return res.status(403).json({ message: `Access denied. You are ${Math.round(distance)}m away from office (max allowed: ${radiusMeters}m).` });
             }
@@ -105,6 +123,9 @@ exports.clockIn = async (req, res) => {
         attendance.clockIn = now;
         attendance.clockInIST = getISTTime(now);
         attendance.status = 'PRESENT';
+        if (locData) {
+            attendance.location = locData;
+        }
         applyPolicyMetadata(attendance, policy);
 
         await attendance.save();
@@ -121,6 +142,7 @@ exports.clockOut = async (req, res) => {
         const attSettings = getAttendanceSettings(company);
         const today = getStartOfDayIST();
         const now = new Date();
+        const locData = parseReqLocation(req.body);
 
         const periodEditability = await ensureTimesheetPeriodEditable({
             company,
@@ -141,12 +163,11 @@ exports.clockOut = async (req, res) => {
         }
 
         if (attSettings.geofencing?.enabled) {
-            const { latitude, longitude } = req.body;
-            if (!latitude || !longitude) {
+            if (!locData) {
                 return res.status(400).json({ message: 'Location data (latitude and longitude) is required for clock-out.' });
             }
             const { latitude: officeLat, longitude: officeLng, radiusMeters } = attSettings.geofencing;
-            const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
+            const distance = calculateDistance(locData.lat, locData.lng, officeLat, officeLng);
             if (distance > radiusMeters) {
                 return res.status(403).json({ message: `Access denied. You are ${Math.round(distance)}m away from office (max allowed: ${radiusMeters}m).` });
             }
@@ -169,7 +190,7 @@ exports.clockOut = async (req, res) => {
             return res.status(400).json({ message: 'Already clocked out for today' });
         }
 
-        await finalizeCheckout(attendance, now);
+        await finalizeCheckout(attendance, now, '', locData);
         res.json({ message: 'Clocked out successfully', attendance });
     } catch (error) {
         console.error('Clock-out error:', error);

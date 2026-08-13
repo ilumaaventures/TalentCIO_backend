@@ -341,10 +341,16 @@ const moveCandidateToPreviousPhase = async (req, res) => {
             return res.status(400).json({ message: 'Candidate cannot be moved back after being transferred to onboarding' });
         }
 
+        candidate.decision = 'None';
         candidate.profileShared = false;
+        candidate.isProfileShared = false;
+        candidate.profileSharedAt = null;
         candidate.phase2Decision = 'None';
         candidate.phase2InterviewerFeedback = '';
         candidate.phase2InterviewStatus = 'None';
+        if (candidate.activePhase && Number(candidate.activePhase) >= 2) {
+            candidate.activePhase = 1;
+        }
         candidate.interviewRounds = (candidate.interviewRounds || []).filter((round) => Number(round?.phase || 1) !== 2);
 
         await candidate.save();

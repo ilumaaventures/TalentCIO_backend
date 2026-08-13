@@ -230,8 +230,13 @@ const normalizeSkillList = (skills) => {
 };
 
 const normalizePhase2InterviewStatus = (status) => {
-    if (!status || typeof status !== 'string') return 'Not Scheduled';
-    return status.trim();
+    if (!status || typeof status !== 'string') return 'None';
+    const trimmed = status.trim();
+    if (!trimmed) return 'None';
+    // Must match the candidate model enum exactly
+    const VALID_PHASE2_INTERVIEW_STATUSES = ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'Left in between', 'None', ''];
+    const matched = VALID_PHASE2_INTERVIEW_STATUSES.find(v => v.toLowerCase() === trimmed.toLowerCase());
+    return matched !== undefined ? matched : null; // null = invalid, caller should reject
 };
 
 const hasMeaningfulOfferValue = (val) => {

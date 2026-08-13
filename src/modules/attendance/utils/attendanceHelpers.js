@@ -78,13 +78,16 @@ const applyPresentOnlyRecord = (attendance, note = '[Marked present]') => {
     }
 };
 
-const finalizeCheckout = async (attendance, checkoutTime, reason = '') => {
+const finalizeCheckout = async (attendance, checkoutTime, reason = '', clockOutLocation = null) => {
     attendance.clockOut = checkoutTime;
     attendance.clockOutIST = getISTTime(checkoutTime);
     attendance.status = 'PRESENT';
     if (reason) {
         attendance.autoCheckoutReason = reason;
         attendance.notes = attendance.notes ? `${attendance.notes} ${reason}` : reason;
+    }
+    if (clockOutLocation) {
+        attendance.clockOutLocation = clockOutLocation;
     }
     await attendance.save();
     return attendance;

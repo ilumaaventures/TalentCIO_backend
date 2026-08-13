@@ -78,6 +78,7 @@ const getDashboardStats = async (req, res) => {
                         firstName: 1,
                         lastName: 1,
                         employmentType: 1,
+                        workLocation: 1,
                         roles: '$rolesResolved',
                         isSystemUser: {
                             $gt: [
@@ -217,7 +218,7 @@ const getDashboardStats = async (req, res) => {
                 clockOut: record.clockOut,
                 attendanceMode: record.attendanceMode || 'clock_in_out',
                 status: record.status || 'PRESENT',
-                location: record.location || null,
+                location: record.location || record.clockOutLocation || (user.workLocation ? { name: user.workLocation } : null),
                 clockOutLocation: record.clockOutLocation || null
             });
             return acc;
