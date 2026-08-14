@@ -6,7 +6,12 @@ const Company = require('../../../company/company.model');
 const EmailTemplate = require('../../../email/model/emailTemplate.model');
 const TAEmailLog = require('../../model/taEmailLog.model');
 const NotificationService = require('../../../../services/notificationService');
-const { sendEmailForCompany, isRateLimitError } = require('../../../../services/companyEmailService');
+const {
+    sendEmailForCompany,
+    isRateLimitError,
+    getCompanyEmailSettings,
+    pickEmailAccount
+} = require('../../../../services/companyEmailService');
 const {
     hasHtmlMarkup,
     TA_EMAIL_TEMPLATE_PLACEHOLDERS,
@@ -104,6 +109,59 @@ const getCompanyEmailBranding = async (companyId, company = null) => {
     return {
         ...branding,
         logoAlt: branding.logoAlt || company?.name || 'TalentCIO'
+    };
+};
+
+const resolveSenderAccountDetails = async (companyId, requestedAccountId = null, companyName = '') => {
+    try {
+        const emailSettings = await getCompanyEmailSettings(companyId);
+        const accountSelection = pickEmailAccount(emailSettings, requestedAccountId);
+
+        if (accountSelection.mode === 'account' && accountSelection.account) {
+            return {
+                emailAccountId: String(accountSelection.account._id || 'account'),
+                emailAccountLabel: accountSelection.account.name || accountSelection.account.fromAddress || `${companyName || emailSettings?.companyName || 'Company'} Account`,
+                fromAddress: accountSelection.account.fromAddress || '',
+                fromName: accountSelection.account.fromName || companyName || emailSettings?.companyName || 'Talent Acquisition Team'
+            };
+        }
+
+        const platformFromAddress = process.env.EMAIL_FROM || process.env.BREVO_SENDER_EMAIL || 'no-reply@talentcio.in';
+        return {
+            emailAccountId: 'platform',
+            emailAccountLabel: 'TalentCIO Platform',
+            fromAddress: platformFromAddress,
+            fromName: companyName || emailSettings?.companyName || 'TalentCIO Platform'
+        };
+    } catch (e) {
+        return {
+            emailAccountId: 'platform',
+            emailAccountLabel: 'TalentCIO Platform',
+            fromAddress: process.env.EMAIL_FROM || 'no-reply@talentcio.in',
+            fromName: companyName || 'TalentCIO Platform'
+        };
+    }
+};
+
+const enrichLogWithSenderDetails = (log, defaultSender) => {
+    if (!log) return log;
+    const rawFromAddress = log.fromAddress || (log.emailAccountId === 'platform' ? defaultSender.fromAddress : '');
+    const isSenderEmailUserEmail = log.sentBy && log.sentBy.email && log.senderEmail === log.sentBy.email;
+    const fromAddress = rawFromAddress || (!isSenderEmailUserEmail && log.senderEmail && log.senderEmail.includes('@') ? log.senderEmail : defaultSender.fromAddress);
+    const fromName = log.fromName || log.senderName || defaultSender.fromName;
+    const emailAccountLabel = log.emailAccountLabel || (log.emailAccountId === 'platform' ? 'TalentCIO Platform' : defaultSender.emailAccountLabel);
+
+    return {
+        ...log,
+        fromAddress,
+        fromName,
+        emailAccountLabel,
+        senderEmail: fromAddress,
+        senderName: fromName,
+        initiatedBy: log.sentBy ? {
+            name: `${log.sentBy.firstName || ''} ${log.sentBy.lastName || ''}`.trim() || 'Recruiter',
+            email: log.sentBy.email || ''
+        } : null
     };
 };
 
@@ -259,6 +317,8 @@ exports.sendMassMail = async (req, res) => {
         const MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 3;
         const MAX_RETRIES_PER_EMAIL = 3;
 
+        const senderAccount = await resolveSenderAccountDetails(req.companyId, delivery.emailAccountId, companyName);
+
         for (const [index, candidate] of candidates.entries()) {
             if (consecutiveRateLimitFailures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES) {
                 console.warn(`[MassMail] Aborting remaining ${candidates.length - index} emails due to consecutive rate limit failures.`);
@@ -335,12 +395,14 @@ exports.sendMassMail = async (req, res) => {
                     recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
                     recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    senderName,
-                    senderEmail: req.user.email || '',
+                    senderName: senderAccount.fromName || senderName,
+                    senderEmail: senderAccount.fromAddress,
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     templateId: selectedTemplate?._id || (templateId || null),
                     templateName: resolvedTemplateName,
-                    emailAccountId: delivery.emailAccountId || 'platform',
-                    emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: resolvedSubject,
@@ -373,12 +435,14 @@ exports.sendMassMail = async (req, res) => {
                     recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
                     recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    senderName,
-                    senderEmail: req.user.email || '',
+                    senderName: senderAccount.fromName || senderName,
+                    senderEmail: senderAccount.fromAddress,
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     templateId: selectedTemplate?._id || (templateId || null),
                     templateName: resolvedTemplateName,
-                    emailAccountId: delivery.emailAccountId || 'platform',
-                    emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: subjectTemplate,
@@ -555,6 +619,8 @@ exports.sendMassMailBulk = async (req, res) => {
         const MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 3;
         const MAX_RETRIES_PER_EMAIL = 3;
 
+        const senderAccount = await resolveSenderAccountDetails(req.companyId, delivery.emailAccountId, companyName);
+
         for (const [index, candidate] of candidates.entries()) {
             if (consecutiveRateLimitFailures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES) {
                 console.warn(`[MassMailBulk] Aborting remaining ${candidates.length - index} emails due to consecutive rate limit failures.`);
@@ -635,13 +701,14 @@ exports.sendMassMailBulk = async (req, res) => {
                     recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
                     recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    senderName,
-                    senderEmail: req.user.email || '',
+                    senderName: senderAccount.fromName || senderName,
+                    senderEmail: senderAccount.fromAddress,
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     templateId: selectedTemplate?._id || (templateId || null),
                     templateName: resolvedTemplateName,
-                    emailAccountId: delivery.emailAccountId || 'platform',
-                    emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
-                    recipientEmail: candidate.email,
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: resolvedSubject,
@@ -678,13 +745,14 @@ exports.sendMassMailBulk = async (req, res) => {
                     recipientName: candidate.candidateName || `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate',
                     recipientEmail: candidate.email,
                     sentBy: req.user._id,
-                    senderName,
-                    senderEmail: req.user.email || '',
+                    senderName: senderAccount.fromName || senderName,
+                    senderEmail: senderAccount.fromAddress,
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     templateId: selectedTemplate?._id || (templateId || null),
                     templateName: resolvedTemplateName,
-                    emailAccountId: delivery.emailAccountId || 'platform',
-                    emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
-                    recipientEmail: candidate.email,
                     cc: cc || '',
                     bcc: bcc || '',
                     subject: subjectTemplate,
@@ -745,7 +813,7 @@ exports.getTAEmailHistory = async (req, res) => {
         const limitNum = parseInt(limit, 10) || 20;
         const skip = (pageNum - 1) * limitNum;
 
-        const [logs, total] = await Promise.all([
+        const [logs, total, defaultSender] = await Promise.all([
             TAEmailLog.find(query)
                 .populate('sentBy', 'firstName lastName email')
                 .populate('candidateId', 'candidateName email mobile')
@@ -754,13 +822,15 @@ exports.getTAEmailHistory = async (req, res) => {
                 .skip(skip)
                 .limit(limitNum)
                 .lean(),
-            TAEmailLog.countDocuments(query)
+            TAEmailLog.countDocuments(query),
+            resolveSenderAccountDetails(req.companyId)
         ]);
 
+        const enrichedLogs = logs.map(log => enrichLogWithSenderDetails(log, defaultSender));
         const calculatedTotalPages = Math.ceil(total / limitNum) || 1;
 
         res.json({
-            logs,
+            logs: enrichedLogs,
             pagination: {
                 total,
                 page: pageNum,
@@ -779,20 +849,24 @@ exports.getTAEmailHistory = async (req, res) => {
 exports.getTAEmailHistoryById = async (req, res) => {
     try {
         const { id } = req.params;
-        const log = await TAEmailLog.findOne({
-            _id: id,
-            companyId: req.companyId
-        })
-            .populate('sentBy', 'firstName lastName email')
-            .populate('candidateId', 'candidateName email mobile')
-            .populate('hiringRequestId', 'requestId roleDetails.jobTitle client')
-            .lean();
+        const [log, defaultSender] = await Promise.all([
+            TAEmailLog.findOne({
+                _id: id,
+                companyId: req.companyId
+            })
+                .populate('sentBy', 'firstName lastName email')
+                .populate('candidateId', 'candidateName email mobile')
+                .populate('hiringRequestId', 'requestId roleDetails.jobTitle client')
+                .lean(),
+            resolveSenderAccountDetails(req.companyId)
+        ]);
 
         if (!log) {
             return res.status(404).json({ message: 'Email log not found.' });
         }
 
-        res.json(log);
+        const enriched = enrichLogWithSenderDetails(log, defaultSender);
+        res.json(enriched);
     } catch (error) {
         console.error('Error fetching TA email history detail:', error);
         res.status(500).json({ message: 'Failed to fetch email history detail', error: error.message });
@@ -902,7 +976,7 @@ exports.resendTAEmail = async (req, res) => {
             lastErr = err;
         }
 
-        const senderName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || 'Recruiter';
+        const senderAccount = await resolveSenderAccountDetails(req.companyId, delivery.emailAccountId, branding.companyName || '');
 
         const newLog = await TAEmailLog.create({
             companyId: req.companyId,
@@ -912,12 +986,14 @@ exports.resendTAEmail = async (req, res) => {
             recipientName: originalLog.recipientName || 'Candidate',
             recipientEmail,
             sentBy: req.user._id,
-            senderName,
-            senderEmail: req.user.email || '',
+            senderName: senderAccount.fromName || senderName,
+            senderEmail: senderAccount.fromAddress,
+            fromAddress: senderAccount.fromAddress,
+            fromName: senderAccount.fromName,
+            emailAccountId: senderAccount.emailAccountId,
+            emailAccountLabel: senderAccount.emailAccountLabel,
             templateId: originalLog.templateId || null,
             templateName: originalLog.templateName || 'General Mail',
-            emailAccountId: delivery.emailAccountId || 'platform',
-            emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
             cc,
             bcc,
             subject,
@@ -1034,6 +1110,8 @@ exports.resendTAEmailBulk = async (req, res) => {
                     lastErr = err;
                 }
 
+                const senderAccount = await resolveSenderAccountDetails(req.companyId, delivery.emailAccountId, company?.name || '');
+
                 const newLog = await TAEmailLog.create({
                     companyId: req.companyId,
                     hiringRequestId: originalLog.hiringRequestId?._id || originalLog.hiringRequestId || null,
@@ -1042,12 +1120,14 @@ exports.resendTAEmailBulk = async (req, res) => {
                     recipientName: originalLog.recipientName || 'Candidate',
                     recipientEmail,
                     sentBy: req.user._id,
-                    senderName,
-                    senderEmail: req.user.email || '',
+                    senderName: senderAccount.fromName || senderName,
+                    senderEmail: senderAccount.fromAddress,
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     templateId: originalLog.templateId || null,
                     templateName: originalLog.templateName || 'General Mail',
-                    emailAccountId: delivery.emailAccountId || 'platform',
-                    emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                     cc: originalLog.cc || '',
                     bcc: originalLog.bcc || '',
                     subject,
