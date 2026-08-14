@@ -497,6 +497,7 @@ module.exports = {
     sendViaBrevoApi,
     sendViaSmtp,
     sendEmailForCompany,
+    pickEmailAccount,
     isRateLimitError
 };
 

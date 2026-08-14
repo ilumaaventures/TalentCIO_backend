@@ -22,6 +22,26 @@ const taEmailLogSchema = new mongoose.Schema({
         trim: true,
         default: ''
     },
+    fromAddress: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    fromName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    emailAccountId: {
+        type: String,
+        trim: true,
+        default: 'platform'
+    },
+    emailAccountLabel: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     hiringRequestId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'HiringRequest',

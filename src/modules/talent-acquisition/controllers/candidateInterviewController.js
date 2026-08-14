@@ -3,8 +3,39 @@ const { HiringRequest } = require('../model/hiringRequest.model');
 const EmailTemplate = require('../../email/model/emailTemplate.model');
 const TAEmailLog = require('../model/taEmailLog.model');
 const NotificationService = require('../../../services/notificationService');
-const { sendEmailForCompany } = require('../../../services/companyEmailService');
+const { sendEmailForCompany, getCompanyEmailSettings, pickEmailAccount } = require('../../../services/companyEmailService');
 const mongoose = require('mongoose');
+
+const resolveSenderAccountDetails = async (companyId, requestedAccountId = null) => {
+    try {
+        const emailSettings = await getCompanyEmailSettings(companyId);
+        const accountSelection = pickEmailAccount(emailSettings, requestedAccountId);
+
+        if (accountSelection.mode === 'account' && accountSelection.account) {
+            return {
+                emailAccountId: String(accountSelection.account._id || 'account'),
+                emailAccountLabel: accountSelection.account.name || accountSelection.account.fromAddress || `${emailSettings?.companyName || 'Company'} Account`,
+                fromAddress: accountSelection.account.fromAddress || '',
+                fromName: accountSelection.account.fromName || emailSettings?.companyName || 'Talent Acquisition Team'
+            };
+        }
+
+        const platformFromAddress = process.env.EMAIL_FROM || process.env.BREVO_SENDER_EMAIL || 'no-reply@talentcio.in';
+        return {
+            emailAccountId: 'platform',
+            emailAccountLabel: 'TalentCIO Platform',
+            fromAddress: platformFromAddress,
+            fromName: emailSettings?.companyName || 'TalentCIO Platform'
+        };
+    } catch (e) {
+        return {
+            emailAccountId: 'platform',
+            emailAccountLabel: 'TalentCIO Platform',
+            fromAddress: process.env.EMAIL_FROM || 'no-reply@talentcio.in',
+            fromName: 'TalentCIO Platform'
+        };
+    }
+};
 const { TA_CAPABILITIES, buildAccessibleCandidateQuery } = require('../utils/candidateAccess');
 const { ensureCandidateCapability } = require('../utils/candidateAccess');
 
@@ -155,6 +186,8 @@ Talent Acquisition Team`;
             </div>
         `;
 
+        const senderAccount = await resolveSenderAccountDetails(companyId, effectiveEmailAccountId);
+
         if (sendCandidateEmail !== false && candidate.email) {
             const rawSubjectText = effectiveCustomSubject || template?.subject;
             const rawBodyText = effectiveCustomHtmlBody || template?.htmlBody;
@@ -176,8 +209,12 @@ Talent Acquisition Team`;
                 await TAEmailLog.create({
                     companyId,
                     sentBy: user?._id || null,
-                    senderEmail: user?.email || '',
-                    senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                    senderEmail: senderAccount.fromAddress,
+                    senderName: senderAccount.fromName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                    fromAddress: senderAccount.fromAddress,
+                    fromName: senderAccount.fromName,
+                    emailAccountId: senderAccount.emailAccountId,
+                    emailAccountLabel: senderAccount.emailAccountLabel,
                     hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
                     hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
                     candidateId: candidate._id,
@@ -199,7 +236,7 @@ Talent Acquisition Team`;
                     sentAt: new Date(),
                     subject,
                     htmlBody,
-                    senderEmail: user?.email || '',
+                    senderEmail: senderAccount.fromAddress || user?.email || '',
                     candidateEmail: candidate.email,
                     cc: String(effectiveCc || ''),
                     bcc: String(effectiveBcc || ''),
@@ -215,8 +252,12 @@ Talent Acquisition Team`;
                     await TAEmailLog.create({
                         companyId,
                         sentBy: user?._id || null,
-                        senderEmail: user?.email || '',
-                        senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                        senderEmail: senderAccount.fromAddress,
+                        senderName: senderAccount.fromName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                        fromAddress: senderAccount.fromAddress,
+                        fromName: senderAccount.fromName,
+                        emailAccountId: senderAccount.emailAccountId,
+                        emailAccountLabel: senderAccount.emailAccountLabel,
                         hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
                         hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
                         candidateId: candidate._id,
@@ -262,8 +303,12 @@ Talent Acquisition Team`;
                         await TAEmailLog.create({
                             companyId,
                             sentBy: user?._id || null,
-                            senderEmail: user?.email || '',
-                            senderName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                            senderEmail: senderAccount.fromAddress,
+                            senderName: senderAccount.fromName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Recruiter',
+                            fromAddress: senderAccount.fromAddress,
+                            fromName: senderAccount.fromName,
+                            emailAccountId: senderAccount.emailAccountId,
+                            emailAccountLabel: senderAccount.emailAccountLabel,
                             hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
                             hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
                             candidateId: candidate._id,
