@@ -38,7 +38,8 @@ const taController = {
     resendTAEmail: taMailController.resendTAEmail,
     resendTAEmailBulk: taMailController.resendTAEmailBulk,
 
-    getTAClients: clientController.getTAClients
+    getTAClients: clientController.getTAClients,
+    updateClientStatus: clientController.updateClientStatus
 };
 const { protect } = require('../../../common/middleware/authMiddleware');
 const { authorizeAny } = require('../../../common/middleware/authorize');
@@ -147,6 +148,7 @@ router.get('/analytics/interviews', protect, taController.getInterviewAnalytics)
 
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);
+router.put('/clients/status', protect, taController.updateClientStatus);
 
 // TA access settings
 router.get('/settings/access/overview', protect, authorizeAny(taAccessSettingsViewPermissions), taAccessSettingsController.getOverview);

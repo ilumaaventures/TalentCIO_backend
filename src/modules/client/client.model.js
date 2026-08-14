@@ -41,6 +41,12 @@ const clientSchema = new mongoose.Schema({
         default: 'Active',
         index: true
     },
+    taStatus: {
+        type: String,
+        enum: ['Active', 'Inactive'],
+        default: 'Active',
+        index: true
+    },
 }, { timestamps: true });
 
 clientSchema.index({ companyId: 1, isDeleted: 1 });

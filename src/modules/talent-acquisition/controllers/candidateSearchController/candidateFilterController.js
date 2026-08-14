@@ -254,6 +254,7 @@ exports.getCandidateInterviewDetails = async (req, res) => {
             filterTransferred = 'All',
             filterProfileShared = 'false',
             filterInterviewRound = '',
+            filterDynamicStage = 'All',
             dateField,
             startDate,
             endDate
