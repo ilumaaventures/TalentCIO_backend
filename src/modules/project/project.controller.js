@@ -4,6 +4,7 @@ const Client = require('../client/client.model');
 const Project = require('./project.model');
 const Module = require('../task/module.model');
 const Task = require('../task/task.model');
+const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
 
 const User = require('../../modules/user/user.model');
 const {
@@ -99,11 +100,53 @@ const createClient = async (req, res) => {
 
 const updateClient = async (req, res) => {
     try {
+        const updateData = { ...req.body };
+        if (req.body.status === 'Inactive') {
+            updateData.taStatus = 'Inactive';
+        }
+
         const client = await Client.findOneAndUpdate({ _id: req.params.id, companyId: req.companyId },
-            req.body,
+            updateData,
             { new: true }
         );
         if (!client) return res.status(404).json({ message: 'Client not found' });
+
+        // If client is marked Inactive from Client page, also close and unpublish all TA requisitions
+        if (req.body.status === 'Inactive') {
+            const clientName = client.name || client.companyName;
+            if (clientName) {
+                const escapeRegex = (string) => (string || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escapedName = escapeRegex(clientName);
+                const matchingReqs = await HiringRequest.find({
+                    companyId: req.companyId,
+                    client: { $regex: new RegExp('^' + escapedName + '$', 'i') }
+                }).select('_id hiringDetails').lean();
+
+                for (const reqDoc of matchingReqs) {
+                    const hiringDetails = reqDoc.hiringDetails || {};
+                    const openPos = Math.max(Number(hiringDetails.openPositions) || 0, 0);
+                    const closedPos = Math.max(Number(hiringDetails.closedPositions) || 0, 0);
+                    const origPos = Math.max(Number(hiringDetails.originalOpenPositions) || 0, openPos + closedPos, 1);
+
+                    await HiringRequest.findByIdAndUpdate(
+                        reqDoc._id,
+                        {
+                            $set: {
+                                status: 'Closed',
+                                closedAt: new Date(),
+                                isPublic: false,
+                                isJobVisible: false,
+                                isResourceGatewayPublic: false,
+                                'hiringDetails.openPositions': 0,
+                                'hiringDetails.closedPositions': origPos,
+                                'hiringDetails.originalOpenPositions': origPos
+                            }
+                        }
+                    );
+                }
+            }
+        }
+
         res.json(client);
     } catch (error) {
         res.status(400).json({ message: error.message });
