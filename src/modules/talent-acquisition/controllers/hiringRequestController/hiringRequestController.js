@@ -84,11 +84,10 @@ exports.createHiringRequest = async (req, res) => {
         if (isDraft) {
             if (!jobTitle) jobTitle = 'Untitled Position';
             if (numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions))) numberOfPositions = 1;
-            if (!workLocation) workLocation = 'Not Specified';
         }
 
-        if (!jobTitle || numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions)) || !workLocation) {
-            return res.status(400).json({ message: 'Job title, number of positions, and work location are required' });
+        if (!jobTitle || numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions))) {
+            return res.status(400).json({ message: 'Job title and number of positions are required' });
         }
 
         const normalizedClientName = client ? client.trim() : 'General';
