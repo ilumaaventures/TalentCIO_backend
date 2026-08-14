@@ -84,11 +84,10 @@ exports.createHiringRequest = async (req, res) => {
         if (isDraft) {
             if (!jobTitle) jobTitle = 'Untitled Position';
             if (numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions))) numberOfPositions = 1;
-            if (!workLocation) workLocation = 'Not Specified';
         }
 
-        if (!jobTitle || numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions)) || !workLocation) {
-            return res.status(400).json({ message: 'Job title, number of positions, and work location are required' });
+        if (!jobTitle || numberOfPositions === undefined || numberOfPositions === null || isNaN(Number(numberOfPositions))) {
+            return res.status(400).json({ message: 'Job title and number of positions are required' });
         }
 
         const normalizedClientName = client ? client.trim() : 'General';
@@ -315,11 +314,16 @@ exports.getHiringRequests = async (req, res) => {
         const filterQuery = { ...accessibleQuery };
 
         if (status && status !== 'All') {
-            filterQuery.status = status;
+            if (['Pending', 'Pending_Approval', 'Pending Approval'].includes(status)) {
+                filterQuery.status = { $in: ['Pending', 'Pending Approval', 'Pending_Approval', 'Pending_L1', 'Pending_Final', 'Submitted'] };
+            } else {
+                filterQuery.status = status;
+            }
         }
 
         if (client && client.trim()) {
-            filterQuery.client = client.trim();
+            const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            filterQuery.client = new RegExp(`^${escapeRegex(client.trim())}$`, 'i');
         }
 
         if (search && search.trim()) {

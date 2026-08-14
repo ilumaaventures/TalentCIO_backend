@@ -25,7 +25,7 @@ exports.getTAClients = async (req, res) => {
                         $sum: {
                             $cond: [
                                 {
-                                    $in: ['$status', ['Pending_Approval', 'Pending_L1', 'Pending_Final', 'Submitted']]
+                                    $in: ['$status', ['Pending', 'Pending Approval', 'Pending_Approval', 'Pending_L1', 'Pending_Final', 'Submitted']]
                                 },
                                 1,
                                 0

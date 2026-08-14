@@ -278,6 +278,7 @@ const companySchema = new mongoose.Schema({
     },
     employeeCount: { type: Number, default: 0 },
     activeUserCount: { type: Number, default: 0 },
+    customEmploymentTypes: { type: [String], default: [] },
     trialEndsAt: { type: Date }
 }, { timestamps: true });
 

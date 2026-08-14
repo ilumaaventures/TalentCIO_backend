@@ -79,6 +79,7 @@ const getDashboardStats = async (req, res) => {
                         lastName: 1,
                         employmentType: 1,
                         workLocation: 1,
+                        isTotalWorkforce: 1,
                         roles: '$rolesResolved',
                         isSystemUser: {
                             $gt: [
@@ -106,12 +107,22 @@ const getDashboardStats = async (req, res) => {
             return !(u.isSystemUser && isPrimaryAccount);
         });
 
-        const nonSystemUserIds = filteredUsers.map(u => u._id);
+        // Exclude users configured as not part of Total Workforce (isTotalWorkforce === false)
+        const totalWorkforceUsers = filteredUsers.filter(u => u.isTotalWorkforce !== false);
+        const nonSystemUserIds = totalWorkforceUsers.map(u => u._id);
+        const allActiveUserIds = filteredUsers.map(u => u._id);
         const totalEmployees = nonSystemUserIds.length;
 
         const attendanceQuery = {
             companyId: req.companyId,
             user: { $in: nonSystemUserIds },
+            date: { $gte: today, $lt: tomorrow },
+            status: { $in: ['PRESENT', 'HALF_DAY'] }
+        };
+
+        const recentAttendanceQuery = {
+            companyId: req.companyId,
+            user: { $in: allActiveUserIds },
             date: { $gte: today, $lt: tomorrow },
             status: { $in: ['PRESENT', 'HALF_DAY'] }
         };
@@ -131,7 +142,7 @@ const getDashboardStats = async (req, res) => {
                 companyId: req.companyId,
                 user: { $in: nonSystemUserIds }
             }),
-            Attendance.find(attendanceQuery)
+            Attendance.find(recentAttendanceQuery)
                 .sort({ clockIn: -1, createdAt: -1 })
                 .limit(attendanceLimit || 0)
                 .select('user status clockIn clockOut location clockOutLocation attendanceMode')
@@ -212,7 +223,8 @@ const getDashboardStats = async (req, res) => {
                     name: `${user.firstName} ${user.lastName}`,
                     role: roleName,
                     employmentType: user.employmentType || 'Employee',
-                    avatar: null
+                    avatar: null,
+                    isTotalWorkforce: user.isTotalWorkforce !== false
                 },
                 time: record.clockIn,
                 clockOut: record.clockOut,
