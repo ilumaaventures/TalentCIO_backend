@@ -41,6 +41,7 @@ const emailSettingsRoutes = require('../modules/email/routes/emailSettings.route
 const notificationSettingsRoutes = require('../modules/notification/notificationSettings.routes');
 const emailBrandingRoutes = require('../modules/email/routes/emailBranding.routes');
 const emailBrandingTemplateRoutes = require('../modules/email/routes/emailBrandingTemplate.routes');
+const celebrationRoutes = require('../modules/celebration/celebration.routes');
 
 const superAdminAuthRoutes = require('../modules/auth/superAdminAuth.routes');
 const companyRoutes = require('../modules/company/company.routes');
@@ -102,6 +103,7 @@ router.use('/company/email-settings', emailSettingsRoutes);
 router.use('/company/notification-settings', notificationSettingsRoutes);
 router.use('/email-branding', emailBrandingRoutes);
 router.use('/email-templates', emailBrandingTemplateRoutes);
+router.use('/celebrations', celebrationRoutes);
 
 // Superadmin routes
 router.use('/superadmin/auth', superAdminAuthRoutes);
