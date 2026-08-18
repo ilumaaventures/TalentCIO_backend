@@ -172,12 +172,15 @@ const getOrgTree = async (companyId, {
         }
     }
 
+    const visitedGlobal = new Set();
+
     // Helper to calculate total downstream count and build node recursively
     const buildNode = (u, visitedInBranch = new Set()) => {
         const uId = String(u._id);
         if (visitedInBranch.has(uId)) {
-            return null; // Cycle guard
+            return null; // Cycle guard for current branch
         }
+        visitedGlobal.add(uId);
         const nextVisited = new Set(visitedInBranch).add(uId);
 
         const rawChildren = childrenMap.get(uId) || [];
@@ -225,21 +228,30 @@ const getOrgTree = async (companyId, {
         };
     };
 
-    let rootCandidates = [];
+    let tree = [];
 
     if (rootUserId && userMap.has(String(rootUserId))) {
-        rootCandidates = [userMap.get(String(rootUserId))];
+        const rootNode = buildNode(userMap.get(String(rootUserId)));
+        if (rootNode) tree.push(rootNode);
     } else {
-        // Find all roots: users with no primary manager, or whose manager is not in the active dataset
+        // 1. Natural roots: users with no primary manager, or whose manager is not in the active dataset
         for (const u of allUsers) {
             const primaryMgrId = u.reportingManagers?.[0] ? String(u.reportingManagers[0]) : null;
             if (!primaryMgrId || !userMap.has(primaryMgrId) || primaryMgrId === String(u._id)) {
-                rootCandidates.push(u);
+                const node = buildNode(u);
+                if (node) tree.push(node);
+            }
+        }
+
+        // 2. Unvisited island/cyclic roots: ensure 100% of employees are included even if legacy data has cycles
+        for (const u of allUsers) {
+            const uId = String(u._id);
+            if (!visitedGlobal.has(uId)) {
+                const node = buildNode(u);
+                if (node) tree.push(node);
             }
         }
     }
-
-    let tree = rootCandidates.map((r) => buildNode(r)).filter(Boolean);
 
     // Apply department or business unit filtering if requested
     if (departmentId || businessUnitId || (search && search.trim())) {
