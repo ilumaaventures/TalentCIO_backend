@@ -1,4 +1,16 @@
+const mongoose = require('mongoose');
 const ApprovalWorkflow = require('../workflow/approvalWorkflow.model');
+
+const mapLevel = (l) => {
+    const isObjectId = l.role && mongoose.Types.ObjectId.isValid(l.role) && String(new mongoose.Types.ObjectId(l.role)) === String(l.role);
+    return {
+        levelCheck: Number(l.levelCheck) || 1,
+        role: isObjectId ? l.role : null,
+        roleName: typeof l.role === 'string' && !isObjectId ? l.role : (l.roleName || ''),
+        approvers: l.approvers || [],
+        isFinal: Boolean(l.isFinal)
+    };
+};
 
 const handleWorkflowWriteError = (error, res) => {
     if (error?.code === 11000) {
@@ -14,20 +26,15 @@ const handleWorkflowWriteError = (error, res) => {
 // --- Create Workflow ---
 exports.createWorkflow = async (req, res) => {
     try {
-        const { name, description, levels, module } = req.body;
+        const { name, description, levels, module, isActive } = req.body;
 
         const workflow = await ApprovalWorkflow.create({
             companyId: req.companyId,
             name,
             description,
-            levels: levels.map(l => ({
-                levelCheck: l.levelCheck,
-                role: l.role,
-                approvers: l.approvers || [],
-                isFinal: l.isFinal
-            })),
+            levels: (levels || []).map(mapLevel),
             module: module || 'TA', // Default to TA if not provided
-            isActive: true, // Default to active
+            isActive: isActive !== false,
             createdBy: req.user._id
         });
 
@@ -72,8 +79,14 @@ exports.getWorkflowById = async (req, res) => {
 // --- Update Workflow ---
 exports.updateWorkflow = async (req, res) => {
     try {
-        const workflow = await ApprovalWorkflow.findOneAndUpdate({ _id: req.params.id, companyId: req.companyId },
-            req.body,
+        const updateData = { ...req.body };
+        if (Array.isArray(updateData.levels)) {
+            updateData.levels = updateData.levels.map(mapLevel);
+        }
+
+        const workflow = await ApprovalWorkflow.findOneAndUpdate(
+            { _id: req.params.id, companyId: req.companyId },
+            updateData,
             { new: true, runValidators: true }
         );
         if (!workflow) return res.status(404).json({ message: 'Workflow not found' });

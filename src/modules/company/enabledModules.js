@@ -19,7 +19,9 @@ const ALL_COMPANY_MODULES = [
     { id: 'onboarding', label: 'Onboarding', icon: 'UserPlus' },
     { id: 'offboarding', label: 'Offboarding', icon: 'LogOut' },
     { id: 'hrEmail', label: 'Send HR Email', icon: 'Mail' },
-    { id: 'announcements', label: 'Announcements', icon: 'Megaphone' }
+    { id: 'announcements', label: 'Announcements', icon: 'Megaphone' },
+    { id: 'reimbursements', label: 'Reimbursements', icon: 'Receipt' },
+    { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -76,6 +78,8 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('offboarding.')) return enabled.has('offboarding');
         if (key.startsWith('hr_email.')) return enabled.has('hrEmail');
         if (key.startsWith('announcement.')) return enabled.has('announcements');
+        if (key.startsWith('reimbursement.')) return enabled.has('reimbursements');
+        if (key.startsWith('ess_document.')) return enabled.has('essDocuments');
 
         return true;
     });

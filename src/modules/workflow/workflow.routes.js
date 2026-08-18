@@ -2,26 +2,33 @@ const express = require('express');
 const router = express.Router();
 const workflowController = require('./workflow.controller');
 const { protect } = require('../../common/middleware/authMiddleware');
-const { requireModule } = require('../../common/middleware/moduleGuard');
-const { authorizeAny } = require('../../common/middleware/authorize');
-const workflowViewPermissions = [
-    'ta.manage',
-    'ta.config.view',
-    'ta.config.edit',
-    'ta.requisition.create',
-    'ta.requisition.update',
-    'ta.requisition.manage.assigned',
-    'ta.requisition.manage.all'
-];
-const workflowEditPermissions = ['ta.manage', 'ta.config.edit'];
+const { authorizeRoleOrPermission } = require('../../common/middleware/authorize');
+
+const canViewWorkflow = authorizeRoleOrPermission({
+    roles: ['Admin', 'HR Admin', 'System Admin'],
+    permissions: [
+        'ta.manage',
+        'ta.config.view',
+        'ta.config.edit',
+        'ta.requisition.create',
+        'ta.requisition.update',
+        'ta.requisition.manage.assigned',
+        'ta.requisition.manage.all',
+        'reimbursement.manage'
+    ]
+});
+
+const canEditWorkflow = authorizeRoleOrPermission({
+    roles: ['Admin', 'HR Admin', 'System Admin'],
+    permissions: ['ta.manage', 'ta.config.edit', 'reimbursement.manage']
+});
 
 router.use(protect);
-router.use(requireModule('talentAcquisition'));
 
-router.post('/', authorizeAny(workflowEditPermissions), workflowController.createWorkflow);
-router.get('/', authorizeAny(workflowViewPermissions), workflowController.getWorkflows);
-router.get('/:id', authorizeAny(workflowViewPermissions), workflowController.getWorkflowById);
-router.put('/:id', authorizeAny(workflowEditPermissions), workflowController.updateWorkflow);
-router.delete('/:id', authorizeAny(workflowEditPermissions), workflowController.deleteWorkflow);
+router.post('/', canEditWorkflow, workflowController.createWorkflow);
+router.get('/', canViewWorkflow, workflowController.getWorkflows);
+router.get('/:id', canViewWorkflow, workflowController.getWorkflowById);
+router.put('/:id', canEditWorkflow, workflowController.updateWorkflow);
+router.delete('/:id', canEditWorkflow, workflowController.deleteWorkflow);
 
 module.exports = router;
