@@ -21,7 +21,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'hrEmail', label: 'Send HR Email', icon: 'Mail' },
     { id: 'announcements', label: 'Announcements', icon: 'Megaphone' },
     { id: 'reimbursements', label: 'Reimbursements', icon: 'Receipt' },
-    { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' }
+    { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' },
+    { id: 'organization', label: 'Organization Structure', icon: 'Network' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -41,6 +42,10 @@ const normalizeEnabledModules = (moduleIds = []) => {
     if (normalizedIds.has(PROJECTS_MODULE_ID)) {
         normalizedIds.add(BUSINESS_UNITS_MODULE_ID);
         normalizedIds.add(CLIENTS_MODULE_ID);
+    }
+
+    if (normalizedIds.has('userManagement') || normalizedIds.has('employeeDossier') || normalizedIds.has(BUSINESS_UNITS_MODULE_ID)) {
+        normalizedIds.add('organization');
     }
 
     return Array.from(normalizedIds);
@@ -69,7 +74,8 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('ta.')) return enabled.has('talentAcquisition');
         if (key.startsWith('helpdesk.')) return enabled.has('helpdesk');
         if (key.startsWith('discussion.')) return enabled.has('meetingsOfMinutes');
-        if (key.startsWith('business_unit.')) return enabled.has('businessUnits');
+        if (key.startsWith('business_unit.')) return enabled.has('businessUnits') || enabled.has('organization');
+        if (key.startsWith('department.') || key.startsWith('designation.') || key.startsWith('org_chart.')) return enabled.has('organization');
         if (key.startsWith('client.')) return enabled.has('clients');
         if (key.startsWith('project.') || key.startsWith('module.') || key.startsWith('task.')) return enabled.has('projects');
         if (key.startsWith('dossier.')) return enabled.has('employeeDossier');

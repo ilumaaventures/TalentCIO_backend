@@ -602,6 +602,63 @@ module.exports = [
         key: "dashboard.view",
         module: "SYSTEM",
         description: "View main dashboard"
+    },
+
+    // ORGANIZATION STRUCTURE
+    {
+        key: "department.create",
+        module: "ORGANIZATION",
+        description: "Create departments"
+    },
+    {
+        key: "department.read",
+        module: "ORGANIZATION",
+        description: "View departments"
+    },
+    {
+        key: "department.update",
+        module: "ORGANIZATION",
+        description: "Update departments"
+    },
+    {
+        key: "department.delete",
+        module: "ORGANIZATION",
+        description: "Delete/archive departments"
+    },
+    {
+        key: "designation.create",
+        module: "ORGANIZATION",
+        description: "Create designations"
+    },
+    {
+        key: "designation.read",
+        module: "ORGANIZATION",
+        description: "View designations"
+    },
+    {
+        key: "designation.update",
+        module: "ORGANIZATION",
+        description: "Update designations"
+    },
+    {
+        key: "designation.delete",
+        module: "ORGANIZATION",
+        description: "Delete/archive designations"
+    },
+    {
+        key: "org_chart.view",
+        module: "ORGANIZATION",
+        description: "View the organization chart"
+    },
+    {
+        key: "org_chart.manage",
+        module: "ORGANIZATION",
+        description: "Edit reporting lines from the org chart"
+    },
+    {
+        key: "business_unit.delete",
+        module: "ORGANIZATION",
+        description: "Delete business units"
     }
 ];
 

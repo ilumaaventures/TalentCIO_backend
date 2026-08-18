@@ -24,6 +24,16 @@ const userSchema = new mongoose.Schema({
         default: true
     },
     department: String,
+    departmentRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Department',
+        default: null
+    },
+    designationRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Designation',
+        default: null
+    },
     employmentType: {
         type: String,
         default: 'Full Time'
@@ -174,6 +184,9 @@ userSchema.pre('save', async function () {
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
 };
+
+userSchema.index({ companyId: 1, departmentRef: 1 });
+userSchema.index({ companyId: 1, designationRef: 1 });
 
 userSchema.plugin(softDeletePlugin);
 

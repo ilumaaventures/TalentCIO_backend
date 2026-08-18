@@ -19,6 +19,8 @@ const QueryType = require('../helpdesk/queryType.model');
 const EmailTemplate = require('../email/model/emailTemplate.model');
 const OnboardingTemplateBin = require('../onboarding/model/onboardingTemplateBin.model');
 const OnboardingPolicyBin = require('../onboarding/model/onboardingPolicyBin.model');
+const Department = require('../organization/models/department.model');
+const Designation = require('../organization/models/designation.model');
 
 const ENTITY_MAP = {
     project: Project,
@@ -31,6 +33,8 @@ const ENTITY_MAP = {
     role: Role,
     client: Client,
     businessunit: BusinessUnit,
+    department: Department,
+    designation: Designation,
     discussion: Discussion,
     meeting: Meeting,
     holiday: Holiday,
