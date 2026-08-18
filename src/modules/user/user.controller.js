@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('./user.model');
 const Role = require('./role.model');
 const { HiringRequest } = require('../talent-acquisition/model/hiringRequest.model');
@@ -5,6 +6,8 @@ const Candidate = require('../talent-acquisition/model/candidate.model');
 const Company = require('../company/company.model');
 const Permission = require('./permission.model');
 const EmployeeProfile = require('../dossier/employeeProfile.model');
+const Department = require('../organization/models/department.model');
+const Designation = require('../organization/models/designation.model');
 const { normalizeEnabledModules } = require('../company/enabledModules');
 const { checkDossierCompleteness } = require('../dossier/dossierCompleteness');
 const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.service');
@@ -84,7 +87,7 @@ const normalizeWorkLocation = (value) => {
     return value.trim();
 };
 
-const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce';
+const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department departmentRef designationRef workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce';
 
 const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
     User.find(
@@ -98,6 +101,8 @@ const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {
             select: 'name isSystem permissions',
             populate: { path: 'permissions', select: 'key' }
         })
+        .populate('departmentRef', 'name code')
+        .populate('designationRef', 'title level')
         .populate('reportingManagers', 'firstName lastName email')
         .populate('employeeProfile', 'hris')
 );
@@ -164,24 +169,40 @@ const getUsers = async (req, res) => {
 // @route   POST /api/users
 // @access  Private (Admin)
 const createUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, reportingManagers, attendanceMode, attendanceShiftCode, isTotalWorkforce, salary } = req.body;
-    console.log('Create User Body:', req.body); // DEBUG LOG
+    const {
+        firstName,
+        lastName,
+        email,
+        password,
+        roleId,
+        department,
+        departmentRef,
+        designation,
+        designationRef,
+        workLocation,
+        employmentType,
+        employeeCode,
+        joiningDate,
+        directReports,
+        reportingManagers,
+        managerId,
+        primaryManagerId,
+        attendanceMode,
+        attendanceShiftCode,
+        isTotalWorkforce,
+        salary
+    } = req.body;
 
     try {
-        // Check if user exists
+        // Check if user already exists
         const userExists = await User.findOne({ email, companyId: req.companyId });
         if (userExists) {
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        // Fetch company to check allowedDomains
+        // Validate Email Domain
         const company = await Company.findById(req.companyId).populate('planId');
-        if (!company) {
-            return res.status(404).json({ message: 'Company not found' });
-        }
-
-        // Check Allowed Domains
-        if (company.allowedDomains && company.allowedDomains.length > 0) {
+        if (company && company.allowedDomains && company.allowedDomains.length > 0) {
             const userEmailDomain = email.split('@')[1];
             if (!company.allowedDomains.includes(userEmailDomain)) {
                 return res.status(400).json({ message: `Access Denied: Email domain '@${userEmailDomain}' is not allowed for this company. Allowed domains: ${company.allowedDomains.join(', ')}` });
@@ -189,7 +210,7 @@ const createUser = async (req, res) => {
         }
 
         // Plan Enforcement: Check maxUsers
-        if (company.planId) {
+        if (company?.planId) {
             const activeUserCount = await User.countDocuments({ companyId: req.companyId, isActive: true });
             if (activeUserCount >= company.planId.maxUsers) {
                 return res.status(403).json({
@@ -204,6 +225,47 @@ const createUser = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Role' });
         }
 
+        // Resolve Department
+        let resolvedDepartmentRef = departmentRef && mongoose.Types.ObjectId.isValid(departmentRef) ? departmentRef : null;
+        let resolvedDepartmentName = department ? String(department).trim() : '';
+
+        if (resolvedDepartmentRef) {
+            const deptDoc = await Department.findOne({ _id: resolvedDepartmentRef, companyId: req.companyId, isDeleted: { $ne: true } });
+            if (deptDoc) {
+                resolvedDepartmentName = deptDoc.name;
+            }
+        } else if (resolvedDepartmentName) {
+            const deptDoc = await Department.findOne({ name: { $regex: `^${resolvedDepartmentName}$`, $options: 'i' }, companyId: req.companyId, isDeleted: { $ne: true } });
+            if (deptDoc) {
+                resolvedDepartmentRef = deptDoc._id;
+            }
+        }
+
+        // Resolve Designation
+        let resolvedDesignationRef = designationRef && mongoose.Types.ObjectId.isValid(designationRef) ? designationRef : null;
+        let resolvedDesignationTitle = designation ? String(designation).trim() : '';
+
+        if (resolvedDesignationRef) {
+            const desigDoc = await Designation.findOne({ _id: resolvedDesignationRef, companyId: req.companyId, isDeleted: { $ne: true } });
+            if (desigDoc) {
+                resolvedDesignationTitle = desigDoc.title;
+            }
+        } else if (resolvedDesignationTitle) {
+            const desigDoc = await Designation.findOne({ title: { $regex: `^${resolvedDesignationTitle}$`, $options: 'i' }, companyId: req.companyId, isDeleted: { $ne: true } });
+            if (desigDoc) {
+                resolvedDesignationRef = desigDoc._id;
+            }
+        }
+
+        // Resolve Primary Reporting Manager
+        let finalReportingManagers = [];
+        const directManager = managerId || primaryManagerId;
+        if (directManager && mongoose.Types.ObjectId.isValid(directManager)) {
+            finalReportingManagers = [directManager];
+        } else if (Array.isArray(reportingManagers)) {
+            finalReportingManagers = reportingManagers.filter(id => mongoose.Types.ObjectId.isValid(id));
+        }
+
         const user = await User.create({
             companyId: req.companyId,
             firstName,
@@ -211,12 +273,14 @@ const createUser = async (req, res) => {
             email,
             password,
             roles: [roleId],
-            department,
+            department: resolvedDepartmentName,
+            departmentRef: resolvedDepartmentRef,
+            designationRef: resolvedDesignationRef,
             workLocation: normalizeWorkLocation(workLocation),
             employmentType,
             employeeCode,
             joiningDate,
-            reportingManagers: reportingManagers || [],
+            reportingManagers: finalReportingManagers,
             attendanceMode: attendanceMode || 'clock_in_out',
             attendanceShiftCode: attendanceShiftCode || 'general',
             isTotalWorkforce: isTotalWorkforce !== false,
@@ -258,8 +322,11 @@ const createUser = async (req, res) => {
                     workEmail: email
                 },
                 employment: {
-                    designation: '',
-                    department: department || '',
+                    designation: resolvedDesignationTitle || '',
+                    designationRef: resolvedDesignationRef || null,
+                    department: resolvedDepartmentName || '',
+                    departmentRef: resolvedDepartmentRef || null,
+                    reportingManager: finalReportingManagers[0] || null,
                     joiningDate: joiningDate || new Date(),
                     status: 'Active',
                     workLocation: user.workLocation || '',
@@ -333,7 +400,29 @@ const updateUserRole = async (req, res) => {
 // @route   PUT /api/users/:id
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
-    const { firstName, lastName, email, password, roleId, department, workLocation, employmentType, employeeCode, joiningDate, directReports, attendanceMode, attendanceShiftCode, isTotalWorkforce, salary } = req.body;
+    const {
+        firstName,
+        lastName,
+        email,
+        password,
+        roleId,
+        department,
+        departmentRef,
+        designation,
+        designationRef,
+        workLocation,
+        employmentType,
+        employeeCode,
+        joiningDate,
+        directReports,
+        reportingManagers,
+        managerId,
+        primaryManagerId,
+        attendanceMode,
+        attendanceShiftCode,
+        isTotalWorkforce,
+        salary
+    } = req.body;
     console.log('Update User Body:', req.body); // DEBUG LOG
     try {
         const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
@@ -354,10 +443,49 @@ const updateUser = async (req, res) => {
         }
 
         user.firstName = firstName || user.firstName;
-        user.lastName = lastName || user.lastName;
+        user.lastName = lastName !== undefined ? lastName : user.lastName;
         user.email = email || user.email;
         if (password) user.password = password;
-        user.department = department || user.department;
+
+        // Resolve and update Department
+        if (departmentRef !== undefined) {
+            if (departmentRef && mongoose.Types.ObjectId.isValid(departmentRef)) {
+                const deptDoc = await Department.findOne({ _id: departmentRef, companyId: req.companyId, isDeleted: { $ne: true } });
+                user.departmentRef = deptDoc ? deptDoc._id : departmentRef;
+                if (deptDoc) user.department = deptDoc.name;
+            } else if (!departmentRef) {
+                user.departmentRef = null;
+            }
+        }
+        if (department !== undefined) {
+            user.department = department;
+            if (!user.departmentRef && department) {
+                const deptDoc = await Department.findOne({ name: { $regex: `^${String(department).trim()}$`, $options: 'i' }, companyId: req.companyId, isDeleted: { $ne: true } });
+                if (deptDoc) user.departmentRef = deptDoc._id;
+            }
+        }
+
+        // Resolve and update Designation
+        if (designationRef !== undefined) {
+            if (designationRef && mongoose.Types.ObjectId.isValid(designationRef)) {
+                user.designationRef = designationRef;
+            } else if (!designationRef) {
+                user.designationRef = null;
+            }
+        }
+
+        // Resolve and update Primary Reporting Manager
+        const directManager = managerId !== undefined ? managerId : primaryManagerId;
+        if (directManager !== undefined) {
+            if (directManager && mongoose.Types.ObjectId.isValid(directManager)) {
+                user.reportingManagers = [directManager];
+            } else if (!directManager) {
+                user.reportingManagers = [];
+            }
+        } else if (Array.isArray(reportingManagers)) {
+            user.reportingManagers = reportingManagers.filter(id => mongoose.Types.ObjectId.isValid(id));
+        }
+
         if (Object.prototype.hasOwnProperty.call(req.body, 'workLocation')) {
             user.workLocation = normalizeWorkLocation(workLocation);
         }
@@ -387,6 +515,38 @@ const updateUser = async (req, res) => {
         }
 
         await user.save();
+
+        // Sync to EmployeeProfile
+        try {
+            let desigTitle = designation || '';
+            if (user.designationRef) {
+                const dDoc = await Designation.findById(user.designationRef).select('title');
+                if (dDoc) desigTitle = dDoc.title;
+            }
+
+            await EmployeeProfile.updateOne(
+                { user: user._id, companyId: req.companyId },
+                {
+                    $set: {
+                        'personal.firstName': user.firstName,
+                        'personal.lastName': user.lastName || '',
+                        'personal.fullName': `${user.firstName} ${user.lastName || ''}`.trim(),
+                        'personal.joiningDate': user.joiningDate,
+                        'contact.workEmail': user.email,
+                        'employment.department': user.department || '',
+                        'employment.departmentRef': user.departmentRef || null,
+                        'employment.designation': desigTitle || '',
+                        'employment.designationRef': user.designationRef || null,
+                        'employment.reportingManager': user.reportingManagers?.[0] || null,
+                        'employment.workLocation': user.workLocation || '',
+                        'employment.employmentType': user.employmentType || 'Full Time',
+                        'employment.joiningDate': user.joiningDate
+                    }
+                }
+            );
+        } catch (profileSyncErr) {
+            console.error('Error syncing User updates to EmployeeProfile:', profileSyncErr);
+        }
 
         if (salary) {
             let profile = await EmployeeProfile.findOne({ user: user._id, companyId: req.companyId });
@@ -625,9 +785,11 @@ const getUserById = async (req, res) => {
             null,
             includeDeleted ? { includeDeleted: true } : undefined
         )
-            .select('firstName lastName email roles reportingManagers department workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce')
+            .select('firstName lastName email roles reportingManagers department departmentRef designationRef workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture profilePictureMetadata createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce')
             .populate('roles', 'name isSystem')
-            .populate('reportingManagers', 'firstName lastName email')
+            .populate('departmentRef', 'name code')
+            .populate('designationRef', 'title level')
+            .populate('reportingManagers', 'firstName lastName email profilePicture')
             .lean();
 
         if (!user) {
