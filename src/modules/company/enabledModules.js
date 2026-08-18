@@ -44,8 +44,9 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add(CLIENTS_MODULE_ID);
     }
 
-    if (normalizedIds.has('userManagement') || normalizedIds.has('employeeDossier') || normalizedIds.has(BUSINESS_UNITS_MODULE_ID)) {
+    if (normalizedIds.has('organization') || normalizedIds.has('userManagement') || normalizedIds.has('employeeDossier') || normalizedIds.has(BUSINESS_UNITS_MODULE_ID)) {
         normalizedIds.add('organization');
+        normalizedIds.add(BUSINESS_UNITS_MODULE_ID);
     }
 
     return Array.from(normalizedIds);

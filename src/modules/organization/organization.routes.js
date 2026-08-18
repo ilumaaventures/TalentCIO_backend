@@ -65,11 +65,11 @@ router.get('/org-chart/:userId/reporting-line', authorize('org_chart.view'), req
 router.put('/org-chart/:userId/manager', authorize('org_chart.manage'), requireModule('organization'), updateReportingManager);
 
 // --- BUSINESS UNITS ---
-router.get('/business-units', authorize('business_unit.read'), requireModule(['organization', 'businessUnits']), getBusinessUnits);
-router.get('/business-units/:id', authorize('business_unit.read'), requireModule(['organization', 'businessUnits']), getBusinessUnit);
-router.post('/business-units', authorize('business_unit.create'), requireModule(['organization', 'businessUnits']), createBusinessUnit);
-router.put('/business-units/:id', authorize('business_unit.update'), requireModule(['organization', 'businessUnits']), updateBusinessUnit);
-router.delete('/business-units/:id', authorize('business_unit.delete'), requireModule(['organization', 'businessUnits']), deleteBusinessUnit);
-router.post('/business-units/:id/restore', authorize('business_unit.delete'), requireModule(['organization', 'businessUnits']), restoreBusinessUnit);
+router.get('/business-units', authorizeAny(['business_unit.read', 'department.read', 'department.create', 'department.update', 'designation.read', 'user.create', 'user.update', 'dossier.edit', 'org_chart.view', 'project.read', 'client.read', 'client.create']), requireModule(['organization', 'businessUnits']), getBusinessUnits);
+router.get('/business-units/:id', authorizeAny(['business_unit.read', 'department.read', 'org_chart.view']), requireModule(['organization', 'businessUnits']), getBusinessUnit);
+router.post('/business-units', authorizeAny(['business_unit.create', 'department.create']), requireModule(['organization', 'businessUnits']), createBusinessUnit);
+router.put('/business-units/:id', authorizeAny(['business_unit.update', 'department.update']), requireModule(['organization', 'businessUnits']), updateBusinessUnit);
+router.delete('/business-units/:id', authorizeAny(['business_unit.delete', 'department.delete']), requireModule(['organization', 'businessUnits']), deleteBusinessUnit);
+router.post('/business-units/:id/restore', authorizeAny(['business_unit.delete', 'department.delete']), requireModule(['organization', 'businessUnits']), restoreBusinessUnit);
 
 module.exports = router;
