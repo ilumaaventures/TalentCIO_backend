@@ -69,12 +69,12 @@ router.delete('/users/:id', blockDuringImpersonation, authorize('user.delete'), 
 // Role Routes
 router.get('/roles/bootstrap', authorize('role.read'), getRoleBootstrap);
 router.get('/roles', authorize('role.read'), getRoles);
-router.post('/roles', authorize('role.create'), createRole);
-router.put('/roles/:id', authorize('role.update'), updateRole); // Assuming role.update permission exists or re-using role.create
+router.post('/roles', blockDuringImpersonation, authorize('role.create'), createRole);
+router.put('/roles/:id', blockDuringImpersonation, authorize('role.update'), updateRole); // Assuming role.update permission exists or re-using role.create
 router.get('/permissions', getPermissions); // Assuming basic auth is enough to view permissions structure
 
 // Migration Routes (Temporary)
-router.post('/migrate-timesheets', authorize('user.update'), backfillTimesheets);
+router.post('/migrate-timesheets', blockDuringImpersonation, authorize('user.update'), backfillTimesheets);
 
 // Company Attendance Settings
 router.get('/company-settings/attendance', admin, getOwnAttendanceSettings);

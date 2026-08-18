@@ -41,6 +41,20 @@ const isUserPrivileged = (user) => {
     });
 };
 
+const isActorAdmin = (actor) => {
+    if (!actor) return false;
+    const permissions = Array.isArray(actor.permissions) ? actor.permissions : [];
+    if (permissions.includes('*') || permissions.includes('all') || actor.hasAllPermissions) {
+        return true;
+    }
+    const roles = Array.isArray(actor.roles) ? actor.roles : [];
+    return roles.some((r) => {
+        if (!r) return false;
+        const name = typeof r === 'string' ? r : r.name;
+        return ['Admin', 'Super Admin', 'System Admin'].includes(name) || r.isSystem;
+    });
+};
+
 const getAssignedClientNames = (user) => (
     [...new Set(
         (Array.isArray(user?.taAssignedClients) ? user.taAssignedClients : [])
@@ -197,6 +211,11 @@ const impersonateUser = async (req, res) => {
 
         if (target.isActive === false) {
             return res.status(400).json({ message: 'Cannot impersonate an inactive or deactivated user.' });
+        }
+
+        const actorIsAdmin = isActorAdmin(req.user);
+        if (!actorIsAdmin && isUserPrivileged(target)) {
+            return res.status(403).json({ message: 'You cannot impersonate an Admin or another user with impersonation/system privileges.' });
         }
 
         const tokenJti = crypto.randomUUID();
