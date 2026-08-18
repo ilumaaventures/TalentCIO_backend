@@ -199,12 +199,6 @@ const impersonateUser = async (req, res) => {
             return res.status(400).json({ message: 'Cannot impersonate an inactive or deactivated user.' });
         }
 
-        if (isUserPrivileged(target)) {
-            return res.status(403).json({
-                message: 'Cannot impersonate an administrator or user with privileged permissions.'
-            });
-        }
-
         const tokenJti = crypto.randomUUID();
         const expiresAt = new Date(Date.now() + IMPERSONATION_TTL_MS);
         const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '';
@@ -302,12 +296,6 @@ const superAdminImpersonateUser = async (req, res) => {
 
         if (target.isActive === false) {
             return res.status(400).json({ message: 'Cannot impersonate an inactive or deactivated user.' });
-        }
-
-        if (isUserPrivileged(target)) {
-            return res.status(403).json({
-                message: 'Cannot impersonate an administrator or user with privileged permissions.'
-            });
         }
 
         const company = await Company.findById(target.companyId).lean();
