@@ -3,7 +3,7 @@ const router = express.Router();
 const { register, loginUser, logoutUser, uploadProfilePicture, verifyOtpAndResetPassword, verifyOtp, resendOtp, getBirthdayStatus, changePassword } = require('./auth.controller');
 const { authLimiter } = require('../../common/middleware/rateLimitMiddleware');
 const { getMyself } = require('../user/user.controller');
-const { protect } = require('../../common/middleware/authMiddleware');
+const { protect, blockDuringImpersonation } = require('../../common/middleware/authMiddleware');
 
 const { uploadProfilePicture: uploadProfilePictureMiddleware } = require('../../config/cloudinary');
 
@@ -28,7 +28,7 @@ router.post('/resend-otp', authLimiter, resendOtp);
 router.post('/upload-profile-picture', protect, handleProfilePictureUpload, uploadProfilePicture);
 router.get('/birthday-status', protect, getBirthdayStatus);
 router.get('/profile', protect, getMyself);
-router.put('/change-password', protect, changePassword);
+router.put('/change-password', protect, blockDuringImpersonation, changePassword);
 
 router.get('/verify-workspace', (req, res) => {
     // If req.company exists, it's a valid tenant.

@@ -20,6 +20,11 @@ module.exports = [
         module: "USER",
         description: "Deactivate or delete users"
     },
+    {
+        key: "user.impersonate",
+        module: "USER",
+        description: "Switch into another user's account within this workspace (impersonation)"
+    },
 
     // ROLE MANAGEMENT
     {
