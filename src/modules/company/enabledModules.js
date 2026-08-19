@@ -44,11 +44,6 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add(CLIENTS_MODULE_ID);
     }
 
-    if (normalizedIds.has('organization') || normalizedIds.has('userManagement') || normalizedIds.has('employeeDossier') || normalizedIds.has(BUSINESS_UNITS_MODULE_ID)) {
-        normalizedIds.add('organization');
-        normalizedIds.add(BUSINESS_UNITS_MODULE_ID);
-    }
-
     return Array.from(normalizedIds);
 };
 
@@ -75,8 +70,8 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('ta.')) return enabled.has('talentAcquisition');
         if (key.startsWith('helpdesk.')) return enabled.has('helpdesk');
         if (key.startsWith('discussion.')) return enabled.has('meetingsOfMinutes');
-        if (key.startsWith('business_unit.')) return enabled.has('businessUnits') || enabled.has('organization');
-        if (key.startsWith('department.') || key.startsWith('designation.') || key.startsWith('org_chart.')) return enabled.has('organization');
+        if (key.startsWith('business_unit.')) return enabled.has('businessUnits');
+        if (key.startsWith('org_chart.')) return enabled.has('organization');
         if (key.startsWith('client.')) return enabled.has('clients');
         if (key.startsWith('project.') || key.startsWith('module.') || key.startsWith('task.')) return enabled.has('projects');
         if (key.startsWith('dossier.')) return enabled.has('employeeDossier');

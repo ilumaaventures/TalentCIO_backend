@@ -206,22 +206,26 @@ exports.submitClaim = async (req, res) => {
             isDeleted: { $ne: true }
         }).lean();
 
+        const otherCategoryName = (req.body?.otherCategoryName || parsedItems[0]?.otherCategoryName || '').trim();
+
         const claim = await Reimbursement.create({
             employee:            req.user._id,
             companyId,
             department:          department || req.user.department || '',
             employeeCode:        employeeCode || req.user.employeeCode || req.user.employeeId || '',
             category:            primaryCategory,
+            otherCategoryName,
             amount:              calculatedAmount,
             currency:            currency || 'INR',
             expenseDate:         primaryDate,
             description:         primaryDesc,
             items:               parsedItems.map(it => ({
-                expenseDate: new Date(it.expenseDate || primaryDate),
-                description: it.description?.trim() || '',
-                category:    it.category?.trim() || primaryCategory,
-                amount:      Number(it.amount) || 0,
-                hasReceipt:  Boolean(it.hasReceipt || receipts.length > 0)
+                expenseDate:       new Date(it.expenseDate || primaryDate),
+                description:       it.description?.trim() || '',
+                category:          it.category?.trim() || primaryCategory,
+                otherCategoryName: it.otherCategoryName?.trim() || '',
+                amount:            Number(it.amount) || 0,
+                hasReceipt:        Boolean(it.hasReceipt || receipts.length > 0)
             })),
             receipts,
             approvalWorkflow:    workflow?._id || null,

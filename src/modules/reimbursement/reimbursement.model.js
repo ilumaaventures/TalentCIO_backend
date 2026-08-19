@@ -14,11 +14,12 @@ const receiptAttachmentSchema = new mongoose.Schema({
 
 // Itemized expense row schema matching "Date | Description | Category Type | Amount | Receipt Attached (Y/N)"
 const expenseItemSchema = new mongoose.Schema({
-    expenseDate: { type: Date, required: true },
-    description: { type: String, required: true, trim: true },
-    category:    { type: String, required: true, trim: true },
-    amount:      { type: Number, required: true, min: 0 },
-    hasReceipt:  { type: Boolean, default: false }
+    expenseDate:       { type: Date, required: true },
+    description:       { type: String, required: true, trim: true },
+    category:          { type: String, required: true, trim: true },
+    otherCategoryName: { type: String, trim: true, default: '' },
+    amount:            { type: Number, required: true, min: 0 },
+    hasReceipt:        { type: Boolean, default: false }
 }, { _id: false });
 
 // One entry per approval level action — mirrors leaveRequest auditLog style
@@ -55,11 +56,12 @@ const reimbursementSchema = new mongoose.Schema({
     employeeCode:      { type: String, trim: true, default: '' },
 
     // Primary summary fields
-    category:    { type: String, required: true, trim: true },
-    amount:      { type: Number, required: true, min: 0 },
-    currency:    { type: String, default: 'INR', trim: true },
-    expenseDate: { type: Date, required: true },
-    description: { type: String, required: true, trim: true, maxlength: 2000 },
+    category:          { type: String, required: true, trim: true },
+    otherCategoryName: { type: String, trim: true, default: '' },
+    amount:            { type: Number, required: true, min: 0 },
+    currency:          { type: String, default: 'INR', trim: true },
+    expenseDate:       { type: Date, required: true },
+    description:       { type: String, required: true, trim: true, maxlength: 2000 },
 
     // Itemized table of expenses
     items: {
