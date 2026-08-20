@@ -23,53 +23,103 @@ const validateQueryTypeAssignments = async ({
     companyId,
     assignedRole,
     assignedPerson,
+    enableEscalation,
     escalationRole,
-    escalationPerson
+    escalationPerson,
+    escalationLevels = []
 }) => {
     if (!assignedPerson) {
         throw buildRequestError('Assigned responsible person is required.');
     }
 
-    const [assignedRoleDoc, assignedPersonDoc, escalationRoleDoc, escalationPersonDoc] = await Promise.all([
-        assignedRole
-            ? Role.findOne({ _id: assignedRole, companyId, isActive: true }).select('_id').lean()
-            : Promise.resolve(null),
-        User.findOne({ _id: assignedPerson, companyId, isActive: true }).select('_id roles').lean(),
-        escalationRole
-            ? Role.findOne({ _id: escalationRole, companyId, isActive: true }).select('_id').lean()
-            : Promise.resolve(null),
-        escalationPerson
-            ? User.findOne({ _id: escalationPerson, companyId, isActive: true }).select('_id roles').lean()
-            : Promise.resolve(null)
-    ]);
+    const roleIdsToFetch = new Set();
+    const userIdsToFetch = new Set();
 
-    if (assignedRole && !assignedRoleDoc) {
-        throw buildRequestError('Assigned role must belong to this workspace.');
+    if (assignedRole) roleIdsToFetch.add(assignedRole.toString());
+    if (assignedPerson) userIdsToFetch.add(assignedPerson.toString());
+    if (escalationRole) roleIdsToFetch.add(escalationRole.toString());
+    if (escalationPerson) userIdsToFetch.add(escalationPerson.toString());
+
+    if (enableEscalation && Array.isArray(escalationLevels) && escalationLevels.length > 0) {
+        escalationLevels.forEach((level, idx) => {
+            if (!level.escalationPerson) {
+                throw buildRequestError(`Escalation Level ${level.level || idx + 1} requires a designated responsible person.`);
+            }
+            if (!level.escalationDays || Number(level.escalationDays) < 1) {
+                throw buildRequestError(`Escalation Level ${level.level || idx + 1} requires a valid SLA threshold (at least 1 day).`);
+            }
+            if (level.escalationRole) roleIdsToFetch.add(level.escalationRole.toString());
+            if (level.escalationPerson) userIdsToFetch.add(level.escalationPerson.toString());
+        });
+
+        // Ensure escalationDays are strictly increasing
+        for (let i = 1; i < escalationLevels.length; i++) {
+            if (Number(escalationLevels[i].escalationDays) <= Number(escalationLevels[i - 1].escalationDays)) {
+                throw buildRequestError(`Escalation Level ${i + 1} SLA days (${escalationLevels[i].escalationDays}d) must be greater than Level ${i} SLA days (${escalationLevels[i - 1].escalationDays}d).`);
+            }
+        }
     }
 
+    const [roles, users] = await Promise.all([
+        Role.find({ _id: { $in: Array.from(roleIdsToFetch) }, companyId, isActive: true }).select('_id name').lean(),
+        User.find({ _id: { $in: Array.from(userIdsToFetch) }, companyId, isActive: true }).select('_id roles').lean()
+    ]);
+
+    const roleMap = new Map(roles.map(r => [r._id.toString(), r]));
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+
+    // Validate assigned person
+    const assignedPersonDoc = userMap.get(assignedPerson.toString());
     if (!assignedPersonDoc) {
         throw buildRequestError('Assigned responsible person must belong to this workspace and be active.');
     }
-
-    if (assignedRoleDoc) {
-        const hasAssignedRole = (assignedPersonDoc.roles || []).some(roleId => roleId?.toString() === assignedRoleDoc._id.toString());
+    if (assignedRole) {
+        const assignedRoleDoc = roleMap.get(assignedRole.toString());
+        if (!assignedRoleDoc) {
+            throw buildRequestError('Assigned role must belong to this workspace.');
+        }
+        const hasAssignedRole = (assignedPersonDoc.roles || []).some(rId => rId?.toString() === assignedRoleDoc._id.toString());
         if (!hasAssignedRole) {
             throw buildRequestError('Assigned responsible person must have the selected assigned role.');
         }
     }
 
-    if (escalationRole && !escalationRoleDoc) {
-        throw buildRequestError('Escalation role must belong to this workspace.');
-    }
-
-    if (escalationPerson && !escalationPersonDoc) {
-        throw buildRequestError('Escalation person must belong to this workspace and be active.');
-    }
-
-    if (escalationRoleDoc && escalationPersonDoc) {
-        const hasEscalationRole = (escalationPersonDoc.roles || []).some(roleId => roleId?.toString() === escalationRoleDoc._id.toString());
-        if (!hasEscalationRole) {
-            throw buildRequestError('Escalation person must have the selected escalation role.');
+    // Validate escalation levels if enabled
+    if (enableEscalation && Array.isArray(escalationLevels) && escalationLevels.length > 0) {
+        for (let idx = 0; idx < escalationLevels.length; idx++) {
+            const level = escalationLevels[idx];
+            const escPersonId = (level.escalationPerson?._id || level.escalationPerson).toString();
+            const escPersonDoc = userMap.get(escPersonId);
+            if (!escPersonDoc) {
+                throw buildRequestError(`Escalation person for Level ${level.level || idx + 1} must belong to this workspace and be active.`);
+            }
+            if (level.escalationRole) {
+                const escRoleId = (level.escalationRole?._id || level.escalationRole).toString();
+                const escRoleDoc = roleMap.get(escRoleId);
+                if (!escRoleDoc) {
+                    throw buildRequestError(`Escalation role for Level ${level.level || idx + 1} must belong to this workspace.`);
+                }
+                const hasRole = (escPersonDoc.roles || []).some(rId => rId?.toString() === escRoleDoc._id.toString());
+                if (!hasRole) {
+                    throw buildRequestError(`Escalation person for Level ${level.level || idx + 1} must have the selected escalation role.`);
+                }
+            }
+        }
+    } else if (enableEscalation && escalationPerson) {
+        // Fallback single-level check
+        const escalationPersonDoc = userMap.get(escalationPerson.toString());
+        if (!escalationPersonDoc) {
+            throw buildRequestError('Escalation person must belong to this workspace and be active.');
+        }
+        if (escalationRole) {
+            const escalationRoleDoc = roleMap.get(escalationRole.toString());
+            if (!escalationRoleDoc) {
+                throw buildRequestError('Escalation role must belong to this workspace.');
+            }
+            const hasEscalationRole = (escalationPersonDoc.roles || []).some(rId => rId?.toString() === escalationRoleDoc._id.toString());
+            if (!hasEscalationRole) {
+                throw buildRequestError('Escalation person must have the selected escalation role.');
+            }
         }
     }
 };
@@ -79,13 +129,13 @@ const validateQueryTypeAssignments = async ({
 
 exports.getQueryTypes = async (req, res) => {
     try {
-        // Caching disabled for real-time visibility consistency
-        // setPrivateCache(res, 60);
         const types = await QueryType.find({ companyId: req.companyId })
             .populate('assignedRole', 'name')
             .populate('assignedPerson', 'firstName lastName email')
             .populate('escalationRole', 'name')
             .populate('escalationPerson', 'firstName lastName email')
+            .populate('escalationLevels.escalationRole', 'name')
+            .populate('escalationLevels.escalationPerson', 'firstName lastName email')
             .sort({ name: 1 })
             .lean();
         res.status(200).json({ success: true, data: types });
@@ -102,6 +152,7 @@ exports.addQueryType = async (req, res) => {
         const {
             name, assignedRole, assignedPerson,
             enableEscalation, escalationDays, escalationRole, escalationPerson,
+            escalationLevels,
             autoResponse
         } = req.body;
 
@@ -109,14 +160,41 @@ exports.addQueryType = async (req, res) => {
             companyId: req.companyId,
             assignedRole,
             assignedPerson,
+            enableEscalation,
             escalationRole,
-            escalationPerson
+            escalationPerson,
+            escalationLevels
         });
 
+        let normalizedLevels = [];
+        if (enableEscalation && Array.isArray(escalationLevels) && escalationLevels.length > 0) {
+            normalizedLevels = escalationLevels.map((lvl, index) => ({
+                level: index + 1,
+                escalationDays: Number(lvl.escalationDays) || 2,
+                escalationRole: lvl.escalationRole || null,
+                escalationPerson: lvl.escalationPerson?._id || lvl.escalationPerson
+            }));
+        } else if (enableEscalation && escalationPerson) {
+            normalizedLevels = [{
+                level: 1,
+                escalationDays: Number(escalationDays) || 2,
+                escalationRole: escalationRole || null,
+                escalationPerson: escalationPerson?._id || escalationPerson
+            }];
+        }
+
+        const primaryEscalation = normalizedLevels[0] || null;
+
         const newType = new QueryType({
-            name, assignedRole, assignedPerson,
-            enableEscalation, escalationDays, escalationRole, escalationPerson,
-            autoResponse,
+            name,
+            assignedRole: assignedRole || null,
+            assignedPerson,
+            enableEscalation: !!enableEscalation,
+            escalationDays: primaryEscalation ? primaryEscalation.escalationDays : (escalationDays || 2),
+            escalationRole: primaryEscalation ? primaryEscalation.escalationRole : (escalationRole || null),
+            escalationPerson: primaryEscalation ? primaryEscalation.escalationPerson : (escalationPerson || null),
+            escalationLevels: normalizedLevels,
+            autoResponse: autoResponse || "",
             companyId: req.companyId
         });
         await newType.save();
@@ -138,18 +216,24 @@ exports.updateQueryType = async (req, res) => {
         const {
             name, assignedRole, assignedPerson, isActive,
             enableEscalation, escalationDays, escalationRole, escalationPerson,
+            escalationLevels,
             autoResponse
         } = req.body;
         const type = await QueryType.findOne({ _id: req.params.id, companyId: req.companyId });
 
         if (!type) return res.status(404).json({ success: false, message: 'Type not found' });
 
+        const effectiveEnableEscalation = enableEscalation !== undefined ? enableEscalation : type.enableEscalation;
+        const effectiveEscalationLevels = escalationLevels !== undefined ? escalationLevels : type.escalationLevels;
+
         await validateQueryTypeAssignments({
             companyId: req.companyId,
             assignedRole: assignedRole !== undefined ? assignedRole : type.assignedRole,
             assignedPerson: assignedPerson || type.assignedPerson,
+            enableEscalation: effectiveEnableEscalation,
             escalationRole: escalationRole !== undefined ? escalationRole : type.escalationRole,
-            escalationPerson: escalationPerson !== undefined ? escalationPerson : type.escalationPerson
+            escalationPerson: escalationPerson !== undefined ? escalationPerson : type.escalationPerson,
+            escalationLevels: effectiveEscalationLevels
         });
 
         if (name) type.name = name;
@@ -157,9 +241,34 @@ exports.updateQueryType = async (req, res) => {
         if (assignedPerson) type.assignedPerson = assignedPerson;
         if (isActive !== undefined) type.isActive = isActive;
         if (enableEscalation !== undefined) type.enableEscalation = enableEscalation;
-        if (escalationDays !== undefined) type.escalationDays = escalationDays;
-        if (escalationRole !== undefined) type.escalationRole = escalationRole ? escalationRole : null;
-        if (escalationPerson !== undefined) type.escalationPerson = escalationPerson ? escalationPerson : null;
+
+        if (escalationLevels !== undefined) {
+            let normalizedLevels = [];
+            if (type.enableEscalation && Array.isArray(escalationLevels) && escalationLevels.length > 0) {
+                normalizedLevels = escalationLevels.map((lvl, index) => ({
+                    level: index + 1,
+                    escalationDays: Number(lvl.escalationDays) || 2,
+                    escalationRole: lvl.escalationRole || null,
+                    escalationPerson: lvl.escalationPerson?._id || lvl.escalationPerson
+                }));
+            }
+            type.escalationLevels = normalizedLevels;
+
+            if (normalizedLevels.length > 0) {
+                type.escalationDays = normalizedLevels[0].escalationDays;
+                type.escalationRole = normalizedLevels[0].escalationRole;
+                type.escalationPerson = normalizedLevels[0].escalationPerson;
+            } else if (!type.enableEscalation) {
+                type.escalationDays = 2;
+                type.escalationRole = null;
+                type.escalationPerson = null;
+            }
+        } else {
+            if (escalationDays !== undefined) type.escalationDays = escalationDays;
+            if (escalationRole !== undefined) type.escalationRole = escalationRole ? escalationRole : null;
+            if (escalationPerson !== undefined) type.escalationPerson = escalationPerson ? escalationPerson : null;
+        }
+
         if (autoResponse !== undefined) type.autoResponse = autoResponse;
 
         await type.save();
@@ -452,11 +561,21 @@ exports.getQueryById = async (req, res) => {
         }
 
         const query = await HelpdeskQuery.findOne({ _id: id, companyId: req.companyId })
-            .populate('raisedBy', 'firstName lastName email')
-            .populate('assignedTo', 'firstName lastName email')
-            .populate('originalAssignee', 'firstName lastName email')
+            .populate('raisedBy', 'firstName lastName email profilePicture')
+            .populate('assignedTo', 'firstName lastName email profilePicture')
+            .populate('originalAssignee', 'firstName lastName email profilePicture')
+            .populate('escalationHistory.escalatedFrom', 'firstName lastName email')
+            .populate('escalationHistory.escalatedTo', 'firstName lastName email')
             .populate('comments.user', 'firstName lastName roles')
-            .populate('queryType', 'name')
+            .populate({
+                path: 'queryType',
+                select: 'name autoResponse enableEscalation escalationDays escalationRole escalationPerson escalationLevels',
+                populate: [
+                    { path: 'assignedPerson', select: 'firstName lastName email' },
+                    { path: 'escalationLevels.escalationRole', select: 'name' },
+                    { path: 'escalationLevels.escalationPerson', select: 'firstName lastName email' }
+                ]
+            })
             .lean();
 
         if (!query) {
@@ -500,7 +619,14 @@ exports.getQueryById = async (req, res) => {
 exports.updateQueryStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const query = await HelpdeskQuery.findOne({ _id: req.params.id, companyId: req.companyId }).populate('queryType');
+        const query = await HelpdeskQuery.findOne({ _id: req.params.id, companyId: req.companyId })
+            .populate({
+                path: 'queryType',
+                populate: [
+                    { path: 'escalationLevels.escalationPerson', select: '_id firstName lastName email' },
+                    { path: 'escalationPerson', select: '_id firstName lastName email' }
+                ]
+            });
 
         if (!query) {
             return res.status(404).json({ success: false, message: 'Query not found' });
@@ -564,30 +690,72 @@ exports.updateQueryStatus = async (req, res) => {
             }
             if (!query.escalatedAt) query.escalatedAt = Date.now();
 
-            // Manual Reassignment logic (mirroring cron behavior)
+            // Multi-level manual reassignment logic
             const qType = query.queryType;
-            if (qType && qType.enableEscalation && qType.escalationPerson) {
-                const oldAssignee = query.assignedTo;
-                const newAssignee = qType.escalationPerson;
+            if (qType && qType.enableEscalation) {
+                let levels = [];
+                if (Array.isArray(qType.escalationLevels) && qType.escalationLevels.length > 0) {
+                    levels = [...qType.escalationLevels].sort((a, b) => a.level - b.level);
+                } else if (qType.escalationPerson) {
+                    levels = [{
+                        level: 1,
+                        escalationDays: qType.escalationDays || 2,
+                        escalationPerson: qType.escalationPerson
+                    }];
+                }
 
-                if (newAssignee.toString() !== (oldAssignee?._id?.toString() || oldAssignee?.toString())) {
-                    // Pre-population: Store current assignee as ORIGINAL if not already set
+                const currentLevel = query.currentEscalationLevel || (query.status === 'Escalated' ? 1 : 0);
+                let nextLevel = levels.find(l => l.level > currentLevel);
+
+                // If already at or past highest level, remain at highest level
+                if (!nextLevel && levels.length > 0) {
+                    nextLevel = levels[levels.length - 1];
+                }
+
+                if (nextLevel && nextLevel.escalationPerson) {
+                    const oldAssignee = query.assignedTo;
+                    const newAssignee = nextLevel.escalationPerson?._id || nextLevel.escalationPerson;
+                    const nextLevelNum = nextLevel.level || 1;
+
                     if (!query.originalAssignee) {
                         query.originalAssignee = query.assignedTo;
                     }
+                    query.currentEscalationLevel = nextLevelNum;
                     query.assignedTo = newAssignee;
 
-                    // Notify the new assignee specifically
-                    const io = req.app.get('io');
-                    await NotificationService.createNotification(io, {
-                        user: newAssignee,
-                        companyId: req.companyId,
-                        preferenceKey: 'helpdesk_query_escalated',
-                        title: 'Manual Escalation Assigned',
-                        message: `An escalated query "${query.subject}" has been assigned to you.`,
-                        type: 'Alert',
-                        link: `/helpdesk/${query._id}`
+                    if (!Array.isArray(query.escalationHistory)) {
+                        query.escalationHistory = [];
+                    }
+
+                    query.escalationHistory.push({
+                        level: nextLevelNum,
+                        escalatedFrom: oldAssignee,
+                        escalatedTo: newAssignee,
+                        escalatedAt: Date.now(),
+                        reason: req.body.reason || `Manually escalated to Level ${nextLevelNum}`,
+                        triggeredBy: 'manual'
                     });
+
+                    // Add comment
+                    query.comments.push({
+                        user: req.user._id,
+                        text: `[SYSTEM] Manually escalated to Level ${nextLevelNum}. Ticket reassigned to next escalation tier contact.`,
+                        createdAt: Date.now()
+                    });
+
+                    // Notify new assignee specifically
+                    const io = req.app.get('io');
+                    if (newAssignee.toString() !== (oldAssignee?._id?.toString() || oldAssignee?.toString())) {
+                        await NotificationService.createNotification(io, {
+                            user: newAssignee,
+                            companyId: req.companyId,
+                            preferenceKey: 'helpdesk_query_escalated',
+                            title: `Manual Escalation (Level ${nextLevelNum})`,
+                            message: `An escalated query (Level ${nextLevelNum}) "${query.subject}" has been assigned to you.`,
+                            type: 'Alert',
+                            link: `/helpdesk/${query._id}`
+                        });
+                    }
                 }
             }
         } else if (status === 'Closed' || status === 'Resolved' || status === 'In Progress' || status === 'Pending' || status === 'Escalated') {

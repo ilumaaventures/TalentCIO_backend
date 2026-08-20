@@ -22,7 +22,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'announcements', label: 'Announcements', icon: 'Megaphone' },
     { id: 'reimbursements', label: 'Reimbursements', icon: 'Receipt' },
     { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' },
-    { id: 'organization', label: 'Organization Structure', icon: 'Network' }
+    { id: 'organization', label: 'Organization Structure', icon: 'Network' },
+    { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -44,6 +45,10 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add(CLIENTS_MODULE_ID);
     }
 
+    if (normalizedIds.has('ess')) {
+        normalizedIds.add('mySpace');
+    }
+
     return Array.from(normalizedIds);
 };
 
@@ -52,6 +57,10 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
 
     if (targetModuleId === LEGACY_PROJECT_MODULE_ID) {
         return normalizedIds.includes(PROJECTS_MODULE_ID);
+    }
+
+    if (targetModuleId === 'ess') {
+        return normalizedIds.includes('mySpace') || normalizedIds.includes('ess');
     }
 
     return normalizedIds.includes(targetModuleId);
@@ -82,6 +91,7 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('announcement.')) return enabled.has('announcements');
         if (key.startsWith('reimbursement.')) return enabled.has('reimbursements');
         if (key.startsWith('ess_document.')) return enabled.has('essDocuments');
+        if (key.startsWith('my_space.') || key.startsWith('ess.')) return enabled.has('mySpace');
 
         return true;
     });

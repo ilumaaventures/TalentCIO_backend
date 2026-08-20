@@ -63,6 +63,37 @@ const helpdeskQuerySchema = new mongoose.Schema({
     escalatedAt: {
         type: Date
     },
+    currentEscalationLevel: {
+        type: Number,
+        default: 0
+    },
+    escalationHistory: [{
+        level: {
+            type: Number,
+            required: true
+        },
+        escalatedFrom: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        escalatedTo: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        escalatedAt: {
+            type: Date,
+            default: Date.now
+        },
+        reason: {
+            type: String
+        },
+        triggeredBy: {
+            type: String,
+            enum: ['system', 'manual'],
+            default: 'system'
+        }
+    }],
     resolvedAt: {
         type: Date
     },

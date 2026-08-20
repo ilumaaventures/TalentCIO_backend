@@ -14,7 +14,7 @@ const companySchema = new mongoose.Schema({
     allowedDomains: { type: [String], default: [] },
     enabledModules: {
         type: [String],
-        default: ['attendance', 'leaves', 'helpdesk', 'userManagement']
+        default: ['attendance', 'leaves', 'helpdesk', 'userManagement', 'mySpace']
     },
     settings: {
         // Branding
