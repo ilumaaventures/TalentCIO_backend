@@ -13,7 +13,7 @@ async function parseCV(fileBuffer, fileType) {
         if (fileType === 'application/pdf') {
             const data = await pdf(fileBuffer);
             text = data.text;
-        } else if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        } else if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileType === 'application/msword' || (typeof fileType === 'string' && (fileType.includes('word') || fileType.includes('officedocument')))) {
             const data = await mammoth.extractRawText({ buffer: fileBuffer });
             text = data.value;
         } else {
