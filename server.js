@@ -230,6 +230,7 @@ require('./src/modules/talent-acquisition/model/phaseTemplate.model');
 require('./src/modules/announcement/announcement.model');
 require('./src/modules/offboarding/offboardingRecord.model');
 require('./src/modules/email/model/hrEmailLog.model');
+require('./src/modules/system/impersonationSession.model');
 
 const syncPermissions = require('./src/services/permissionSync');
 const startAutoCheckoutCron = require('./src/modules/attendance/attendanceAutoCheckout.cron');
@@ -237,6 +238,20 @@ const cleanupStaleIndexes = require('./src/services/indexCleanup');
 const { startBinAutoPurgeCron } = require('./src/modules/bin/binAutoPurge.cron');
 const startAnnouncementScheduler = require('./src/modules/announcement/announcement.scheduler');
 const startEscalationCron = require('./src/modules/helpdesk/escalation.cron');
+
+const startImpersonationCleanup = () => {
+    setInterval(async () => {
+        try {
+            const ImpersonationSession = require('./src/modules/system/impersonationSession.model');
+            await ImpersonationSession.updateMany(
+                { expiresAt: { $lt: new Date() }, endedAt: null },
+                { $set: { endedAt: new Date(), endedReason: 'expired' } }
+            );
+        } catch (err) {
+            console.error('[IMPERSONATION CLEANUP] Error:', err.message);
+        }
+    }, 5 * 60 * 1000);
+};
 
 const apiRoutes = require('./src/routes');
 
@@ -248,6 +263,7 @@ const initServer = async () => {
     startAutoCheckoutCron();
     startBinAutoPurgeCron();
     startAnnouncementScheduler(io);
+    startImpersonationCleanup();
 
     server.listen(PORT, () => {
         console.log(`Server & Socket.IO running on port ${PORT}`);

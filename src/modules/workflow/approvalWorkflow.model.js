@@ -14,12 +14,13 @@ const ApprovalWorkflowSchema = new mongoose.Schema({
     // Levels of approval
     levels: [{
         levelCheck: { type: Number, required: true }, // 1, 2, 3...
-        role: { type: mongoose.Schema.Types.ObjectId, ref: 'Role', required: true },
+        role: { type: mongoose.Schema.Types.ObjectId, ref: 'Role', required: false },
+        roleName: { type: String, default: '' },
         approvers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Multiple users
         isFinal: { type: Boolean, default: false }
     }],
 
-    module: { type: String, enum: ['TA', 'Helpdesk'], default: 'TA' },
+    module: { type: String, enum: ['TA', 'Helpdesk', 'Reimbursement', 'ESS-Document'], default: 'TA' },
     isActive: { type: Boolean, default: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 

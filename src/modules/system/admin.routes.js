@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
-const { protect, admin } = require('../../common/middleware/authMiddleware');
+const { protect, admin, blockDuringImpersonation } = require('../../common/middleware/authMiddleware');
 const { authorize } = require('../../common/middleware/authorize');
 const {
     getUsers,
@@ -58,23 +58,23 @@ router.use(protect);
 // User Routes
 router.get('/users/team', getMyTeam); // All authenticated users can see their own team
 router.get('/users', authorize('user.read'), getUsers);
-router.post('/users', authorize('user.create'), createUser);
+router.post('/users', blockDuringImpersonation, authorize('user.create'), createUser);
 // Add route for getting single user by ID
 router.get('/users/:id', authorize(['user.read', 'attendance.view']), getUserById);
-router.put('/users/:id', authorize('user.update'), updateUser);
-router.put('/users/:id/role', authorize('user.update'), updateUserRole);
-router.patch('/users/:id/status', authorize('user.update'), toggleUserStatus);
-router.delete('/users/:id', authorize('user.delete'), deleteUser);
+router.put('/users/:id', blockDuringImpersonation, authorize('user.update'), updateUser);
+router.put('/users/:id/role', blockDuringImpersonation, authorize('user.update'), updateUserRole);
+router.patch('/users/:id/status', blockDuringImpersonation, authorize('user.update'), toggleUserStatus);
+router.delete('/users/:id', blockDuringImpersonation, authorize('user.delete'), deleteUser);
 
 // Role Routes
 router.get('/roles/bootstrap', authorize('role.read'), getRoleBootstrap);
 router.get('/roles', authorize('role.read'), getRoles);
-router.post('/roles', authorize('role.create'), createRole);
-router.put('/roles/:id', authorize('role.update'), updateRole); // Assuming role.update permission exists or re-using role.create
+router.post('/roles', blockDuringImpersonation, authorize('role.create'), createRole);
+router.put('/roles/:id', blockDuringImpersonation, authorize('role.update'), updateRole); // Assuming role.update permission exists or re-using role.create
 router.get('/permissions', getPermissions); // Assuming basic auth is enough to view permissions structure
 
 // Migration Routes (Temporary)
-router.post('/migrate-timesheets', authorize('user.update'), backfillTimesheets);
+router.post('/migrate-timesheets', blockDuringImpersonation, authorize('user.update'), backfillTimesheets);
 
 // Company Attendance Settings
 router.get('/company-settings/attendance', admin, getOwnAttendanceSettings);

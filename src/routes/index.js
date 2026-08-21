@@ -42,6 +42,10 @@ const notificationSettingsRoutes = require('../modules/notification/notification
 const emailBrandingRoutes = require('../modules/email/routes/emailBranding.routes');
 const emailBrandingTemplateRoutes = require('../modules/email/routes/emailBrandingTemplate.routes');
 const celebrationRoutes = require('../modules/celebration/celebration.routes');
+const reimbursementRoutes = require('../modules/reimbursement/reimbursement.routes');
+const essDocumentRoutes = require('../modules/ess-document/essDocument.routes');
+const impersonationRoutes = require('../modules/user/impersonation.routes');
+const organizationRoutes = require('../modules/organization/organization.routes');
 
 const superAdminAuthRoutes = require('../modules/auth/superAdminAuth.routes');
 const companyRoutes = require('../modules/company/company.routes');
@@ -104,6 +108,10 @@ router.use('/company/notification-settings', notificationSettingsRoutes);
 router.use('/email-branding', emailBrandingRoutes);
 router.use('/email-templates', emailBrandingTemplateRoutes);
 router.use('/celebrations', celebrationRoutes);
+router.use('/reimbursements', reimbursementRoutes);
+router.use('/ess-documents', essDocumentRoutes);
+router.use('/users', impersonationRoutes);
+router.use('/organization', organizationRoutes);
 
 // Superadmin routes
 router.use('/superadmin/auth', superAdminAuthRoutes);

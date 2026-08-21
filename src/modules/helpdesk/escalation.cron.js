@@ -82,12 +82,16 @@ const startEscalationCron = (io) => {
 
         try {
             const pendingQueries = await HelpdeskQuery.find({
-                status: { $in: ['New', 'In Progress'] }
+                status: { $in: ['New', 'In Progress', 'Escalated'] }
             })
-                .select('queryId subject queryType assignedTo raisedBy companyId createdAt originalAssignee comments')
+                .select('queryId subject queryType assignedTo raisedBy companyId createdAt originalAssignee comments currentEscalationLevel escalationHistory status')
                 .populate({
                     path: 'queryType',
-                    select: 'enableEscalation escalationDays escalationPerson'
+                    select: 'enableEscalation escalationDays escalationPerson escalationLevels',
+                    populate: [
+                        { path: 'escalationLevels.escalationPerson', select: 'firstName lastName email' },
+                        { path: 'escalationPerson', select: 'firstName lastName email' }
+                    ]
                 })
                 .sort({ createdAt: 1 })
                 .limit(ESCALATION_BATCH_SIZE);
@@ -107,37 +111,82 @@ const startEscalationCron = (io) => {
             for (const query of pendingQueries) {
                 try {
                     const qType = query.queryType;
+                    if (!qType || !qType.enableEscalation) {
+                        continue;
+                    }
+
                     const companyKey = query.companyId?.toString();
-                    const escalationDays = (qType && qType.enableEscalation && qType.escalationDays)
-                        ? qType.escalationDays
-                        : DEFAULT_ESCALATION_DAYS;
-                    const thresholdHours = escalationDays * 24;
                     const weeklyOff = weeklyOffByCompany.get(companyKey) || DEFAULT_WEEKLY_OFF;
                     const workHoursElapsed = calculateWorkHours(query.createdAt, now, weeklyOff);
+
+                    // Build and sort normalized escalation levels
+                    let levels = [];
+                    if (Array.isArray(qType.escalationLevels) && qType.escalationLevels.length > 0) {
+                        levels = [...qType.escalationLevels].sort((a, b) => a.level - b.level);
+                    } else if (qType.escalationPerson) {
+                        levels = [{
+                            level: 1,
+                            escalationDays: qType.escalationDays || DEFAULT_ESCALATION_DAYS,
+                            escalationPerson: qType.escalationPerson
+                        }];
+                    }
+
+                    if (levels.length === 0) {
+                        continue;
+                    }
+
+                    const currentLevel = query.currentEscalationLevel || (query.status === 'Escalated' ? 1 : 0);
+                    const nextLevel = levels.find(lvl => lvl.level > currentLevel);
+
+                    // If already at or past highest configured level, nothing more to escalate
+                    if (!nextLevel) {
+                        continue;
+                    }
+
+                    const escalationDays = nextLevel.escalationDays || DEFAULT_ESCALATION_DAYS;
+                    const thresholdHours = escalationDays * 24;
 
                     if (workHoursElapsed < thresholdHours) {
                         continue;
                     }
 
                     const oldAssignee = query.assignedTo ? query.assignedTo.toString() : null;
-                    console.log(`[CRON] Escalating Query ${query.queryId} (${workHoursElapsed.toFixed(2)} hours old, Threshold: ${thresholdHours}h)`);
+                    const newAssigneeDoc = nextLevel.escalationPerson;
+                    const newAssignee = newAssigneeDoc?._id || newAssigneeDoc;
+                    const newAssigneeName = newAssigneeDoc?.firstName
+                        ? `${newAssigneeDoc.firstName} ${newAssigneeDoc.lastName || ''}`.trim()
+                        : 'Designated Escalation Contact';
+
+                    console.log(`[CRON] Escalating Query ${query.queryId} to Level ${nextLevel.level} (${workHoursElapsed.toFixed(2)} hours old, Threshold: ${thresholdHours}h)`);
 
                     query.status = 'Escalated';
+                    query.currentEscalationLevel = nextLevel.level;
                     query.escalatedAt = now;
 
-                    let commentText = `[SYSTEM] This query has been automatically escalated because it exceeded the ${thresholdHours}-hour SLA.`;
-                    let newAssignee = null;
+                    let commentText = `[SYSTEM] This query has been automatically escalated to Level ${nextLevel.level} because it exceeded the ${thresholdHours}-hour work SLA.`;
 
-                    if (qType && qType.enableEscalation && qType.escalationPerson) {
-                        newAssignee = qType.escalationPerson;
+                    if (newAssignee) {
                         if (!query.originalAssignee && query.assignedTo) {
                             query.originalAssignee = query.assignedTo;
                         }
                         query.assignedTo = newAssignee;
-                        commentText += ' It has been re-assigned to the designated escalation contact.';
+                        commentText += ` It has been re-assigned to ${newAssigneeName}.`;
                     } else {
                         commentText += ' Admins please review.';
                     }
+
+                    if (!Array.isArray(query.escalationHistory)) {
+                        query.escalationHistory = [];
+                    }
+
+                    query.escalationHistory.push({
+                        level: nextLevel.level,
+                        escalatedFrom: query.originalAssignee || query.assignedTo,
+                        escalatedTo: newAssignee,
+                        escalatedAt: now,
+                        reason: `Exceeded Level ${nextLevel.level} SLA threshold of ${thresholdHours} work hours`,
+                        triggeredBy: 'system'
+                    });
 
                     if (!Array.isArray(query.comments)) {
                         query.comments = [];
@@ -155,8 +204,8 @@ const startEscalationCron = (io) => {
                         user: query.raisedBy,
                         companyId: query.companyId,
                         preferenceKey: 'helpdesk_query_escalated',
-                        title: 'Query Escalated',
-                        message: `Your query "${query.subject}" has been escalated due to SLA timeout.`,
+                        title: `Query Escalated (Level ${nextLevel.level})`,
+                        message: `Your query "${query.subject}" has been escalated to Level ${nextLevel.level} (${newAssigneeName}) due to SLA timeout.`,
                         type: 'Alert',
                         link: `/helpdesk/${query._id}`
                     });
@@ -166,8 +215,8 @@ const startEscalationCron = (io) => {
                             user: newAssignee,
                             companyId: query.companyId,
                             preferenceKey: 'helpdesk_query_escalated',
-                            title: 'Escalated Query Assigned',
-                            message: `An escalated query "${query.subject}" has been assigned to you.`,
+                            title: `Escalated Query Assigned (Level ${nextLevel.level})`,
+                            message: `An escalated query (Level ${nextLevel.level}) "${query.subject}" has been assigned to you.`,
                             type: 'Alert',
                             link: `/helpdesk/${query._id}`
                         });

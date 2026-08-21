@@ -16,6 +16,7 @@ const superAdminUserSchema = new mongoose.Schema({
         viewAnalytics: { type: Boolean, default: true },
         manageUsers: { type: Boolean, default: false },
         viewLogs: { type: Boolean, default: true },
+        impersonateUsers: { type: Boolean, default: false },
     },
     tokenVersion: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
@@ -34,11 +35,11 @@ superAdminUserSchema.pre('save', async function () {
     // 2. Set permissions based on role if role changed or permissions missing
     if (this.isModified('role') || !this.permissions) {
         if (this.role === 'Super Admin') {
-            this.permissions = { manageCompanies: true, managePlans: true, viewAnalytics: true, manageUsers: true, viewLogs: true };
+            this.permissions = { manageCompanies: true, managePlans: true, viewAnalytics: true, manageUsers: true, viewLogs: true, impersonateUsers: true };
         } else if (this.role === 'Finance Admin') {
-            this.permissions = { manageCompanies: false, managePlans: true, viewAnalytics: true, manageUsers: false, viewLogs: true };
+            this.permissions = { manageCompanies: false, managePlans: true, viewAnalytics: true, manageUsers: false, viewLogs: true, impersonateUsers: false };
         } else if (this.role === 'Support Admin') {
-            this.permissions = { manageCompanies: false, managePlans: false, viewAnalytics: true, manageUsers: false, viewLogs: true };
+            this.permissions = { manageCompanies: false, managePlans: false, viewAnalytics: true, manageUsers: false, viewLogs: true, impersonateUsers: false };
         }
     }
 

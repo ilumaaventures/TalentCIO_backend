@@ -20,7 +20,7 @@ router.get('/bootstrap', requireModule('projects'), getProjectBootstrap);
 router.get('/employees', requireModule('projects'), getEmployees);
 
 // Business Units
-router.get('/business-units', authorize('business_unit.read'), requireModule('businessUnits'), getBusinessUnits);
+router.get('/business-units', authorizeAny(['business_unit.read', 'department.read', 'user.create', 'user.update', 'project.read', 'client.read', 'client.create']), requireModule(['businessUnits', 'organization', 'projects']), getBusinessUnits);
 router.post('/business-units', authorize('business_unit.create'), requireModule('businessUnits'), createBusinessUnit);
 router.put('/business-units/:id', authorize('business_unit.update'), requireModule('businessUnits'), updateBusinessUnit);
 

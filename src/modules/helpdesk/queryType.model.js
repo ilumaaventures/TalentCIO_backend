@@ -15,6 +15,12 @@ const queryTypeSchema = new mongoose.Schema({
     escalationDays: { type: Number, default: 2 },
     escalationRole: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' },
     escalationPerson: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    escalationLevels: [{
+        level: { type: Number, required: true },
+        escalationDays: { type: Number, required: true, default: 2 },
+        escalationRole: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' },
+        escalationPerson: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+    }],
     isActive: { type: Boolean, default: true },
     autoResponse: { type: String, default: "" }
 }, { timestamps: true });

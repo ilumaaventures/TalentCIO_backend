@@ -137,7 +137,9 @@ const employeeProfileSchema = new mongoose.Schema({
     // --- Employment Details ---
     employment: {
         designation: String,
+        designationRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Designation', default: null },
         department: String,
+        departmentRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null },
         businessUnit: { type: mongoose.Schema.Types.ObjectId, ref: 'BusinessUnit' },
         reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         joiningDate: Date,

@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../../modules/user/user.model');
+const ImpersonationSession = require('../../modules/system/impersonationSession.model');
 const { resolveRolesWithInheritance } = require('../../utils/permissionResolver');
 const { getTokenFromRequest } = require('../../common/utils/sessionCookies');
 
@@ -63,9 +64,30 @@ const protect = async (req, res, next) => {
         try {
             // Verify token
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            const isImpersonated = Boolean(decoded.imp);
+
+            if (isImpersonated) {
+                const session = await ImpersonationSession.findOne({ tokenJti: decoded.imp.jti }).lean();
+                if (!session || session.endedAt || (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now())) {
+                    return res.status(401).json({
+                        message: 'Impersonation session expired or ended',
+                        code: 'IMPERSONATION_EXPIRED'
+                    });
+                }
+                req.impersonation = {
+                    active: true,
+                    jti: decoded.imp.jti,
+                    by: decoded.imp.by,
+                    byType: decoded.imp.byType,
+                    tier: decoded.imp.tier,
+                    expiresAt: decoded.imp.exp || (session.expiresAt ? new Date(session.expiresAt).getTime() : null),
+                    session
+                };
+            }
+
             const tokenVersion = decoded.tokenVersion || 0;
             const cacheKey = getCacheKey(decoded.id, tokenVersion);
-            const cachedEntry = authUserCache.get(cacheKey);
+            const cachedEntry = !isImpersonated ? authUserCache.get(cacheKey) : null;
 
             if (cachedEntry && (Date.now() - cachedEntry.cachedAt) < AUTH_CACHE_TTL_MS) {
                 req.user = cloneCachedUser(cachedEntry.user);
@@ -167,7 +189,9 @@ const protect = async (req, res, next) => {
                     req.user.roles = [];
                 }
 
-                setCacheEntry(cacheKey, decoded.id, req.user);
+                if (!isImpersonated) {
+                    setCacheEntry(cacheKey, decoded.id, req.user);
+                }
             }
 
             // Ensure roles is always an array
@@ -177,7 +201,11 @@ const protect = async (req, res, next) => {
 
             // --- Multi-tenant isolation check ---
             if (req.companyId) {
-                if (req.user.companyId && req.user.companyId.toString() !== req.companyId.toString()) {
+                if (req.impersonation?.active) {
+                    if (req.user.companyId) {
+                        req.companyId = req.user.companyId;
+                    }
+                } else if (req.user.companyId && req.user.companyId.toString() !== req.companyId.toString()) {
                     console.warn(`[SECURITY ALERT] User ${req.user.email} attempted cross-tenant access from workspace ${req.company?.name || req.companyId} while belonging to ${req.user.companyId}`);
                     return res.status(403).json({
                         message: `Your account does not belong to the '${req.company?.name || 'requested'}' workspace.`,
@@ -228,4 +256,14 @@ const admin = (req, res, next) => {
     }
 };
 
-module.exports = { protect, admin, invalidateAuthUserCache };
+const blockDuringImpersonation = (req, res, next) => {
+    if (req.impersonation?.active) {
+        return res.status(403).json({
+            message: 'This action is not available while impersonating a user.',
+            code: 'BLOCKED_DURING_IMPERSONATION'
+        });
+    }
+    next();
+};
+
+module.exports = { protect, admin, invalidateAuthUserCache, blockDuringImpersonation };
