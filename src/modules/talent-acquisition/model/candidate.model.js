@@ -76,11 +76,13 @@ const candidateSchema = new mongoose.Schema({
     // Resume Information
     resumeUrl: {
         type: String,
-        required: true
+        required: false,
+        default: ''
     },
     resumePublicId: {
         type: String,
-        required: true
+        required: false,
+        default: ''
     },
     uploadedBy: {
         type: mongoose.Schema.Types.ObjectId,

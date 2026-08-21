@@ -60,6 +60,5 @@ const impersonationSessionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 impersonationSessionSchema.index({ actorId: 1, endedAt: 1 });
-impersonationSessionSchema.index({ tokenJti: 1 });
 
 module.exports = mongoose.model('ImpersonationSession', impersonationSessionSchema);
