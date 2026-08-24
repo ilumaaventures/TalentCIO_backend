@@ -2,6 +2,7 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const Company = require('../modules/company/company.model');
 const { decrypt } = require('../common/utils/encryption');
+const { parseEmailListForBrevo, mapBrevoAttachments } = require('../common/utils/emailUtils');
 const {
     getCompanyBranding,
     sendEmail,
@@ -9,6 +10,7 @@ const {
 } = require('./emailService');
 
 const EMAIL_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
+const EMAIL_CONFIG_CACHE_MAX_SIZE = 500;
 const PLATFORM_EMAIL_ACCOUNT_ID = 'platform';
 const LEGACY_EMAIL_ACCOUNT_ID = 'legacy-default';
 const emailConfigCache = new Map();
@@ -209,6 +211,13 @@ const getCompanyEmailSettings = async (companyId) => {
         accounts: normalizeStoredEmailAccounts(emailSettings, company.name || 'TalentCIO')
     };
 
+    // Evict stale entries if cache grows too large
+    if (emailConfigCache.size > EMAIL_CONFIG_CACHE_MAX_SIZE) {
+        const now = Date.now();
+        for (const [k, v] of emailConfigCache) {
+            if (v.expiresAt <= now) emailConfigCache.delete(k);
+        }
+    }
     emailConfigCache.set(cacheKey, {
         value: normalized,
         expiresAt: Date.now() + EMAIL_CONFIG_CACHE_TTL_MS
@@ -248,44 +257,7 @@ const resolveEmailConfig = async (companyId, emailAccountId = null) => {
     return selection.mode === 'account' ? selection.account : null;
 };
 
-const mapBrevoAttachments = (attachments = []) => (
-    attachments.map((attachment) => {
-        let contentBase64 = undefined;
-        if (attachment.content) {
-            contentBase64 = Buffer.isBuffer(attachment.content)
-                ? attachment.content.toString('base64')
-                : String(attachment.content);
-        }
-        const url = (typeof attachment.path === 'string' && attachment.path.startsWith('http'))
-            ? attachment.path
-            : (typeof attachment.url === 'string' && attachment.url.startsWith('http') ? attachment.url : undefined);
-
-        return {
-            name: attachment.filename || attachment.name,
-            content: contentBase64,
-            url
-        };
-    }).filter((attachment) => attachment.name && (attachment.content || attachment.url))
-);
-
-const parseEmailListForBrevo = (emails) => {
-    if (!emails) return undefined;
-    if (Array.isArray(emails)) {
-        return emails
-            .flatMap(e => (typeof e === 'string' ? e.split(/[,;\s]+/) : [(e && (e.email || e.value)) || '']))
-            .map(e => (typeof e === 'string' ? e.trim() : ''))
-            .filter(e => e && e.includes('@'))
-            .map(email => ({ email }));
-    }
-    if (typeof emails === 'string') {
-        return emails
-            .split(/[,;\s]+/)
-            .map(e => e.trim())
-            .filter(e => e && e.includes('@'))
-            .map(email => ({ email }));
-    }
-    return undefined;
-};
+// parseEmailListForBrevo and mapBrevoAttachments imported from common/utils/emailUtils
 
 const sendViaBrevoApi = async ({
     to,

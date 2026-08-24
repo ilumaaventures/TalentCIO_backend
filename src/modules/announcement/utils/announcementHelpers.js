@@ -1,4 +1,5 @@
 const Announcement = require('../announcement.model');
+const User = require('../../../modules/user/user.model');
 const NotificationService = require('../../../services/notificationService');
 
 const ANNOUNCEMENT_CATEGORIES = ['General', 'HR', 'Policy', 'Product', 'Celebration', 'Alert'];
@@ -472,48 +473,39 @@ const fetchPopulatedAnnouncementById = async (announcementId) => {
 
 const notifyPublishedAnnouncement = async ({ req, announcement }) => {
     try {
+        const io = req.app.get('io');
         const authorName = buildUserDisplayName(announcement.createdBy);
-        const notificationPayload = {
-            companyId: req.companyId,
-            actorId: req.user._id,
-            title: `New Announcement: ${announcement.title}`,
-            message: `${authorName} published an announcement in ${announcement.category}.`,
-            type: 'announcement',
-            link: '/announcements'
-        };
+        let userFilter = { companyId: req.companyId, isActive: true, _id: { $ne: req.user._id } };
 
-        if (announcement.audienceType === 'all') {
-            await NotificationService.notifyCompanyUsers({
-                ...notificationPayload,
-                excludeUserIds: [req.user._id]
-            });
-        } else if (announcement.audienceType === 'specificUsers') {
+        if (announcement.audienceType === 'specificUsers') {
             const recipientIds = (announcement.audienceUserIds || [])
                 .map((u) => String(u._id || u))
                 .filter((id) => id !== String(req.user._id));
-
-            if (recipientIds.length > 0) {
-                await NotificationService.notifySpecificUsers({
-                    ...notificationPayload,
-                    userFilter: { _id: { $in: recipientIds } }
-                });
-            }
+            if (!recipientIds.length) return;
+            userFilter._id = { $in: recipientIds };
         } else if (announcement.audienceType === 'departments') {
             const depts = announcement.audienceDepartments || [];
-            if (depts.length > 0) {
-                await NotificationService.notifySpecificUsers({
-                    ...notificationPayload,
-                    userFilter: { department: { $in: depts }, _id: { $ne: req.user._id } }
-                });
-            }
+            if (!depts.length) return;
+            userFilter.department = { $in: depts };
         } else if (announcement.audienceType === 'employmentTypes') {
             const types = announcement.audienceEmploymentTypes || [];
-            if (types.length > 0) {
-                await NotificationService.notifySpecificUsers({
-                    ...notificationPayload,
-                    userFilter: { employmentType: { $in: types }, _id: { $ne: req.user._id } }
-                });
-            }
+            if (!types.length) return;
+            userFilter.employmentType = { $in: types };
+        }
+
+        const users = await User.find(userFilter).select('_id').lean();
+        if (users.length > 0) {
+            const notifications = users.map(u => ({
+                user: u._id,
+                companyId: req.companyId,
+                preferenceKey: 'announcement_published',
+                title: `New Announcement: ${announcement.title}`,
+                message: `${authorName} published an announcement in ${announcement.category}.`,
+                type: 'Info',
+                link: '/announcements',
+                origin: req.headers?.origin || ''
+            }));
+            await NotificationService.createManyNotifications(io, notifications);
         }
 
         emitAnnouncementSocketEvent(req, 'announcement:published', {

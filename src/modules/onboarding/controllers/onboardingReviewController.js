@@ -77,6 +77,7 @@ exports.flagDocument = async (req, res) => {
                     employee.companyId,
                     'onboarding_document_reupload_required'
                 );
+                const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
                 if (delivery.shouldSendEmail) {
                     const emailHtml = `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
@@ -84,7 +85,7 @@ exports.flagDocument = async (req, res) => {
                             <p>Hello ${employee.firstName},</p>
                             <p>During the review of your pre-onboarding submission, some documents were found to require updates or re-uploads:</p>
                             ${flaggedListHtml}
-                            <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
+                            <p style="margin-top: 20px;">Please log in to your <a href="${portalUrl}" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
                     `;
@@ -165,6 +166,7 @@ exports.approveDocument = async (req, res) => {
                     employee.companyId,
                     'onboarding_document_reupload_required'
                 );
+                const portalUrl = `${req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login`;
                 if (delivery.shouldSendEmail) {
                     const emailHtml = `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
@@ -172,7 +174,7 @@ exports.approveDocument = async (req, res) => {
                             <p>Hello ${employee.firstName},</p>
                             <p>During the review of your pre-onboarding submission, some documents were found to require updates or re-uploads:</p>
                             ${flaggedListHtml}
-                            <p style="margin-top: 20px;">Please log in to your <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/pre-onboarding/login" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
+                            <p style="margin-top: 20px;">Please log in to your <a href="${portalUrl}" style="color: #3182ce; font-weight: bold; text-decoration: none;">Pre-Onboarding Portal</a> to upload the corrected documents.</p>
                             <p>Once you've uploaded all the required items, please resubmit the form.</p>
                         </div>
                     `;

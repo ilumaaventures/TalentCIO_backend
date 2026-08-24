@@ -203,7 +203,8 @@ const applyLeave = async (req, res) => {
                 title: 'New Leave Request',
                 message: `${currentUser.firstName} ${currentUser.lastName} has applied for ${daysCount} days of ${leaveType} leave.`,
                 type: 'Approval',
-                link: '/leaves'
+                link: '/leaves',
+                origin: req.headers?.origin || ''
             }));
             await NotificationService.createManyNotifications(io, notifications);
         }
@@ -454,14 +455,18 @@ const updateLeaveStatus = async (req, res) => {
 
         // Notify Employee
         const io = req.app.get('io');
+        const rejectionNote = (status === 'Rejected' && rejectionReason)
+            ? ` Reason: ${rejectionReason}`
+            : '';
         await NotificationService.createNotification(io, {
             user: request.user,
             companyId: req.companyId,
             preferenceKey: 'leave_request_status_updated',
             title: `Leave Request ${status}`,
-            message: `Your leave request for ${request.daysCount} days of ${request.leaveType} has been ${status.toLowerCase()}.`,
+            message: `Your leave request for ${request.daysCount} days of ${request.leaveType} has been ${status.toLowerCase()}.${rejectionNote}`,
             type: status === 'Approved' ? 'Info' : 'Alert',
-            link: '/leaves'
+            link: '/leaves',
+            origin: req.headers?.origin || ''
         });
 
         res.json(request);
@@ -498,6 +503,24 @@ const cancelLeave = async (req, res) => {
         });
 
         await request.save();
+
+        // Notify reporting managers about the cancellation
+        const currentUser = await User.findById(userId).populate('reportingManagers');
+        if (currentUser && currentUser.reportingManagers && currentUser.reportingManagers.length > 0) {
+            const io = req.app.get('io');
+            const notifications = currentUser.reportingManagers.map(manager => ({
+                user: manager._id,
+                companyId: req.companyId,
+                preferenceKey: 'leave_request_status_updated',
+                title: 'Leave Request Cancelled',
+                message: `${currentUser.firstName} ${currentUser.lastName} has cancelled their ${request.daysCount} day(s) ${request.leaveType} leave request.`,
+                type: 'Info',
+                link: '/leaves',
+                origin: req.headers?.origin || ''
+            }));
+            await NotificationService.createManyNotifications(io, notifications);
+        }
+
         res.json({ message: 'Leave request cancelled successfully', request });
 
     } catch (error) {

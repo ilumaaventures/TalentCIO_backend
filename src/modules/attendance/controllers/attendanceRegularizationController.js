@@ -86,10 +86,12 @@ exports.requestRegularization = async (req, res) => {
             await NotificationService.createManyNotifications(io, managerIds.map(managerId => ({
                 user: managerId,
                 companyId: req.companyId,
+                preferenceKey: 'attendance_regularization_submitted',
                 title: 'New Regularization Request',
                 message: `${userWithDept?.firstName || 'An employee'} requested attendance regularization for ${startOfDayDate.toLocaleDateString()}.`,
                 type: 'Info',
-                link: '/attendance?tab=regularize'
+                link: '/attendance?tab=regularize',
+                origin: req.headers?.origin || ''
             })));
         }
 
@@ -221,10 +223,12 @@ exports.processRegularizationRequest = async (req, res) => {
             await NotificationService.createNotification(io, {
                 user: regularization.user,
                 companyId: req.companyId,
+                preferenceKey: 'attendance_regularization_status_updated',
                 title: `Regularization Request ${effectiveAction === 'APPROVE' ? 'Approved' : 'Rejected'}`,
                 message: `Your attendance regularization request for ${regularization.date.toLocaleDateString()} has been ${effectiveAction.toLowerCase()}d.`,
                 type: effectiveAction === 'APPROVE' ? 'Approval' : 'Alert',
-                link: '/attendance?tab=regularize'
+                link: '/attendance?tab=regularize',
+                origin: req.headers?.origin || ''
             });
         } catch (notifErr) {
             console.error('Notification error in processRegularizationRequest:', notifErr);

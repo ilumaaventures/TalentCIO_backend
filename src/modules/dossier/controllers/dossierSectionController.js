@@ -277,7 +277,8 @@ exports.submitHRIS = async (req, res) => {
                         title: 'HRIS Approval Needed',
                         message: `${employeeName} has submitted their HRIS details for approval.`,
                         type: 'Approval',
-                        link: `/dossier/${userId}?tab=hris`
+                        link: `/dossier/${userId}?tab=hris`,
+                        origin: req.headers?.origin || ''
                     }));
                     await NotificationService.createManyNotifications(io, notifications);
                 }

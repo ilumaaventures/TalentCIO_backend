@@ -297,7 +297,8 @@ exports.submitAttachmentForApproval = async (req, res) => {
                 title: 'Attendance Document Submitted',
                 message: `${targetUser.firstName} ${targetUser.lastName} has submitted an attendance document for approval (${month}).`,
                 type: 'Approval',
-                link: `/attendance?tab=documents&userId=${userId}&month=${month}`
+                link: `/attendance?tab=documents&userId=${userId}&month=${month}`,
+                origin: req.headers?.origin || ''
             });
         }
 
@@ -360,7 +361,8 @@ exports.reviewAttachment = async (req, res) => {
             title: `Attendance Document ${status}`,
             message: `Your uploaded attendance document for ${month} has been ${status.toLowerCase()}. ${reason ? 'Reason: ' + reason : ''}`,
             type: 'Approval',
-            link: `/attendance?tab=documents&month=${month}`
+            link: `/attendance?tab=documents&month=${month}`,
+            origin: req.headers?.origin || ''
         });
 
         res.json(file);

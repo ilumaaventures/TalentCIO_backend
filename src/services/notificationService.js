@@ -5,6 +5,7 @@ const { normalizeNotificationSettings, NOTIFICATION_EVENT_MAP } = require('../co
 const { sendEmailForCompany } = require('./companyEmailService');
 
 const NOTIFICATION_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+const NOTIFICATION_SETTINGS_CACHE_MAX_SIZE = 500;
 const notificationSettingsCache = new Map();
 
 const getCacheKey = (companyId) => String(companyId || '');
@@ -184,6 +185,13 @@ class NotificationService {
             .lean();
         const normalized = normalizeNotificationSettings(company?.settings?.notifications || {});
 
+        // Evict stale entries if cache grows too large
+        if (notificationSettingsCache.size > NOTIFICATION_SETTINGS_CACHE_MAX_SIZE) {
+            const now = Date.now();
+            for (const [k, v] of notificationSettingsCache) {
+                if (v.expiresAt <= now) notificationSettingsCache.delete(k);
+            }
+        }
         notificationSettingsCache.set(cacheKey, {
             value: normalized,
             expiresAt: Date.now() + NOTIFICATION_SETTINGS_CACHE_TTL_MS
