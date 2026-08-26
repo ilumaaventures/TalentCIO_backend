@@ -75,9 +75,9 @@ const startAutoCheckoutCron = () => {
                     attendanceDate: record.date,
                     clockInTime: record.clockIn
                 });
-                const checkoutTime = record.autoCheckoutAt
-                    ? new Date(record.autoCheckoutAt)
-                    : (policy.autoCheckoutAt || buildEndOfDayIST(record.date));
+                const checkoutTime = policy.autoCheckoutAt
+                    ? new Date(policy.autoCheckoutAt)
+                    : (record.autoCheckoutAt ? new Date(record.autoCheckoutAt) : buildEndOfDayIST(record.date));
 
                 if (checkoutTime > now) {
                     return [];

@@ -71,6 +71,7 @@ exports.clockIn = async (req, res) => {
             company,
             user: req.user,
             attendanceDate: today,
+            clockInTime: now,
             currentTime: now
         });
 
