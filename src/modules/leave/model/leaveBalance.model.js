@@ -1,5 +1,21 @@
 const mongoose = require('mongoose');
 
+const leaveBucketSchema = new mongoose.Schema({
+    bucketId: { type: String }, // e.g. "2026-08"
+    creditedDate: { type: Date, default: Date.now },
+    creditMonth: { type: Number, required: true }, // 1-12
+    creditYear: { type: Number, required: true },  // e.g. 2026
+    creditAmount: { type: Number, required: true, default: 0 },
+    utilizedAmount: { type: Number, default: 0 },
+    remainingAmount: { type: Number, required: true, default: 0 },
+    validityMonths: { type: Number, default: 2 }, // 2 months validity
+    expiryMonth: { type: Number, required: true }, // e.g. creditMonth + 2
+    expiryYear: { type: Number, required: true },
+    expiryDate: { type: Date },
+    isExpired: { type: Boolean, default: false },
+    notes: { type: String }
+}, { _id: true, timestamps: true });
+
 const leaveBalanceSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
@@ -9,7 +25,6 @@ const leaveBalanceSchema = new mongoose.Schema({
     leaveType: {
         type: String,
         required: true // CL, SL, EL, or any custom type from LeaveConfig
-        // Enum removed: custom types are validated at controller level
     },
     year: {
         type: Number,
@@ -27,15 +42,22 @@ const leaveBalanceSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    expired: {
+        type: Number,
+        default: 0
+    },
     encashed: {
         type: Number,
         default: 0
     },
-    // Virtual closing balance is often better calculated on the fly, 
-    // but storing it helps with quick queries. We'll update it on every transaction.
     closingBalance: {
         type: Number,
         default: 0
+    },
+    // Rolling monthly lots / buckets for FIFO consumption and rolling 2-month expiry
+    buckets: {
+        type: [leaveBucketSchema],
+        default: []
     },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,

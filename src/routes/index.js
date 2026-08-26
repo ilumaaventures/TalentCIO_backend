@@ -46,6 +46,7 @@ const reimbursementRoutes = require('../modules/reimbursement/reimbursement.rout
 const essDocumentRoutes = require('../modules/ess-document/essDocument.routes');
 const impersonationRoutes = require('../modules/user/impersonation.routes');
 const organizationRoutes = require('../modules/organization/organization.routes');
+const employeeRevisionRoutes = require('../modules/dossier/employeeRevision.routes');
 
 const superAdminAuthRoutes = require('../modules/auth/superAdminAuth.routes');
 const companyRoutes = require('../modules/company/company.routes');
@@ -112,6 +113,7 @@ router.use('/reimbursements', reimbursementRoutes);
 router.use('/ess-documents', essDocumentRoutes);
 router.use('/users', impersonationRoutes);
 router.use('/organization', organizationRoutes);
+router.use('/employees', employeeRevisionRoutes);
 
 // Superadmin routes
 router.use('/superadmin/auth', superAdminAuthRoutes);

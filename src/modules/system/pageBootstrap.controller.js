@@ -22,6 +22,7 @@ const Task = require('../task/task.model');
 const { filterPermissionsByEnabledModules } = require('../company/enabledModules');
 const Timesheet = require('../timesheet/timesheet.model');
 const User = require('../user/user.model');
+const EmployeeProfile = require('../dossier/employeeProfile.model');
 const WorkLog = require('../timesheet/workLog.model');
 const { getStartOfDayIST } = require('../attendance/attendancePolicy');
 const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('../timesheet/timesheetPeriod');
@@ -419,7 +420,7 @@ exports.getLeavesBootstrap = async (req, res) => {
         const userEmploymentType = req.user.employmentType || 'Full Time';
 
         // MED-5: Merged two LeaveConfig.find() calls into one; derive both in memory
-        const [allLeaveConfigs, existingBalances, leaves, total] = await Promise.all([
+        const [allLeaveConfigs, existingBalances, leaves, total, profile] = await Promise.all([
             LeaveConfig.find({ companyId: req.companyId }).lean(),
             LeaveBalance.find({ user: req.user._id, year, companyId: req.companyId }).lean(),
             LeaveRequest.find({ user: req.user._id, companyId: req.companyId })
@@ -428,26 +429,52 @@ exports.getLeavesBootstrap = async (req, res) => {
                 .limit(limit)
                 .select('leaveType startDate endDate isHalfDay reason status createdAt daysCount')
                 .lean(),
-            LeaveRequest.countDocuments({ user: req.user._id, companyId: req.companyId })
+            LeaveRequest.countDocuments({ user: req.user._id, companyId: req.companyId }),
+            EmployeeProfile.findOne({ user: req.user._id, companyId: req.companyId }).lean()
         ]);
+
+        const leaveOverrides = (profile?.leaveOverrides instanceof Map ? Object.fromEntries(profile.leaveOverrides) : (profile?.leaveOverrides || {})) || {};
 
         // Derive both active policies and sandwichMap from the single query result
         const allPolicies = allLeaveConfigs.filter(c => c.isActive);
         const sandwichMap = Object.fromEntries(allLeaveConfigs.map(c => [c.leaveType, c.sandwichRule || false]));
 
-        const policies = allPolicies.filter(policy =>
-            !policy.employeeTypes ||
-            policy.employeeTypes.length === 0 ||
-            policy.employeeTypes.includes(userEmploymentType)
-        );
+        const policies = allPolicies.filter(policy => {
+            // Check if policy is excluded/disabled specifically for this employee via revisions
+            const override = leaveOverrides[policy.leaveType];
+            if (override && (override.enabled === false || override.isExcluded === true)) {
+                return false;
+            }
+
+            return !policy.employeeTypes ||
+                policy.employeeTypes.length === 0 ||
+                policy.employeeTypes.includes(userEmploymentType);
+        });
 
         const balanceMap = new Map(existingBalances.map(balance => [balance.leaveType, balance]));
         const balances = policies.map(policy => {
+            const override = leaveOverrides[policy.leaveType];
             const existing = balanceMap.get(policy.leaveType);
-            const openingBalance = existing?.openingBalance || 0;
-            const accrued = existing?.accrued ?? getInitialAccruedBalance(policy);
+
+            const openingBalance = existing?.openingBalance !== undefined
+                ? existing.openingBalance
+                : (override?.allocatedBalance !== undefined ? parseFloat(override.allocatedBalance) || 0 : 0);
+
+            const effectiveAccrualAmount = override?.accrualAmount !== undefined
+                ? parseFloat(override.accrualAmount) || 0
+                : policy.accrualAmount;
+
+            const effectiveAccrualType = override?.accrualType || policy.accrualType;
+
+            const accrued = existing?.accrued !== undefined
+                ? existing.accrued
+                : getInitialAccruedBalance({ ...policy, accrualAmount: effectiveAccrualAmount, accrualType: effectiveAccrualType });
+
             const utilized = existing?.utilized || 0;
             const encashed = existing?.encashed || 0;
+            const closingBalance = existing?.closingBalance !== undefined
+                ? existing.closingBalance
+                : (openingBalance + accrued - utilized - encashed);
 
             return {
                 ...(existing || {
@@ -458,13 +485,18 @@ exports.getLeavesBootstrap = async (req, res) => {
                     accrued,
                     utilized,
                     encashed,
-                    closingBalance: openingBalance + accrued - utilized - encashed,
+                    closingBalance,
                     companyId: req.companyId
                 }),
-                closingBalance: openingBalance + accrued - utilized - encashed,
+                openingBalance,
+                accrued,
+                utilized,
+                encashed,
+                closingBalance,
                 policyName: policy.name,
                 policyDescription: policy.description,
-                policyAccrualAmount: policy.accrualAmount,
+                policyAccrualAmount: effectiveAccrualAmount,
+                isUnlimited: Boolean(policy.isUnlimited || policy.leaveType === 'WFH'),
                 proofRequiredAbove: policy.proofRequiredAbove
             };
         });
@@ -928,7 +960,7 @@ exports.getRoleBootstrap = async (req, res) => {
                 else if (curr.key.startsWith('onboarding.')) groupName = 'ONBOARDING';
                 else if (curr.key.startsWith('helpdesk.')) groupName = 'HELP DESK';
                 else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
-                else if (curr.key.startsWith('dossier.')) groupName = 'EMPLOYEE DOSSIER';
+                else if (curr.key.startsWith('dossier.') || curr.key.startsWith('employee.revision.') || groupName === 'DOSSIER') groupName = 'EMPLOYEE DOSSIER';
                 else if (curr.key.startsWith('leave.')) groupName = 'LEAVES';
 
                 if (!acc[groupName]) acc[groupName] = [];
