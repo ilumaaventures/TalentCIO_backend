@@ -23,6 +23,10 @@ const userSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     },
+    isInterviewer: {
+        type: Boolean,
+        default: false
+    },
     department: String,
     departmentRef: {
         type: mongoose.Schema.Types.ObjectId,
@@ -131,6 +135,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.index({ companyId: 1, isActive: 1 });
+userSchema.index({ companyId: 1, isInterviewer: 1 });
 userSchema.index({ companyId: 1, roles: 1, isActive: 1 });
 userSchema.index({ companyId: 1, department: 1 });
 userSchema.index({ companyId: 1, reportingManagers: 1 });

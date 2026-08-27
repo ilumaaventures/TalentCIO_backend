@@ -87,7 +87,7 @@ const normalizeWorkLocation = (value) => {
     return value.trim();
 };
 
-const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department departmentRef designationRef workLocation employmentType employeeCode joiningDate isActive isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce';
+const USER_LIST_SELECT = 'firstName lastName email roles reportingManagers employeeProfile department departmentRef designationRef workLocation employmentType employeeCode joiningDate isActive isInterviewer isDeleted profilePicture createdAt updatedAt attendanceMode attendanceShiftCode isTotalWorkforce';
 
 const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {}) => (
     User.find(
