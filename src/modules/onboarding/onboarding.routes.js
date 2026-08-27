@@ -9,6 +9,7 @@ const { requireModule } = require('../../common/middleware/moduleGuard');
 router.use('/employees', requireModule('onboarding'));
 router.use('/bootstrap', requireModule('onboarding'));
 router.use('/settings', requireModule('onboarding'));
+router.use('/email-history', requireModule('onboarding'));
 
 const adminController = require('./controllers/onboardingAdminController');
 const emailController = require('./controllers/onboardingEmailController');
@@ -33,6 +34,9 @@ const onboardingController = {
     addCustomFiles: emailController.addCustomFiles,
     deleteCustomFile: emailController.deleteCustomFile,
     sendCustomFile: emailController.sendCustomFile,
+    getOnboardingEmailHistory: emailController.getOnboardingEmailHistory,
+    getOnboardingEmailHistoryById: emailController.getOnboardingEmailHistoryById,
+    resendOnboardingEmail: emailController.resendOnboardingEmail,
 
     toggleDocLivePhoto: reviewController.toggleDocLivePhoto,
     flagDocument: reviewController.flagDocument,
@@ -183,6 +187,11 @@ router.get('/employees/:id/offer-letter', protect, requireOnboardingRequest, onb
 router.get('/employees/:id/declaration', protect, requireOnboardingRequest, onboardingController.generateDeclaration);
 router.get('/employees/:id/dynamic-template/:templateId', protect, requireOnboardingRequest, onboardingController.generateDynamicTemplate);
 router.post('/employees/:id/transfer-to-active', protect, requireOnboardingComplete, onboardingController.transferToActiveEmployee);
+
+// --- Email History ---
+router.get('/email-history', protect, requireOnboardingView, onboardingController.getOnboardingEmailHistory);
+router.get('/email-history/:id', protect, requireOnboardingView, onboardingController.getOnboardingEmailHistoryById);
+router.post('/email-history/:id/resend', protect, requireOnboardingRequest, onboardingController.resendOnboardingEmail);
 
 // --- Settings & Templates ---
 router.get('/settings', protect, requireOnboardingView, onboardingController.getOnboardingSettings);

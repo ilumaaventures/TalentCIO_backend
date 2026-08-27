@@ -106,6 +106,7 @@ exports.flagDocument = async (req, res) => {
                         subject: `Action Required: Document Updates Needed for Your Onboarding`,
                         body: emailHtml,
                         type: 'onboarding',
+                        templateName: 'Document Updates Required',
                         emailAccountId: delivery.emailAccountId || 'platform',
                         emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                         sentAt: new Date()
@@ -195,6 +196,7 @@ exports.approveDocument = async (req, res) => {
                         subject: `Action Required: Document Updates Needed for Your Onboarding`,
                         body: emailHtml,
                         type: 'onboarding',
+                        templateName: 'Document Updates Required',
                         emailAccountId: delivery.emailAccountId || 'platform',
                         emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                         sentAt: new Date()
