@@ -348,6 +348,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 subject: `Welcome! Your Employee Account is Ready`,
                 body: emailHtml,
                 type: 'onboarding',
+                templateName: 'Account Activation',
                 emailAccountId: delivery.emailAccountId || 'platform',
                 emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                 sentAt: new Date()

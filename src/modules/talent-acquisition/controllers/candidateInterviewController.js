@@ -53,7 +53,7 @@ const sendInterviewScheduleEmails = async ({
     sendInterviewerEmail = true
 }) => {
     try {
-        if (!candidate) return;
+        if (!candidate || !round) return;
 
         const roleTitle = candidate.hiringRequestId?.roleDetails?.title || candidate.roleTitle || candidate.position || '';
 
@@ -92,44 +92,52 @@ const sendInterviewScheduleEmails = async ({
 
         const scheduledDateFormatted = round.scheduledDate
             ? new Date(round.scheduledDate).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })
-            : 'To Be Confirmed';
+            : 'To Be Confirmed / Scheduled Soon';
 
         const clientName = candidate.hiringRequestId?.client || candidate.companyName || '';
+        const candidateLocation = candidate.currentLocation || candidate.location || candidate.currentCity || candidate.hiringRequestId?.requirements?.location || '';
+        const candidatePhone = candidate.mobile || candidate.phone || candidate.phoneNumber || '';
+        const candidateDisplayName = candidate.candidateName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || candidate.name || 'Candidate';
+        const roundDisplayName = round.levelName || round.name || 'Interview Round';
+
         const interviewersList = Array.isArray(round.assignedTo) && round.assignedTo.length > 0
-            ? round.assignedTo.map(u => typeof u === 'object' ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : u).filter(Boolean).join(', ')
-            : 'Unassigned';
+            ? round.assignedTo
+                .map(u => typeof u === 'object' ? ([u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || 'Interviewer') : String(u))
+                .filter(Boolean)
+                .join(', ')
+            : 'Will be shared prior to session';
 
         const processTemplate = (text, isBody = false) => {
             if (!text) return '';
-            const candFirstName = candidate.candidateName ? candidate.candidateName.split(' ')[0] : '';
-            const candLastName = candidate.candidateName ? candidate.candidateName.split(' ').slice(1).join(' ') : '';
+            const candFirstName = candidateDisplayName ? candidateDisplayName.split(' ')[0] : 'Candidate';
+            const candLastName = candidateDisplayName ? candidateDisplayName.split(' ').slice(1).join(' ') : '';
 
             let processed = text
-                .replace(/\{\{?candidateName\}\}?/gi, candidate.candidateName || '')
-                .replace(/\{\{?fullName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?candidateName\}\}?/gi, candidateDisplayName)
+                .replace(/\{\{?fullName\}\}?/gi, candidateDisplayName)
                 .replace(/\{\{?firstName\}\}?/gi, candFirstName)
                 .replace(/\{\{?lastName\}\}?/gi, candLastName)
                 .replace(/\{\{?candidateEmail\}\}?/gi, candidate.email || '')
                 .replace(/\{\{?workEmail\}\}?/gi, candidate.email || '')
                 .replace(/\{\{?email\}\}?/gi, candidate.email || '')
-                .replace(/\{\{?phone\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?mobile\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?phoneNumber\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?roleTitle\}\}?/gi, roleTitle)
-                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle)
-                .replace(/\{\{?designation\}\}?/gi, roleTitle)
-                .replace(/\{\{?roundName\}\}?/gi, round.levelName || 'Interview Round')
-                .replace(/\{\{?interviewRound\}\}?/gi, round.levelName || 'Interview Round')
+                .replace(/\{\{?phone\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?mobile\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?phoneNumber\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?roleTitle\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?designation\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?roundName\}\}?/gi, roundDisplayName)
+                .replace(/\{\{?interviewRound\}\}?/gi, roundDisplayName)
                 .replace(/\{\{?scheduledDate\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewDate\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewTime\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewerName\}\}?/gi, interviewersList)
-                .replace(/\{\{?clientName\}\}?/gi, clientName)
-                .replace(/\{\{?client\}\}?/gi, clientName)
-                .replace(/\{\{?companyName\}\}?/gi, clientName)
-                .replace(/\{\{?company\}\}?/gi, clientName)
-                .replace(/\{\{?location\}\}?/gi, candidate.location || candidate.currentCity || '')
-                .replace(/\{\{?workLocation\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?clientName\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?client\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?companyName\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?company\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?location\}\}?/gi, candidateLocation || 'Online / Virtual')
+                .replace(/\{\{?workLocation\}\}?/gi, candidateLocation || 'Online / Virtual')
                 .replace(/\{\{?currentDate\}\}?/gi, new Date().toLocaleDateString('en-US', { dateStyle: 'medium' }))
                 .replace(/\{\{?currentYear\}\}?/gi, String(new Date().getFullYear()));
 
@@ -159,43 +167,57 @@ const sendInterviewScheduleEmails = async ({
             return processed;
         };
 
-        const defaultSubject = `Interview Scheduled: {{roundName}} - {{candidateName}}`;
-        const defaultCandidateBody = `Hello {{candidateName}},
-
-Your interview for {{roundName}} has been scheduled.
-
-Date & Time: {{scheduledDate}}
-Interviewer(s): {{interviewerName}}
-
-{{customFields}}
-
-Thanks & Regards,
-Talent Acquisition Team`;
-
-        const defaultInterviewerBody = `
-            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
-                <h2 style="color: #2563eb; margin-top: 0;">New Interview Assignment</h2>
-                <p>Hello,</p>
-                <p>You have been assigned to conduct an interview for candidate <strong>${candidate.candidateName}</strong> for the round <strong>${round.levelName}</strong> (${roleTitle}).</p>
-                <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
-                    <p style="margin: 4px 0;"><strong>Candidate:</strong> ${candidate.candidateName} (${candidate.email || 'N/A'})</p>
-                    <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
+        const defaultSubject = `Interview Scheduled: ${roundDisplayName} - ${candidateDisplayName}`;
+        const defaultCandidateBody = `
+            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                <h2 style="color: #2563eb; margin-top: 0; font-size: 20px; font-weight: bold;">Interview Invitation</h2>
+                <p style="font-size: 15px; margin: 16px 0;">Hello <strong>{{candidateName}}</strong>,</p>
+                <p style="font-size: 14px; margin: 12px 0;">We are pleased to inform you that your interview for <strong>{{roundName}}</strong>${roleTitle ? ` for the position of <strong>${roleTitle}</strong>` : ''} has been scheduled.</p>
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 35%;">Date & Time:</td>
+                            <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">{{scheduledDate}}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Interview Round:</td>
+                            <td style="padding: 6px 0; color: #0f172a;">{{roundName}}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Interviewer(s):</td>
+                            <td style="padding: 6px 0; color: #0f172a;">{{interviewerName}}</td>
+                        </tr>
+                        ${candidateLocation ? `
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Location:</td>
+                            <td style="padding: 6px 0; color: #0f172a;">${candidateLocation}</td>
+                        </tr>` : ''}
+                    </table>
                 </div>
                 ${customFieldsHtml}
-                <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Please log in to your portal to submit feedback after the interview.</p>
+                <p style="margin-top: 24px; font-size: 14px; color: #475569;">If you have any questions or need further details, feel free to reply to this email.</p>
+                <p style="margin-top: 20px; font-size: 14px; color: #334155; line-height: 1.5;">
+                    Best Regards,<br />
+                    <strong>Talent Acquisition Team</strong>
+                    ${clientName ? `<br /><span style="color: #64748b; font-size: 12px;">${clientName}</span>` : ''}
+                </p>
             </div>
         `;
 
         const senderAccount = await resolveSenderAccountDetails(companyId, effectiveEmailAccountId);
 
+        // 1. Send Candidate Email
         if (sendCandidateEmail !== false && candidate.email) {
             const rawSubjectText = effectiveCustomSubject || template?.subject;
             const rawBodyText = effectiveCustomHtmlBody || template?.htmlBody;
 
             const subject = rawSubjectText ? processTemplate(rawSubjectText, false) : defaultSubject;
-            const htmlBody = rawBodyText ? processTemplate(rawBodyText, true) : defaultCandidateBody;
+            const htmlBody = rawBodyText ? processTemplate(rawBodyText, true) : processTemplate(defaultCandidateBody, true);
+            let sendSuccess = false;
+            let sendError = null;
+
             try {
-                await sendEmailForCompany({
+                sendSuccess = await sendEmailForCompany({
                     companyId,
                     emailAccountId: effectiveEmailAccountId,
                     to: candidate.email,
@@ -203,9 +225,15 @@ Talent Acquisition Team`;
                     bcc: effectiveBcc || undefined,
                     subject,
                     html: htmlBody,
-                    user
+                    user,
+                    throwOnError: true
                 });
+            } catch (candEmailErr) {
+                sendError = candEmailErr;
+                console.error('Error sending interview schedule email to candidate:', candEmailErr);
+            }
 
+            if (sendSuccess && !sendError) {
                 await TAEmailLog.create({
                     companyId,
                     sentBy: user?._id || null,
@@ -230,9 +258,7 @@ Talent Acquisition Team`;
                     sentAt: new Date()
                 });
 
-                round.mailSent = true;
-                round.mailSentAt = new Date();
-                round.lastMailDetails = {
+                const lastMailDetails = {
                     sentAt: new Date(),
                     subject,
                     htmlBody,
@@ -241,13 +267,26 @@ Talent Acquisition Team`;
                     cc: String(effectiveCc || ''),
                     bcc: String(effectiveBcc || ''),
                     interviewers: Array.isArray(round.assignedTo) ? round.assignedTo.map(u => ({
-                        name: typeof u === 'object' ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : String(u),
+                        name: typeof u === 'object' ? ([u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || 'Interviewer') : String(u),
                         email: typeof u === 'object' ? u.email || '' : ''
                     })) : []
                 };
-                await candidate.save();
-            } catch (candEmailErr) {
-                console.error('Error sending interview schedule email to candidate:', candEmailErr);
+
+                round.mailSent = true;
+                round.mailSentAt = new Date();
+                round.lastMailDetails = lastMailDetails;
+
+                await Candidate.updateOne(
+                    { _id: candidate._id, 'interviewRounds._id': round._id },
+                    {
+                        $set: {
+                            'interviewRounds.$.mailSent': true,
+                            'interviewRounds.$.mailSentAt': new Date(),
+                            'interviewRounds.$.lastMailDetails': lastMailDetails
+                        }
+                    }
+                );
+            } else {
                 try {
                     await TAEmailLog.create({
                         companyId,
@@ -270,36 +309,57 @@ Talent Acquisition Team`;
                         subject,
                         body: htmlBody,
                         status: 'Failed',
-                        errorReason: candEmailErr.message,
+                        errorReason: sendError?.message || 'Email delivery failed',
                         sentAt: new Date()
                     });
                 } catch (logErr) {}
             }
         }
 
+        // 2. Send Interviewer(s) Notification
         if (sendInterviewerEmail !== false && Array.isArray(round.assignedTo) && round.assignedTo.length > 0) {
             for (const interviewerObj of round.assignedTo) {
                 const email = typeof interviewerObj === 'object' ? interviewerObj.email : null;
                 const interviewerName = typeof interviewerObj === 'object'
-                    ? `${interviewerObj.firstName || ''} ${interviewerObj.lastName || ''}`.trim()
+                    ? ([interviewerObj.firstName, interviewerObj.lastName].filter(Boolean).join(' ') || interviewerObj.email || 'Interviewer')
                     : 'Interviewer';
                 if (email) {
-                    const subject = `[Interviewer Notice] Interview Scheduled: ${round.levelName} - ${candidate.candidateName}`;
-                    const htmlBody = template?.htmlBody
-                        ? processTemplate(template.htmlBody, true)
-                        : defaultInterviewerBody;
+                    const subject = `[Interviewer Notice] Interview Scheduled: ${round.levelName || 'Interview Round'} - ${candidate.candidateName}`;
+                    const interviewerHtmlBody = `
+                        <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                            <h2 style="color: #2563eb; margin-top: 0;">New Interview Assignment</h2>
+                            <p>Hello <strong>${interviewerName}</strong>,</p>
+                            <p>You have been assigned to conduct an interview for candidate <strong>${candidate.candidateName}</strong> for the round <strong>${round.levelName || 'Interview Round'}</strong> (${roleTitle || 'Role'}).</p>
+                            <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
+                                <p style="margin: 4px 0;"><strong>Candidate:</strong> ${candidate.candidateName} (${candidate.email || 'N/A'})</p>
+                                <p style="margin: 4px 0;"><strong>Phone:</strong> ${candidatePhone || 'N/A'}</p>
+                                <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
+                                <p style="margin: 4px 0;"><strong>Role / Position:</strong> ${roleTitle || 'N/A'}</p>
+                                ${candidateLocation ? `<p style="margin: 4px 0;"><strong>Location:</strong> ${candidateLocation}</p>` : ''}
+                            </div>
+                            ${customFieldsHtml}
+                            <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Please log in to your portal to submit evaluation feedback after the interview.</p>
+                        </div>
+                    `;
+
+                    let intSuccess = false;
+                    let intError = null;
                     try {
-                        await sendEmailForCompany({
+                        intSuccess = await sendEmailForCompany({
                             companyId,
                             emailAccountId: effectiveEmailAccountId,
                             to: email,
-                            cc: effectiveCc || undefined,
-                            bcc: effectiveBcc || undefined,
                             subject,
-                            html: htmlBody,
-                            user
+                            html: interviewerHtmlBody,
+                            user,
+                            throwOnError: true
                         });
+                    } catch (intErr) {
+                        intError = intErr;
+                        console.error('Error sending interviewer schedule email:', intErr);
+                    }
 
+                    try {
                         await TAEmailLog.create({
                             companyId,
                             sentBy: user?._id || null,
@@ -312,20 +372,17 @@ Talent Acquisition Team`;
                             hiringRequestId: candidate.hiringRequestId?._id || candidate.hiringRequestId || null,
                             hiringRequestTitle: candidate.hiringRequestId?.roleDetails?.title || roleTitle || '',
                             candidateId: candidate._id,
-                            recipientName: interviewerName ? `[Interviewer] ${interviewerName}` : '[Interviewer]',
+                            recipientName: `[Interviewer] ${interviewerName}`,
                             recipientEmail: email,
-                            cc: String(effectiveCc || ''),
-                            bcc: String(effectiveBcc || ''),
                             templateId: template?._id || null,
                             templateName: 'Interviewer Notice',
                             subject,
-                            body: htmlBody,
-                            status: 'Sent',
+                            body: interviewerHtmlBody,
+                            status: intSuccess && !intError ? 'Sent' : 'Failed',
+                            errorReason: intError?.message || (intSuccess ? undefined : 'Delivery failed'),
                             sentAt: new Date()
                         });
-                    } catch (intErr) {
-                        console.error('Error sending interviewer schedule email:', intErr);
-                    }
+                    } catch (logErr) {}
                 }
             }
         }
@@ -353,7 +410,9 @@ const addInterviewRound = async (req, res) => {
         }
 
         const FIXED_ASSIGN_AFTER_STAGES = new Set([
-            'Total Sourced', 'Interested', 'Interview Scheduled', 'Shortlisted', 'Profile Shared', 'Offer Released', 'In Interview'
+            'Total Sourced', 'Interested', 'Interview Scheduled', 'Shortlisted', 'Profile Shared',
+            'Selected', 'Rejected', 'On Hold', 'Offer Released', 'Offer Sent', 'Offer Accepted',
+            'Joined', 'In Interview', 'Did Not Turn Up', 'Left in between'
         ]);
         const normalizedAssignAfter = String(assignAfterStage || 'Shortlisted').trim();
         const existingRoundNames = new Set(
@@ -425,13 +484,13 @@ const addInterviewRound = async (req, res) => {
             });
         }
 
-        // Send email notifications to Candidate and/or Interviewer(s)
+        // Send email notifications to Candidate and/or Interviewer(s) only if explicitly requested
         const shouldSendCandidate = req.body.sendCandidateEmail !== undefined 
             ? (req.body.sendCandidateEmail !== false && req.body.sendCandidateEmail !== 'false') 
-            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : true);
+            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : false);
         const shouldSendInterviewer = req.body.sendInterviewerEmail !== undefined 
             ? (req.body.sendInterviewerEmail !== false && req.body.sendInterviewerEmail !== 'false') 
-            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : true);
+            : (req.body.sendEmail !== undefined ? (req.body.sendEmail !== false && req.body.sendEmail !== 'false') : false);
 
         if (shouldSendCandidate || shouldSendInterviewer) {
             sendInterviewScheduleEmails({
@@ -464,7 +523,7 @@ const addInterviewRound = async (req, res) => {
 const updateInterviewRound = async (req, res) => {
     try {
         const { id, roundId } = req.params;
-        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, status, rating, feedback, evaluatedBy, customSubject, customHtmlBody } = req.body;
+        const { levelName, assignAfterStage, assignedTo, scheduledDate, phase, customFields, emailTemplateId, emailAccountId, cc, bcc, sendEmail, sendCandidateEmail, sendInterviewerEmail, status, rating, feedback, evaluatedBy, customSubject, customHtmlBody } = req.body;
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
         if (!candidate) {
@@ -562,7 +621,14 @@ const updateInterviewRound = async (req, res) => {
         }
 
         // Send email notifications ONLY if explicitly requested via sendEmail flag
-        if (sendEmail && updatedRound) {
+        const shouldSendCandidate = sendCandidateEmail !== undefined 
+            ? (sendCandidateEmail !== false && sendCandidateEmail !== 'false') 
+            : (sendEmail !== undefined ? (sendEmail !== false && sendEmail !== 'false') : true);
+        const shouldSendInterviewer = sendInterviewerEmail !== undefined 
+            ? (sendInterviewerEmail !== false && sendInterviewerEmail !== 'false') 
+            : (sendEmail !== undefined ? (sendEmail !== false && sendEmail !== 'false') : true);
+
+        if (sendEmail && updatedRound && (shouldSendCandidate || shouldSendInterviewer)) {
             sendInterviewScheduleEmails({
                 companyId: req.companyId,
                 candidate: updatedCandidate,
@@ -572,7 +638,9 @@ const updateInterviewRound = async (req, res) => {
                 bcc,
                 emailAccountId,
                 customSubject: customSubject !== undefined ? customSubject : round.customSubject,
-                customHtmlBody: customHtmlBody !== undefined ? customHtmlBody : round.customHtmlBody
+                customHtmlBody: customHtmlBody !== undefined ? customHtmlBody : round.customHtmlBody,
+                sendCandidateEmail: shouldSendCandidate,
+                sendInterviewerEmail: shouldSendInterviewer
             });
         }
 
@@ -660,7 +728,15 @@ const previewInterviewRoundEmail = async (req, res) => {
     try {
         const { id, roundId } = req.params;
         const emailTemplateId = req.query.emailTemplateId || req.body?.emailTemplateId;
-        const customFieldsInput = req.body?.customFields || (req.query.customFields ? JSON.parse(req.query.customFields) : null);
+        
+        let customFieldsInput = req.body?.customFields || null;
+        if (!customFieldsInput && req.query.customFields) {
+            try {
+                customFieldsInput = JSON.parse(req.query.customFields);
+            } catch (e) {
+                customFieldsInput = null;
+            }
+        }
 
         const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('hiringRequestId', 'requestId client roleDetails')
@@ -683,15 +759,22 @@ const previewInterviewRoundEmail = async (req, res) => {
 
         const roleTitle = candidate.hiringRequestId?.roleDetails?.title || candidate.roleTitle || candidate.position || '';
         const clientName = candidate.hiringRequestId?.client || candidate.companyName || '';
+        const candidateLocation = candidate.currentLocation || candidate.location || candidate.currentCity || candidate.hiringRequestId?.requirements?.location || '';
+        const candidatePhone = candidate.mobile || candidate.phone || candidate.phoneNumber || '';
+        const candidateDisplayName = candidate.candidateName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || candidate.name || 'Candidate';
+        const roundDisplayName = round.levelName || round.name || 'Interview Round';
 
         const scheduledDateFormatted = round.scheduledDate
             ? new Date(round.scheduledDate).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })
-            : 'To Be Confirmed';
+            : 'To Be Confirmed / Scheduled Soon';
 
         const assignedInterviewers = Array.isArray(round.assignedTo) ? round.assignedTo : [];
         const interviewersList = assignedInterviewers.length > 0
-            ? assignedInterviewers.map(u => typeof u === 'object' ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : u).filter(Boolean).join(', ')
-            : 'Unassigned';
+            ? assignedInterviewers
+                .map(u => typeof u === 'object' ? ([u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || 'Interviewer') : String(u))
+                .filter(Boolean)
+                .join(', ')
+            : 'Will be shared prior to session';
 
         let customFieldsHtml = '';
         const fieldsToUse = Array.isArray(customFieldsInput) ? customFieldsInput : round.customFields;
@@ -716,35 +799,35 @@ const previewInterviewRoundEmail = async (req, res) => {
 
         const processTemplate = (text, isBody = false) => {
             if (!text) return '';
-            const candFirstName = candidate.candidateName ? candidate.candidateName.split(' ')[0] : '';
-            const candLastName = candidate.candidateName ? candidate.candidateName.split(' ').slice(1).join(' ') : '';
+            const candFirstName = candidateDisplayName ? candidateDisplayName.split(' ')[0] : 'Candidate';
+            const candLastName = candidateDisplayName ? candidateDisplayName.split(' ').slice(1).join(' ') : '';
 
             let processed = text
-                .replace(/\{\{?candidateName\}\}?/gi, candidate.candidateName || '')
-                .replace(/\{\{?fullName\}\}?/gi, candidate.candidateName || '')
+                .replace(/\{\{?candidateName\}\}?/gi, candidateDisplayName)
+                .replace(/\{\{?fullName\}\}?/gi, candidateDisplayName)
                 .replace(/\{\{?firstName\}\}?/gi, candFirstName)
                 .replace(/\{\{?lastName\}\}?/gi, candLastName)
                 .replace(/\{\{?candidateEmail\}\}?/gi, candidate.email || '')
                 .replace(/\{\{?workEmail\}\}?/gi, candidate.email || '')
                 .replace(/\{\{?email\}\}?/gi, candidate.email || '')
-                .replace(/\{\{?phone\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?mobile\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?phoneNumber\}\}?/gi, candidate.phone || candidate.mobile || '')
-                .replace(/\{\{?roleTitle\}\}?/gi, roleTitle)
-                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle)
-                .replace(/\{\{?designation\}\}?/gi, roleTitle)
-                .replace(/\{\{?roundName\}\}?/gi, round.levelName || 'Interview Round')
-                .replace(/\{\{?interviewRound\}\}?/gi, round.levelName || 'Interview Round')
+                .replace(/\{\{?phone\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?mobile\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?phoneNumber\}\}?/gi, candidatePhone || 'N/A')
+                .replace(/\{\{?roleTitle\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?jobTitle\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?designation\}\}?/gi, roleTitle || 'Open Position')
+                .replace(/\{\{?roundName\}\}?/gi, roundDisplayName)
+                .replace(/\{\{?interviewRound\}\}?/gi, roundDisplayName)
                 .replace(/\{\{?scheduledDate\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewDate\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewTime\}\}?/gi, scheduledDateFormatted)
                 .replace(/\{\{?interviewerName\}\}?/gi, interviewersList)
-                .replace(/\{\{?clientName\}\}?/gi, clientName)
-                .replace(/\{\{?client\}\}?/gi, clientName)
-                .replace(/\{\{?companyName\}\}?/gi, clientName)
-                .replace(/\{\{?company\}\}?/gi, clientName)
-                .replace(/\{\{?location\}\}?/gi, candidate.location || candidate.currentCity || '')
-                .replace(/\{\{?workLocation\}\}?/gi, candidate.location || candidate.currentCity || '')
+                .replace(/\{\{?clientName\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?client\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?companyName\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?company\}\}?/gi, clientName || 'Our Company')
+                .replace(/\{\{?location\}\}?/gi, candidateLocation || 'Online / Virtual')
+                .replace(/\{\{?workLocation\}\}?/gi, candidateLocation || 'Online / Virtual')
                 .replace(/\{\{?currentDate\}\}?/gi, new Date().toLocaleDateString('en-US', { dateStyle: 'medium' }))
                 .replace(/\{\{?currentYear\}\}?/gi, String(new Date().getFullYear()));
 
@@ -774,18 +857,42 @@ const previewInterviewRoundEmail = async (req, res) => {
             return processed;
         };
 
-        const defaultSubject = `Interview Scheduled: {{roundName}} - {{candidateName}}`;
-        const defaultCandidateBody = `Hello {{candidateName}},
-
-Your interview for {{roundName}} has been scheduled.
-
-Date & Time: {{scheduledDate}}
-Interviewer(s): {{interviewerName}}
-
-{{customFields}}
-
-Thanks & Regards,
-Talent Acquisition Team`;
+        const defaultSubject = `Interview Scheduled: ${roundDisplayName} - ${candidateDisplayName}`;
+        const defaultCandidateBody = `
+            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                <h2 style="color: #2563eb; margin-top: 0; font-size: 20px; font-weight: bold;">Interview Invitation</h2>
+                <p style="font-size: 15px; margin: 16px 0;">Hello <strong>{{candidateName}}</strong>,</p>
+                <p style="font-size: 14px; margin: 12px 0;">We are pleased to inform you that your interview for <strong>{{roundName}}</strong>${roleTitle ? ` for the position of <strong>${roleTitle}</strong>` : ''} has been scheduled.</p>
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 35%;">Date & Time:</td>
+                            <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">{{scheduledDate}}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Interview Round:</td>
+                            <td style="padding: 6px 0; color: #0f172a;">{{roundName}}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Interviewer(s):</td>
+                            <td style="padding: 6px 0; color: #0f172a;">{{interviewerName}}</td>
+                        </tr>
+                        ${candidateLocation ? `
+                        <tr>
+                            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Location:</td>
+                            <td style="padding: 6px 0; color: #0f172a;">${candidateLocation}</td>
+                        </tr>` : ''}
+                    </table>
+                </div>
+                ${customFieldsHtml}
+                <p style="margin-top: 24px; font-size: 14px; color: #475569;">If you have any questions or need further details, feel free to reply to this email.</p>
+                <p style="margin-top: 20px; font-size: 14px; color: #334155; line-height: 1.5;">
+                    Best Regards,<br />
+                    <strong>Talent Acquisition Team</strong>
+                    ${clientName ? `<br /><span style="color: #64748b; font-size: 12px;">${clientName}</span>` : ''}
+                </p>
+            </div>
+        `;
 
         const customSubjectInput = req.body?.customSubject || req.query?.customSubject;
         const customHtmlBodyInput = req.body?.customHtmlBody || req.query?.customHtmlBody;
@@ -796,14 +903,37 @@ Talent Acquisition Team`;
         const subject = processTemplate(rawSubject, false);
         const htmlBody = processTemplate(rawBody, true);
 
+        const interviewerSubject = `[Interviewer Notice] Interview Scheduled: ${round.levelName || 'Interview Round'} - ${candidate.candidateName}`;
+        const interviewerHtmlBody = `
+            <div style="font-family: Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #2563eb; margin-top: 0;">New Interview Assignment</h2>
+                <p>Hello <strong>${interviewersList}</strong>,</p>
+                <p>You have been assigned to conduct an interview for candidate <strong>${candidate.candidateName}</strong> for the round <strong>${round.levelName || 'Interview Round'}</strong> (${roleTitle || 'Role'}).</p>
+                <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0;">
+                    <p style="margin: 4px 0;"><strong>Candidate:</strong> ${candidate.candidateName} (${candidate.email || 'N/A'})</p>
+                    <p style="margin: 4px 0;"><strong>Phone:</strong> ${candidatePhone || 'N/A'}</p>
+                    <p style="margin: 4px 0;"><strong>Date & Time:</strong> ${scheduledDateFormatted}</p>
+                    <p style="margin: 4px 0;"><strong>Role / Position:</strong> ${roleTitle || 'N/A'}</p>
+                    ${candidateLocation ? `<p style="margin: 4px 0;"><strong>Location:</strong> ${candidateLocation}</p>` : ''}
+                </div>
+                ${customFieldsHtml}
+                <p style="margin-top: 20px; color: #64748b; font-size: 12px;">Please log in to your portal to submit evaluation feedback after the interview.</p>
+            </div>
+        `;
+
         res.status(200).json({
             candidateName: candidate.candidateName,
             candidateEmail: candidate.email,
-            interviewers: assignedInterviewers.map(u => ({ name: `${u.firstName || ''} ${u.lastName || ''}`.trim(), email: u.email })),
+            interviewers: assignedInterviewers.map(u => ({
+                name: typeof u === 'object' ? ([u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || 'Interviewer') : String(u),
+                email: typeof u === 'object' ? u.email || '' : ''
+            })),
             subject,
             htmlBody,
             rawSubject,
             rawBody,
+            interviewerSubject,
+            interviewerHtmlBody,
             customFields: validFields,
             scheduledDateFormatted,
             cc: round.cc || '',

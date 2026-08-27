@@ -541,6 +541,7 @@ exports.sendCustomFile = async (req, res) => {
                 subject: `Action Required: New ${files.length > 1 ? 'Documents' : 'Document'} for Your Onboarding`,
                 body: emailHtml,
                 type: 'onboarding',
+                templateName: 'Custom Document Shared',
                 emailAccountId: delivery.emailAccountId || 'platform',
                 emailAccountLabel: delivery.emailAccountId === 'platform' ? 'TalentCIO Platform' : (delivery.emailAccountId || 'TalentCIO Platform'),
                 attachments: (attachments || []).map(att => ({
@@ -586,5 +587,366 @@ exports.sendCustomFile = async (req, res) => {
     } catch (error) {
         console.error('Error sending custom file(s):', error);
         res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.getOnboardingEmailHistory = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 10,
+            search = '',
+            templateName = '',
+            employeeId = '',
+            startDate = '',
+            endDate = ''
+        } = req.query;
+
+        const query = {
+            companyId: req.companyId,
+            type: 'onboarding'
+        };
+
+        // If filtering by a specific onboarding employee
+        if (employeeId) {
+            const targetEmp = await OnboardingEmployee.findOne({ _id: employeeId, companyId: req.companyId })
+                .select('email transferredToUserId')
+                .lean();
+            if (targetEmp) {
+                const orConditions = [{ recipientEmail: targetEmp.email }];
+                if (targetEmp.transferredToUserId) {
+                    orConditions.push({ recipientUserId: targetEmp.transferredToUserId });
+                }
+                query.$or = orConditions;
+            }
+        }
+
+        // Search query
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            const matchingEmployees = await OnboardingEmployee.find({
+                companyId: req.companyId,
+                $or: [
+                    { firstName: searchRegex },
+                    { lastName: searchRegex },
+                    { email: searchRegex },
+                    { tempEmployeeId: searchRegex },
+                    { designation: searchRegex },
+                    { department: searchRegex }
+                ]
+            }).select('email transferredToUserId').lean();
+
+            const matchingEmails = matchingEmployees.map(e => e.email).filter(Boolean);
+            const matchingUserIds = matchingEmployees.map(e => e.transferredToUserId).filter(Boolean);
+
+            const searchConditions = [
+                { subject: searchRegex },
+                { recipientEmail: searchRegex },
+                { templateName: searchRegex },
+                { emailAccountLabel: searchRegex }
+            ];
+
+            if (matchingEmails.length > 0) {
+                searchConditions.push({ recipientEmail: { $in: matchingEmails } });
+            }
+            if (matchingUserIds.length > 0) {
+                searchConditions.push({ recipientUserId: { $in: matchingUserIds } });
+            }
+
+            if (query.$or) {
+                query.$and = [{ $or: query.$or }, { $or: searchConditions }];
+                delete query.$or;
+            } else {
+                query.$or = searchConditions;
+            }
+        }
+
+        // Filter by template / category
+        if (templateName && templateName !== 'All') {
+            query.templateName = templateName;
+        }
+
+        // Date range filter
+        if (startDate || endDate) {
+            query.sentAt = {};
+            if (startDate) {
+                query.sentAt.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.sentAt.$lte = end;
+            }
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
+        const skip = (pageNum - 1) * limitNum;
+
+        const [logs, totalCount, allEmployees, rawTemplates] = await Promise.all([
+            HREmailLog.find(query)
+                .populate('sentBy', 'firstName lastName email profilePicture')
+                .populate('templateId', 'name')
+                .sort({ sentAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            HREmailLog.countDocuments(query),
+            OnboardingEmployee.find({ companyId: req.companyId })
+                .select('_id firstName lastName email tempEmployeeId designation department status profilePicture transferredToUserId')
+                .lean(),
+            HREmailLog.distinct('templateName', { companyId: req.companyId, type: 'onboarding' })
+        ]);
+
+        // Map candidate info by email and transferredToUserId
+        const empByEmail = new Map();
+        const empByUserId = new Map();
+        allEmployees.forEach(emp => {
+            if (emp.email) empByEmail.set(emp.email.toLowerCase(), emp);
+            if (emp.transferredToUserId) empByUserId.set(String(emp.transferredToUserId), emp);
+        });
+
+        const enrichedLogs = logs.map(log => {
+            const recipientEmailLower = (log.recipientEmail || '').toLowerCase();
+            const recipientUserStr = log.recipientUserId ? String(log.recipientUserId._id || log.recipientUserId) : null;
+
+            const matchedEmp = (recipientEmailLower && empByEmail.get(recipientEmailLower)) ||
+                (recipientUserStr && empByUserId.get(recipientUserStr)) || null;
+
+            return {
+                ...log,
+                candidate: matchedEmp ? {
+                    _id: matchedEmp._id,
+                    name: `${matchedEmp.firstName || ''} ${matchedEmp.lastName || ''}`.trim() || 'Candidate',
+                    firstName: matchedEmp.firstName,
+                    lastName: matchedEmp.lastName,
+                    email: matchedEmp.email,
+                    tempEmployeeId: matchedEmp.tempEmployeeId,
+                    designation: matchedEmp.designation,
+                    department: matchedEmp.department,
+                    status: matchedEmp.status,
+                    profilePicture: matchedEmp.profilePicture
+                } : null
+            };
+        });
+
+        // Summary metrics
+        const totalSent = await HREmailLog.countDocuments({ companyId: req.companyId, type: 'onboarding' });
+        const distinctRecipients = await HREmailLog.distinct('recipientEmail', { companyId: req.companyId, type: 'onboarding' });
+        const emailsWithAttachments = await HREmailLog.countDocuments({
+            companyId: req.companyId,
+            type: 'onboarding',
+            'attachments.0': { $exists: true }
+        });
+
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+        const sentThisMonth = await HREmailLog.countDocuments({
+            companyId: req.companyId,
+            type: 'onboarding',
+            sentAt: { $gte: startOfMonth }
+        });
+
+        const templatesList = Array.from(new Set(
+            rawTemplates.filter(Boolean).concat([
+                'Default Pre-Onboarding Template',
+                'Custom Document Shared',
+                'Document Updates Required',
+                'Account Activation'
+            ])
+        ));
+
+        res.json({
+            logs: enrichedLogs,
+            pagination: {
+                total: totalCount,
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(totalCount / limitNum) || 1
+            },
+            stats: {
+                totalSent,
+                candidatesReached: distinctRecipients.length,
+                emailsWithAttachments,
+                sentThisMonth
+            },
+            templates: templatesList
+        });
+    } catch (error) {
+        console.error('Error fetching onboarding email history:', error);
+        res.status(500).json({ message: 'Failed to fetch onboarding email history', error: error.message });
+    }
+};
+
+exports.getOnboardingEmailHistoryById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const log = await HREmailLog.findOne({
+            _id: id,
+            companyId: req.companyId,
+            type: 'onboarding'
+        })
+            .populate('sentBy', 'firstName lastName email profilePicture')
+            .populate('templateId', 'name')
+            .lean();
+
+        if (!log) {
+            return res.status(404).json({ message: 'Email log not found' });
+        }
+
+        let matchedEmp = null;
+        if (log.recipientEmail) {
+            matchedEmp = await OnboardingEmployee.findOne({
+                companyId: req.companyId,
+                email: new RegExp(`^${log.recipientEmail}$`, 'i')
+            }).select('_id firstName lastName email tempEmployeeId designation department status profilePicture').lean();
+        }
+
+        res.json({
+            log: {
+                ...log,
+                candidate: matchedEmp ? {
+                    _id: matchedEmp._id,
+                    name: `${matchedEmp.firstName || ''} ${matchedEmp.lastName || ''}`.trim() || 'Candidate',
+                    firstName: matchedEmp.firstName,
+                    lastName: matchedEmp.lastName,
+                    email: matchedEmp.email,
+                    tempEmployeeId: matchedEmp.tempEmployeeId,
+                    designation: matchedEmp.designation,
+                    department: matchedEmp.department,
+                    status: matchedEmp.status,
+                    profilePicture: matchedEmp.profilePicture
+                } : null
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching onboarding email log by id:', error);
+        res.status(500).json({ message: 'Failed to fetch email log details', error: error.message });
+    }
+};
+
+exports.resendOnboardingEmail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const originalLog = await HREmailLog.findOne({
+            _id: id,
+            companyId: req.companyId,
+            type: 'onboarding'
+        }).lean();
+
+        if (!originalLog) {
+            return res.status(404).json({ message: 'Original email log not found.' });
+        }
+
+        const recipientEmail = String(req.body?.recipientEmail || originalLog.recipientEmail || '').trim();
+        if (!recipientEmail) {
+            return res.status(400).json({ message: 'Recipient email is required.' });
+        }
+
+        const subject = String(req.body?.subject || originalLog.subject || 'No Subject').trim();
+        const body = String(req.body?.body || originalLog.body || '');
+        const cc = String(req.body?.cc !== undefined ? req.body.cc : (originalLog.cc || '')).trim();
+        const bcc = String(req.body?.bcc !== undefined ? req.body.bcc : (originalLog.bcc || '')).trim();
+
+        if (!body) {
+            return res.status(400).json({ message: 'Email body is empty and cannot be sent.' });
+        }
+
+        const requestedEmailAccountId = req.body?.emailAccountId !== undefined ? req.body.emailAccountId : originalLog.emailAccountId;
+        const delivery = await resolveNotificationEmailDelivery(
+            req.companyId,
+            'pre_onboarding_email_sent',
+            requestedEmailAccountId
+        );
+
+        if (!delivery.shouldSendEmail) {
+            return res.status(400).json({ message: 'Onboarding email delivery is disabled in notification settings.' });
+        }
+
+        const attachments = (originalLog.attachments || []).map(att => ({
+            filename: att.filename,
+            path: att.cloudinaryUrl || att.path || ''
+        })).filter(att => att.path);
+
+        const emailText = hasHtmlMarkup(body) ? stripHtml(body) : body;
+        const accountIdToUse = delivery.emailAccountId || requestedEmailAccountId || 'platform';
+
+        let senderLabel = 'TalentCIO Platform';
+        if (accountIdToUse && accountIdToUse !== 'platform') {
+            const companyDoc = await Company.findById(req.companyId).select('name settings.email').lean();
+            const accounts = companyDoc?.settings?.email?.accounts || [];
+            const matched = accounts.find(a => String(a._id) === String(accountIdToUse));
+            if (matched) {
+                senderLabel = matched.name || (matched.fromName ? `${matched.fromName} <${matched.fromAddress}>` : (matched.fromAddress || accountIdToUse));
+            } else {
+                senderLabel = originalLog.emailAccountLabel || accountIdToUse;
+            }
+        }
+
+        await sendEmailForCompany({
+            companyId: req.companyId,
+            emailAccountId: accountIdToUse,
+            to: recipientEmail,
+            cc: cc || undefined,
+            bcc: bcc || undefined,
+            subject,
+            html: body,
+            text: emailText,
+            attachments,
+            ...branding
+        });
+
+        // Create new log for the resend event
+        const newLog = await HREmailLog.create({
+            companyId: req.companyId,
+            sentBy: req.user?._id,
+            recipientUserId: originalLog.recipientUserId || null,
+            recipientEmail,
+            cc,
+            bcc,
+            subject,
+            body,
+            type: 'onboarding',
+            templateId: originalLog.templateId || null,
+            templateName: originalLog.templateName || 'Resent Onboarding Email',
+            emailAccountId: accountIdToUse,
+            emailAccountLabel: senderLabel,
+            attachments: (originalLog.attachments || []).map(att => ({
+                filename: att.filename,
+                cloudinaryUrl: att.cloudinaryUrl,
+                publicId: att.publicId || '',
+                dossierDocId: att.dossierDocId || null
+            })),
+            sentAt: new Date()
+        });
+
+        // Audit log in OnboardingEmployee if found
+        const employee = await OnboardingEmployee.findOne({
+            companyId: req.companyId,
+            email: new RegExp(`^${recipientEmail}$`, 'i')
+        });
+
+        if (employee) {
+            await OnboardingEmployee.findByIdAndUpdate(employee._id, {
+                $push: {
+                    auditLog: {
+                        $each: [{
+                            action: 'EMAIL_RESENT',
+                            details: `Email "${subject}" resent by HR (${req.user?.firstName || 'HR'})`
+                        }],
+                        $slice: -50
+                    }
+                }
+            });
+        }
+
+        res.json({
+            message: `Email successfully resent to ${recipientEmail}`,
+            log: newLog
+        });
+    } catch (error) {
+        console.error('Error resending onboarding email:', error);
+        res.status(500).json({ message: 'Failed to resend email', error: error.message });
     }
 };
