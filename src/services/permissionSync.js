@@ -251,6 +251,33 @@ const syncPermissions = async () => {
             }
         }
 
+        // Clean up deprecated employee.revision.view permission
+        await Permission.deleteMany({ key: 'employee.revision.view' });
+
+        const revisionManagePerms = await Permission.find({
+            key: { $in: ['employee.revision.manage', 'employee.revision.create', 'employee.revision.update', 'employee.revision.cancel', 'employee.revision.view.others'] }
+        }).select('_id');
+        if (revisionManagePerms.length > 0) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['HR Admin', 'HR Manager'],
+                revisionManagePerms.map(p => p._id)
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated HR Admin/Manager roles with employee revision management permissions.');
+            }
+        }
+
+        const revisionSelfPerm = await Permission.findOne({ key: 'employee.revision.view.self' }).select('_id');
+        if (revisionSelfPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['Employee', 'Manager', 'HR Manager', 'HR Admin'],
+                [revisionSelfPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated Employee/Manager/HR roles with employee.revision.view.self permission.');
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);

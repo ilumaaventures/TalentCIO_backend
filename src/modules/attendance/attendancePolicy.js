@@ -117,16 +117,18 @@ const resolveShiftForUser = ({ company, user }) => {
     return { shifts, shift };
 };
 
-const buildAttendancePolicy = (options = {}) => {
+function buildAttendancePolicy(...args) {
     let company, user, attendanceDate, clockInTime, currentTime;
-    if (options && (options.settings || options.name || options.roles || options._id) && !options.company && !options.user) {
-        company = arguments[0];
-        user = arguments[1];
-        attendanceDate = arguments[2] || new Date();
-        clockInTime = arguments[3] || null;
-        currentTime = arguments[4] || new Date();
+    const firstArg = args[0];
+    if (firstArg && (firstArg.settings || firstArg.name || firstArg.roles || firstArg._id) && !firstArg.company && !firstArg.user) {
+        company = args[0];
+        user = args[1];
+        attendanceDate = args[2] || new Date();
+        clockInTime = args[3] || null;
+        currentTime = args[4] || new Date();
     } else {
-        ({ company, user, attendanceDate = new Date(), clockInTime = null, currentTime = new Date() } = options || {});
+        const options = firstArg || {};
+        ({ company, user, attendanceDate = new Date(), clockInTime = null, currentTime = new Date() } = options);
     }
 
     const mode = getAttendanceModeForUser({ company, user });
@@ -142,13 +144,14 @@ const buildAttendancePolicy = (options = {}) => {
 
     let autoCheckoutAt = endOfDayAt;
     if (clockInTime) {
+        const clockInDate = new Date(clockInTime);
         const cutoffCandidates = [endOfDayAt];
 
-        if (shiftEndAt) {
+        if (shiftEndAt && shiftEndAt > clockInDate) {
             cutoffCandidates.push(shiftEndAt);
         }
 
-        const maxHoursCheckoutAt = new Date(new Date(clockInTime).getTime() + (maxWorkingHours * 60 * 60 * 1000));
+        const maxHoursCheckoutAt = new Date(clockInDate.getTime() + (maxWorkingHours * 60 * 60 * 1000));
         cutoffCandidates.push(maxHoursCheckoutAt);
 
         autoCheckoutAt = cutoffCandidates.reduce((earliest, current) => (
@@ -174,7 +177,7 @@ const buildAttendancePolicy = (options = {}) => {
         canClockIn,
         denialReason
     };
-};
+}
 
 const isWithinShiftWindow = ({ policy, currentTime = new Date() }) => {
     if (!policy?.shift || policy.shift.shiftType === 'any') {

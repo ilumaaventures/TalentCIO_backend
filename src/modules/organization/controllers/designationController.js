@@ -109,7 +109,11 @@ const createDesignation = async (req, res) => {
         });
 
         await designation.save();
-        res.status(201).json({ message: 'Designation created successfully', designation });
+        res.status(201).json({
+            ...designation.toObject(),
+            message: 'Designation created successfully',
+            designation
+        });
     } catch (error) {
         console.error('createDesignation error:', error);
         res.status(500).json({ message: error.message || 'Failed to create designation' });

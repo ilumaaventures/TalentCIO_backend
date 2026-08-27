@@ -15,7 +15,7 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         label: 'Leave request submitted',
         description: 'Notify approvers when an employee submits a leave request.',
         module: 'Leaves',
-        defaultChannel: 'system'
+        defaultChannel: 'both'
     },
     {
         key: 'leave_request_status_updated',
@@ -71,7 +71,7 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         label: 'Helpdesk query created',
         description: 'Notify assigned teams and the requester when a new helpdesk query is raised.',
         module: 'Helpdesk',
-        defaultChannel: 'system'
+        defaultChannel: 'both'
     },
     {
         key: 'helpdesk_query_status_updated',
@@ -85,7 +85,7 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         label: 'Helpdesk comment added',
         description: 'Notify the other party when a new helpdesk comment is added.',
         module: 'Helpdesk',
-        defaultChannel: 'system'
+        defaultChannel: 'both'
     },
     {
         key: 'helpdesk_query_escalated',

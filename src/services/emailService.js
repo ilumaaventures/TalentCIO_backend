@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const Company = require('../modules/company/company.model');
+const { parseEmailListForBrevo, mapBrevoAttachments } = require('../common/utils/emailUtils');
 
 const DEFAULT_LOGO_LINK = 'https://talentcio.in';
 const DEFAULT_BRAND_COLOR = '#6366f1';
@@ -11,6 +12,7 @@ const DEFAULT_LOGO_ALIGNMENT = 'center';
 // ponytail: simple Map cache — same pattern as getCompanyEmailSettings in companyEmailService.js
 const brandingCache = new Map();
 const BRANDING_CACHE_TTL_MS = 5 * 60 * 1000;
+const BRANDING_CACHE_MAX_SIZE = 500;
 
 /**
  * Configure the transporter using Brevo SMTP.
@@ -71,6 +73,13 @@ const getCompanyBranding = async (companyId) => {
             displayName: branding.displayName || company?.name || 'TalentCIO',
             logoAlt: branding.displayName || company?.name || 'TalentCIO'
         };
+        // Evict stale entries if cache grows too large
+        if (brandingCache.size > BRANDING_CACHE_MAX_SIZE) {
+            const now = Date.now();
+            for (const [k, v] of brandingCache) {
+                if (v.expiresAt <= now) brandingCache.delete(k);
+            }
+        }
         brandingCache.set(String(companyId), { value, expiresAt: Date.now() + BRANDING_CACHE_TTL_MS });
         return value;
     } catch (error) {
@@ -180,43 +189,7 @@ const sendEmail = async ({
         try {
             console.log(`[EMAIL] Attempting to send via Brevo API: ${to}`);
 
-            // Format attachments for Brevo API if they exist
-            const brevoAttachments = attachments.map(att => {
-                let contentBase64 = undefined;
-                if (att.content) {
-                    contentBase64 = Buffer.isBuffer(att.content)
-                        ? att.content.toString('base64')
-                        : String(att.content);
-                }
-                const url = (att.path && att.path.startsWith('http'))
-                    ? att.path
-                    : (att.url && att.url.startsWith('http') ? att.url : undefined);
-
-                return {
-                    name: att.filename || att.name,
-                    content: contentBase64,
-                    url
-                };
-            }).filter(att => att.name && (att.content || att.url));
-
-            const parseEmailListForBrevo = (emails) => {
-                if (!emails) return undefined;
-                if (Array.isArray(emails)) {
-                    return emails
-                        .flatMap(e => (typeof e === 'string' ? e.split(/[,;\s]+/) : [(e && (e.email || e.value)) || '']))
-                        .map(e => (typeof e === 'string' ? e.trim() : ''))
-                        .filter(e => e && e.includes('@'))
-                        .map(email => ({ email }));
-                }
-                if (typeof emails === 'string') {
-                    return emails
-                        .split(/[,;\s]+/)
-                        .map(e => e.trim())
-                        .filter(e => e && e.includes('@'))
-                        .map(email => ({ email }));
-                }
-                return undefined;
-            };
+            const brevoAttachments = mapBrevoAttachments(attachments);
 
             const payload = {
                 sender: { name: senderName, email: fromEmail },
@@ -259,8 +232,8 @@ const sendEmail = async ({
     }
 
     // 2. Fallback to Nodemailer SMTP
-    if (!process.env.EMAIL_USER || !apiKey) {
-        console.error('Email credentials missing. Skipping email send.');
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.error('SMTP email credentials missing (EMAIL_USER / EMAIL_PASS). Skipping email send.');
         return false;
     }
 

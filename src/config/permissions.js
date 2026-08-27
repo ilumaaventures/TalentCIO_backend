@@ -257,6 +257,36 @@ module.exports = [
         module: "DOSSIER",
         description: "Bypass the mandatory dossier completeness check — allows performing attendance, timesheet, and leave actions even when dossier is incomplete"
     },
+    {
+        key: "employee.revision.view.self",
+        module: "DOSSIER",
+        description: "View own revised details and effective-dated revision history"
+    },
+    {
+        key: "employee.revision.view.others",
+        module: "DOSSIER",
+        description: "View other employees' revised details and effective-dated revision history"
+    },
+    {
+        key: "employee.revision.create",
+        module: "DOSSIER",
+        description: "Create and schedule new effective-dated revisions for employees"
+    },
+    {
+        key: "employee.revision.update",
+        module: "DOSSIER",
+        description: "Edit revision details (reason, notes, effective date, field changes)"
+    },
+    {
+        key: "employee.revision.cancel",
+        module: "DOSSIER",
+        description: "Cancel scheduled employee revisions"
+    },
+    {
+        key: "employee.revision.manage",
+        module: "DOSSIER",
+        description: "Full management access to create, edit, and cancel employee revisions"
+    },
 
     // TALENT ACQUISITION (TA)
     {

@@ -79,6 +79,7 @@ const notifyDynamicPhaseStakeholders = async (req, hiringRequest, title, message
         message,
         type: 'Action',
         link: `/ta/view/${hiringRequest._id}?tab=applications`,
+        origin: req.headers?.origin || '',
         metadata
     })));
 };

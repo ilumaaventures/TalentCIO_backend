@@ -81,9 +81,18 @@ const startEscalationCron = (io) => {
         escalationJobRunning = true;
 
         try {
-            const pendingQueries = await HelpdeskQuery.find({
+            let hasMore = true;
+            let lastSeenId = null;
+
+            while (hasMore) {
+            const queryFilter = {
                 status: { $in: ['New', 'In Progress', 'Escalated'] }
-            })
+            };
+            if (lastSeenId) {
+                queryFilter._id = { $gt: lastSeenId };
+            }
+
+            const pendingQueries = await HelpdeskQuery.find(queryFilter)
                 .select('queryId subject queryType assignedTo raisedBy companyId createdAt originalAssignee comments currentEscalationLevel escalationHistory status')
                 .populate({
                     path: 'queryType',
@@ -93,11 +102,17 @@ const startEscalationCron = (io) => {
                         { path: 'escalationPerson', select: 'firstName lastName email' }
                     ]
                 })
-                .sort({ createdAt: 1 })
+                .sort({ _id: 1 })
                 .limit(ESCALATION_BATCH_SIZE);
 
             if (pendingQueries.length === 0) {
-                return;
+                hasMore = false;
+                break;
+            }
+
+            lastSeenId = pendingQueries[pendingQueries.length - 1]._id;
+            if (pendingQueries.length < ESCALATION_BATCH_SIZE) {
+                hasMore = false;
             }
 
             const now = new Date();
@@ -181,7 +196,7 @@ const startEscalationCron = (io) => {
 
                     query.escalationHistory.push({
                         level: nextLevel.level,
-                        escalatedFrom: query.originalAssignee || query.assignedTo,
+                        escalatedFrom: oldAssignee,
                         escalatedTo: newAssignee,
                         escalatedAt: now,
                         reason: `Exceeded Level ${nextLevel.level} SLA threshold of ${thresholdHours} work hours`,
@@ -229,6 +244,7 @@ const startEscalationCron = (io) => {
             if (io && notificationsData.length > 0) {
                 await NotificationService.createManyNotifications(io, notificationsData);
             }
+            } // end while (hasMore)
         } catch (error) {
             console.error('[CRON] Error during escalation check:', error);
         } finally {

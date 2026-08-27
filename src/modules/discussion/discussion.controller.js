@@ -93,7 +93,8 @@ exports.createDiscussion = async (req, res) => {
                 title: 'New Private Discussion',
                 message: `You have been added to a private discussion: "${discussion.substring(0, 50)}${discussion.length > 50 ? '...' : ''}"`,
                 type: 'Info',
-                link: '/discussions'
+                link: '/discussions',
+                origin: req.headers?.origin || ''
             })));
         }
 

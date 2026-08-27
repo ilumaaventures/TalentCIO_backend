@@ -231,6 +231,7 @@ require('./src/modules/announcement/announcement.model');
 require('./src/modules/offboarding/offboardingRecord.model');
 require('./src/modules/email/model/hrEmailLog.model');
 require('./src/modules/system/impersonationSession.model');
+require('./src/modules/dossier/employeeRevision.model');
 
 const syncPermissions = require('./src/services/permissionSync');
 const startAutoCheckoutCron = require('./src/modules/attendance/attendanceAutoCheckout.cron');
@@ -238,6 +239,7 @@ const cleanupStaleIndexes = require('./src/services/indexCleanup');
 const { startBinAutoPurgeCron } = require('./src/modules/bin/binAutoPurge.cron');
 const startAnnouncementScheduler = require('./src/modules/announcement/announcement.scheduler');
 const startEscalationCron = require('./src/modules/helpdesk/escalation.cron');
+const { startEmployeeRevisionCron } = require('./src/modules/dossier/employeeRevision.cron');
 
 const startImpersonationCleanup = () => {
     setInterval(async () => {
@@ -263,6 +265,7 @@ const initServer = async () => {
     startAutoCheckoutCron();
     startBinAutoPurgeCron();
     startAnnouncementScheduler(io);
+    startEmployeeRevisionCron();
     startImpersonationCleanup();
 
     server.listen(PORT, () => {

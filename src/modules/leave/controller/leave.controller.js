@@ -2,9 +2,11 @@ const LeaveRequest = require('../model/leaveRequest.model');
 const LeaveBalance = require('../model/leaveBalance.model');
 const LeaveConfig = require('../model/leaveConfig.model');
 const User = require('../../../modules/user/user.model');
+const EmployeeProfile = require('../../dossier/employeeProfile.model');
 const Company = require('../../company/company.model');
 const { calculateLeaveDays } = require('../leave.utils');
 const NotificationService = require('../../../services/notificationService');
+const { deductBucketsFIFO } = require('../accrual.service');
 
 const parseBoolean = (value) => {
     if (typeof value === 'boolean') return value;
@@ -38,32 +40,43 @@ const normalizeDocuments = (documents, uploadedFile) => {
 };
 
 
-// Helper to initialize balance dynamically based on policy
+// Helper to initialize balance dynamically based on policy and employee revision overrides
 const initializeBalance = async (userId, policy, year, companyId) => {
-    let initialAccrued = 0;
+    const profile = await EmployeeProfile.findOne({ user: userId, companyId }).lean();
+    const leaveOverrides = (profile?.leaveOverrides instanceof Map ? Object.fromEntries(profile.leaveOverrides) : (profile?.leaveOverrides || {})) || {};
+    const override = leaveOverrides[policy.leaveType];
 
-    if (policy.accrualType === 'Yearly') {
-        initialAccrued = policy.accrualAmount;
-    } else if (policy.accrualType === 'Monthly') {
+    let opening = 0;
+    let initialAccrued = 0;
+    const accrualType = override?.accrualType || policy.accrualType;
+    const accrualAmount = override?.accrualAmount !== undefined ? parseFloat(override.accrualAmount) || 0 : (policy.accrualAmount || 0);
+
+    if (override?.allocatedBalance !== undefined) {
+        opening = parseFloat(override.allocatedBalance) || 0;
+    }
+
+    if (accrualType === 'Yearly') {
+        initialAccrued = accrualAmount;
+    } else if (accrualType === 'Monthly') {
         const currentMonth = new Date().getMonth() + 1; // 1-12
-        initialAccrued = policy.accrualAmount * currentMonth;
+        initialAccrued = accrualAmount * currentMonth;
         if (policy.maxLimitPerYear > 0 && initialAccrued > policy.maxLimitPerYear) {
             initialAccrued = policy.maxLimitPerYear;
         }
-    } else if (policy.accrualType === 'Policy') {
+    } else if (accrualType === 'Policy') {
         // Special case for fixed policies that might grant full amount
-        initialAccrued = policy.accrualAmount || 0;
+        initialAccrued = accrualAmount || 0;
     }
 
     return await LeaveBalance.create({
         user: userId,
         leaveType: policy.leaveType,
         year: year,
-        openingBalance: 0,
+        openingBalance: opening,
         accrued: initialAccrued,
         utilized: 0,
         encashed: 0,
-        closingBalance: initialAccrued,
+        closingBalance: opening + initialAccrued,
         companyId: companyId || policy.companyId
     });
 };
@@ -203,7 +216,8 @@ const applyLeave = async (req, res) => {
                 title: 'New Leave Request',
                 message: `${currentUser.firstName} ${currentUser.lastName} has applied for ${daysCount} days of ${leaveType} leave.`,
                 type: 'Approval',
-                link: '/leaves'
+                link: '/leaves',
+                origin: req.headers?.origin || ''
             }));
             await NotificationService.createManyNotifications(io, notifications);
         }
@@ -258,7 +272,7 @@ const getMyLeaves = async (req, res) => {
     }
 };
 
-// @desc    Get My Balances
+// @desc    Get My Leave Balances
 // @route   GET /api/leaves/balance
 // @access  Private
 const getMyBalances = async (req, res) => {
@@ -268,19 +282,26 @@ const getMyBalances = async (req, res) => {
         console.log(`[LeaveBalance] GET for company: ${req.companyId}, user: ${req.user._id}`);
         if (!req.companyId) return res.status(400).json({ message: 'Tenant context missing' });
 
-        // Start by getting all active policies
-        const allPolicies = await LeaveConfig.find({ isActive: true, companyId: req.companyId }).lean();
+        // Start by getting all active policies and employee profile
+        const [allPolicies, profile] = await Promise.all([
+            LeaveConfig.find({ isActive: true, companyId: req.companyId }).lean(),
+            EmployeeProfile.findOne({ user: req.user._id, companyId: req.companyId }).lean()
+        ]);
 
-        // Filter policies based on user employment type (Strict Check)
+        const leaveOverrides = (profile?.leaveOverrides instanceof Map ? Object.fromEntries(profile.leaveOverrides) : (profile?.leaveOverrides || {})) || {};
+
+        // Filter policies based on user employment type and custom overrides
         const userEmploymentType = req.user.employmentType || 'Full Time';
-        const policies = allPolicies.filter(p =>
-            !p.employeeTypes ||
-            p.employeeTypes.length === 0 ||
-            p.employeeTypes.includes(userEmploymentType)
-        );
+        const policies = allPolicies.filter(p => {
+            const override = leaveOverrides[p.leaveType];
+            if (override && (override.enabled === false || override.isExcluded === true)) {
+                return false;
+            }
+            return !p.employeeTypes ||
+                p.employeeTypes.length === 0 ||
+                p.employeeTypes.includes(userEmploymentType);
+        });
 
-        const balances = [];
-        
         // Batch fetch all existing balances for this user/year
         const existingBalances = await LeaveBalance.find({ 
             user: req.user._id, 
@@ -293,6 +314,7 @@ const getMyBalances = async (req, res) => {
 
         // Process all policies in parallel
         const results = await Promise.all(policies.map(async (policy) => {
+            const override = leaveOverrides[policy.leaveType];
             let balance = balanceMap.get(policy.leaveType);
 
             if (!balance) {
@@ -300,14 +322,17 @@ const getMyBalances = async (req, res) => {
                 const newB = await initializeBalance(req.user._id, policy, year, req.companyId);
                 balance = newB.toObject();
             } else {
-                balance.closingBalance = (balance.openingBalance || 0) + (balance.accrued || 0) - (balance.utilized || 0);
+                balance.closingBalance = (balance.openingBalance || 0) + (balance.accrued || 0) - (balance.utilized || 0) - (balance.encashed || 0);
             }
+
+            const effectiveAccrualAmount = override?.accrualAmount !== undefined ? parseFloat(override.accrualAmount) || 0 : policy.accrualAmount;
 
             return {
                 ...balance,
                 policyName: policy.name,
                 policyDescription: policy.description,
-                policyAccrualAmount: policy.accrualAmount,
+                policyAccrualAmount: effectiveAccrualAmount,
+                isUnlimited: Boolean(policy.isUnlimited || policy.leaveType === 'WFH'),
                 proofRequiredAbove: policy.proofRequiredAbove
             };
         }));
@@ -422,22 +447,15 @@ const updateLeaveStatus = async (req, res) => {
         }
 
         if (status === 'Approved') {
-            // Update Balance
+            // Update Balance with FIFO monthly bucket deduction
             const currentYear = new Date().getFullYear();
             let balance = await LeaveBalance.findOne({ user: request.user, leaveType: request.leaveType, year: currentYear, companyId: req.companyId });
 
-            // If balance check wasn't strict during apply (wait state), re-check here? 
-            // We checked during apply. But let's assume valid.
-            // Deduct
-            // Note: utilized increases.
-
             if (!balance) {
-                // Should exist if applied, but safe
                 balance = await LeaveBalance.create({ user: request.user, leaveType: request.leaveType, year: currentYear, companyId: req.companyId });
             }
 
-            balance.utilized += request.daysCount;
-            balance.closingBalance = balance.openingBalance + balance.accrued - balance.utilized;
+            deductBucketsFIFO(balance, request.daysCount);
             await balance.save();
         }
 
@@ -454,14 +472,18 @@ const updateLeaveStatus = async (req, res) => {
 
         // Notify Employee
         const io = req.app.get('io');
+        const rejectionNote = (status === 'Rejected' && rejectionReason)
+            ? ` Reason: ${rejectionReason}`
+            : '';
         await NotificationService.createNotification(io, {
             user: request.user,
             companyId: req.companyId,
             preferenceKey: 'leave_request_status_updated',
             title: `Leave Request ${status}`,
-            message: `Your leave request for ${request.daysCount} days of ${request.leaveType} has been ${status.toLowerCase()}.`,
+            message: `Your leave request for ${request.daysCount} days of ${request.leaveType} has been ${status.toLowerCase()}.${rejectionNote}`,
             type: status === 'Approved' ? 'Info' : 'Alert',
-            link: '/leaves'
+            link: '/leaves',
+            origin: req.headers?.origin || ''
         });
 
         res.json(request);
@@ -498,6 +520,24 @@ const cancelLeave = async (req, res) => {
         });
 
         await request.save();
+
+        // Notify reporting managers about the cancellation
+        const currentUser = await User.findById(userId).populate('reportingManagers');
+        if (currentUser && currentUser.reportingManagers && currentUser.reportingManagers.length > 0) {
+            const io = req.app.get('io');
+            const notifications = currentUser.reportingManagers.map(manager => ({
+                user: manager._id,
+                companyId: req.companyId,
+                preferenceKey: 'leave_request_status_updated',
+                title: 'Leave Request Cancelled',
+                message: `${currentUser.firstName} ${currentUser.lastName} has cancelled their ${request.daysCount} day(s) ${request.leaveType} leave request.`,
+                type: 'Info',
+                link: '/leaves',
+                origin: req.headers?.origin || ''
+            }));
+            await NotificationService.createManyNotifications(io, notifications);
+        }
+
         res.json({ message: 'Leave request cancelled successfully', request });
 
     } catch (error) {

@@ -352,7 +352,8 @@ exports.createQuery = async (req, res) => {
             title: 'New Helpdesk Query',
             message: `A new ${priority || 'Medium'} priority query has been raised: "${subject}"`,
             type: 'Alert',
-            link: `/helpdesk`
+            link: `/helpdesk`,
+            origin: req.headers?.origin || ''
         }));
 
         if (notificationsData.length > 0) {
@@ -360,29 +361,20 @@ exports.createQuery = async (req, res) => {
         }
 
         // 5. Notify the raiser as well (Confirmation)
+        // Notify raiser — include auto-response hint if applicable to avoid a duplicate notification
+        const autoNote = (qType.autoResponse && qType.autoResponse.trim())
+            ? ` An initial response has been provided.`
+            : '';
         await NotificationService.createNotification(io, {
             user: req.user._id,
             companyId: req.companyId,
             preferenceKey: 'helpdesk_query_created',
             title: 'Query Raised Successfully',
-            message: `Your query "${subject}" has been submitted and is being reviewed.`,
+            message: `Your query "${subject}" has been submitted and is being reviewed.${autoNote}`,
             type: 'Info',
-            link: `/helpdesk`
+            link: `/helpdesk`,
+            origin: req.headers?.origin || ''
         });
-
-        // 6. Notify employee of the auto-generated comment/initial response
-        if (qType.autoResponse && qType.autoResponse.trim()) {
-            const senderName = qType.assignedPerson?.firstName || 'Representative';
-            await NotificationService.createNotification(io, {
-                user: req.user._id,
-                companyId: req.companyId,
-                preferenceKey: 'helpdesk_query_comment_added',
-                title: 'New Comment on Query',
-                message: `${senderName} commented on "${subject}"`,
-                type: 'Info',
-                link: `/helpdesk/${newQuery._id}`
-            });
-        }
 
         // POPULATE FOR INSTANT UI UPDATE
         const populatedQuery = await HelpdeskQuery.findById(newQuery._id)
@@ -753,13 +745,12 @@ exports.updateQueryStatus = async (req, res) => {
                             title: `Manual Escalation (Level ${nextLevelNum})`,
                             message: `An escalated query (Level ${nextLevelNum}) "${query.subject}" has been assigned to you.`,
                             type: 'Alert',
-                            link: `/helpdesk/${query._id}`
+                            link: `/helpdesk/${query._id}`,
+                            origin: req.headers?.origin || ''
                         });
                     }
                 }
             }
-        } else if (status === 'Closed' || status === 'Resolved' || status === 'In Progress' || status === 'Pending' || status === 'Escalated') {
-            // Handled with special permissions or general status transition logic
         } else {
             return res.status(400).json({ success: false, message: 'Invalid status transition: ' + status });
         }
@@ -792,38 +783,46 @@ exports.updateQueryStatus = async (req, res) => {
         query.status = status;
         await query.save();
 
-        // Notify the other party about the status change
+        // Notify all relevant parties about the status change
         const io = req.app.get('io');
-        const isUserRaiser = req.user._id.toString() === query.raisedBy?.toString();
-        const notifyTarget = isUserRaiser ? query.assignedTo : query.raisedBy;
+        const actorId = req.user._id.toString();
 
-        if (notifyTarget) {
-            let notificationTitle = 'Query Status Updated';
-            let notificationMessage = `The query "${query.subject}" is now ${status}.`;
+        let notificationTitle = 'Query Status Updated';
+        let notificationMessage = `The query "${query.subject}" is now ${status}.`;
 
-            if (status === 'Resolved') {
-                notificationTitle = 'Query Resolved';
-                notificationMessage = `Your query "${query.subject}" has been marked as Resolved. Please confirm if it's fixed.`;
-            } else if (status === 'In Progress' && originalStatus === 'Resolved') {
-                notificationTitle = 'Query Reopened';
-                notificationMessage = `The query "${query.subject}" has been reopened by the raiser.`;
-            } else if (status === 'In Progress') {
-                notificationTitle = 'Query In Progress';
-                notificationMessage = `The query "${query.subject}" is now being worked on.`;
-            } else if (status === 'Closed') {
-                notificationTitle = 'Query Closed';
-                notificationMessage = `The query "${query.subject}" has been officially closed.`;
-            }
+        if (status === 'Resolved') {
+            notificationTitle = 'Query Resolved';
+            notificationMessage = `Your query "${query.subject}" has been marked as Resolved. Please confirm if it's fixed.`;
+        } else if (status === 'In Progress' && originalStatus === 'Resolved') {
+            notificationTitle = 'Query Reopened';
+            notificationMessage = `The query "${query.subject}" has been reopened by the raiser.`;
+        } else if (status === 'In Progress') {
+            notificationTitle = 'Query In Progress';
+            notificationMessage = `The query "${query.subject}" is now being worked on.`;
+        } else if (status === 'Closed') {
+            notificationTitle = 'Query Closed';
+            notificationMessage = `The query "${query.subject}" has been officially closed.`;
+        }
 
-            await NotificationService.createNotification(io, {
-                user: notifyTarget,
-                companyId: req.companyId,
-                preferenceKey: 'helpdesk_query_status_updated',
-                title: notificationTitle,
-                message: notificationMessage,
-                type: 'Info',
-                link: `/helpdesk/${query._id}`
-            });
+        // Collect all parties that should be notified (raiser + assignee), excluding the actor
+        const statusNotifyTargets = new Set();
+        if (query.raisedBy) statusNotifyTargets.add(query.raisedBy.toString());
+        if (query.assignedTo) statusNotifyTargets.add(query.assignedTo.toString());
+        statusNotifyTargets.delete(actorId);
+
+        const statusNotifications = Array.from(statusNotifyTargets).map(userId => ({
+            user: userId,
+            companyId: req.companyId,
+            preferenceKey: 'helpdesk_query_status_updated',
+            title: notificationTitle,
+            message: notificationMessage,
+            type: 'Info',
+            link: `/helpdesk/${query._id}`,
+            origin: req.headers?.origin || ''
+        }));
+
+        if (statusNotifications.length > 0) {
+            await NotificationService.createManyNotifications(io, statusNotifications);
         }
 
         res.status(200).json({ success: true, data: query });
@@ -874,18 +873,26 @@ exports.addComment = async (req, res) => {
             io.to(query._id.toString()).emit('new_comment', query.comments);
         }
 
-        // Notify the other party
-        const notifyTarget = isRaiser ? query.assignedTo : query.raisedBy;
-        if (notifyTarget) {
-            await NotificationService.createNotification(io, {
-                user: notifyTarget,
-                companyId: req.companyId,
-                preferenceKey: 'helpdesk_query_comment_added',
-                title: 'New Comment on Query',
-                message: `${req.user.firstName} commented on "${query.subject}"`,
-                type: 'Info',
-                link: `/helpdesk/${query._id}`
-            });
+        // Notify all relevant parties (raiser, assignee, original assignee) except the commenter
+        const commentNotifyTargets = new Set();
+        if (query.raisedBy) commentNotifyTargets.add(query.raisedBy.toString());
+        if (query.assignedTo) commentNotifyTargets.add(query.assignedTo.toString());
+        if (query.originalAssignee) commentNotifyTargets.add(query.originalAssignee.toString());
+        commentNotifyTargets.delete(req.user._id.toString());
+
+        const commentNotifications = Array.from(commentNotifyTargets).map(userId => ({
+            user: userId,
+            companyId: req.companyId,
+            preferenceKey: 'helpdesk_query_comment_added',
+            title: 'New Comment on Query',
+            message: `${req.user.firstName} commented on "${query.subject}"`,
+            type: 'Info',
+            link: `/helpdesk/${query._id}`,
+            origin: req.headers?.origin || ''
+        }));
+
+        if (commentNotifications.length > 0) {
+            await NotificationService.createManyNotifications(io, commentNotifications);
         }
 
         res.status(200).json({ success: true, data: query });

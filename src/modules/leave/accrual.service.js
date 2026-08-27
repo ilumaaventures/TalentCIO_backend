@@ -1,6 +1,153 @@
 const User = require('../../modules/user/user.model');
 const LeaveConfig = require('./model/leaveConfig.model');
 const LeaveBalance = require('./model/leaveBalance.model');
+const EmployeeProfile = require('../dossier/employeeProfile.model');
+
+/**
+ * Calculate expiry date and month/year for a given credit month and validity (e.g. 2 months)
+ */
+const calculateBucketExpiry = (creditMonth, creditYear, validityMonths = 2) => {
+    const totalMonths = (creditYear * 12) + (creditMonth - 1) + validityMonths;
+    const expiryYear = Math.floor(totalMonths / 12);
+    const expiryMonth = (totalMonths % 12) + 1;
+    const expiryDate = new Date(expiryYear, expiryMonth - 1, 1, 0, 0, 0);
+    return { expiryMonth, expiryYear, expiryDate };
+};
+
+/**
+ * Expire any buckets whose validity period has elapsed relative to currentMonth and currentYear.
+ * Returns the total amount of leaves that expired in this cycle.
+ */
+const expireOutdatedBuckets = (balance, currentMonth, currentYear) => {
+    if (!balance.buckets || !Array.isArray(balance.buckets)) {
+        balance.buckets = [];
+        return 0;
+    }
+
+    let newlyExpiredAmount = 0;
+
+    for (const bucket of balance.buckets) {
+        if (bucket.isExpired) continue;
+
+        // Check if expired: credit year < currentYear OR (creditYear === currentYear && currentMonth >= expiryMonth)
+        const isPastExpiry = (currentYear > bucket.expiryYear) ||
+            (currentYear === bucket.expiryYear && currentMonth >= bucket.expiryMonth);
+
+        if (isPastExpiry) {
+            bucket.isExpired = true;
+            if (bucket.remainingAmount > 0) {
+                newlyExpiredAmount += bucket.remainingAmount;
+                bucket.remainingAmount = 0;
+            }
+        }
+    }
+
+    balance.expired = (balance.expired || 0) + newlyExpiredAmount;
+    return newlyExpiredAmount;
+};
+
+/**
+ * Add / Credit a monthly bucket lot to the employee's LeaveBalance document
+ */
+const creditLeaveBucket = (balance, creditAmount, currentMonth, currentYear, validityMonths = 2, maxCap = 0) => {
+    if (!balance.buckets) balance.buckets = [];
+
+    // Check if bucket for this month and year already exists
+    const existingBucketIndex = balance.buckets.findIndex(b => b.creditMonth === currentMonth && b.creditYear === currentYear);
+    const { expiryMonth, expiryYear, expiryDate } = calculateBucketExpiry(currentMonth, currentYear, validityMonths);
+
+    if (existingBucketIndex >= 0) {
+        const b = balance.buckets[existingBucketIndex];
+        b.creditAmount = creditAmount;
+        b.remainingAmount = Math.max(0, creditAmount - (b.utilizedAmount || 0));
+        b.validityMonths = validityMonths;
+        b.expiryMonth = expiryMonth;
+        b.expiryYear = expiryYear;
+        b.expiryDate = expiryDate;
+        b.isExpired = false;
+    } else {
+        balance.buckets.push({
+            bucketId: `${currentYear}-${String(currentMonth).padStart(2, '0')}`,
+            creditedDate: new Date(currentYear, currentMonth - 1, 1),
+            creditMonth: currentMonth,
+            creditYear: currentYear,
+            creditAmount,
+            utilizedAmount: 0,
+            remainingAmount: creditAmount,
+            validityMonths,
+            expiryMonth,
+            expiryYear,
+            expiryDate,
+            isExpired: false,
+            notes: `Monthly accrual for ${currentMonth}/${currentYear}`
+        });
+    }
+
+    // Sort buckets chronologically
+    balance.buckets.sort((a, b) => (a.creditYear * 12 + a.creditMonth) - (b.creditYear * 12 + b.creditMonth));
+
+    // If max accumulation cap is set, ensure active remaining sum does not exceed maxCap
+    if (maxCap > 0) {
+        let activeRemaining = balance.buckets.filter(b => !b.isExpired).reduce((sum, b) => sum + (b.remainingAmount || 0), 0);
+        if (activeRemaining > maxCap) {
+            let excess = activeRemaining - maxCap;
+            for (const bucket of balance.buckets) {
+                if (bucket.isExpired || excess <= 0) continue;
+                if (bucket.remainingAmount <= excess) {
+                    excess -= bucket.remainingAmount;
+                    bucket.remainingAmount = 0;
+                    bucket.isExpired = true;
+                } else {
+                    bucket.remainingAmount -= excess;
+                    excess = 0;
+                }
+            }
+        }
+    }
+
+    // Sync balance totals
+    const activeBuckets = balance.buckets.filter(b => !b.isExpired);
+    balance.closingBalance = activeBuckets.reduce((sum, b) => sum + (b.remainingAmount || 0), 0);
+    balance.accrued = balance.buckets.reduce((sum, b) => sum + (b.creditAmount || 0), 0);
+    balance.utilized = balance.buckets.reduce((sum, b) => sum + (b.utilizedAmount || 0), 0);
+
+    return balance;
+};
+
+/**
+ * Deduct leaves using First In First Out (FIFO) from the earliest active buckets
+ */
+const deductBucketsFIFO = (balance, daysCount) => {
+    if (!balance.buckets || balance.buckets.length === 0) {
+        balance.utilized = (balance.utilized || 0) + daysCount;
+        balance.closingBalance = Math.max(0, (balance.openingBalance || 0) + (balance.accrued || 0) - balance.utilized);
+        return balance;
+    }
+
+    let needed = daysCount;
+    const activeBuckets = balance.buckets
+        .filter(b => !b.isExpired && b.remainingAmount > 0)
+        .sort((a, b) => (a.creditYear * 12 + a.creditMonth) - (b.creditYear * 12 + b.creditMonth));
+
+    for (const bucket of activeBuckets) {
+        if (needed <= 0) break;
+        const availableInBucket = bucket.remainingAmount;
+        if (availableInBucket <= needed) {
+            bucket.utilizedAmount = (bucket.utilizedAmount || 0) + availableInBucket;
+            bucket.remainingAmount = 0;
+            needed -= availableInBucket;
+        } else {
+            bucket.utilizedAmount = (bucket.utilizedAmount || 0) + needed;
+            bucket.remainingAmount -= needed;
+            needed = 0;
+        }
+    }
+
+    balance.utilized = balance.buckets.reduce((sum, b) => sum + (b.utilizedAmount || 0), 0);
+    balance.closingBalance = balance.buckets.filter(b => !b.isExpired).reduce((sum, b) => sum + (b.remainingAmount || 0), 0);
+
+    return balance;
+};
 
 /**
  * Run Monthly Accrual for a specific month/year.
@@ -22,8 +169,15 @@ const runMonthlyAccrual = async (companyId) => {
 
     for (const user of users) {
         const userEmploymentType = user.employmentType || 'Full Time';
+        const profile = await EmployeeProfile.findOne({ user: user._id, companyId });
+        const leaveOverrides = (profile?.leaveOverrides instanceof Map ? Object.fromEntries(profile.leaveOverrides) : (profile?.leaveOverrides || {})) || {};
 
         for (const config of configs) {
+            const override = leaveOverrides[config.leaveType];
+            if (override && (override.enabled === false || override.isExcluded === true)) {
+                continue;
+            }
+
             // Filter: skip if this policy is restricted to employment types that don't include this user
             if (config.employeeTypes && config.employeeTypes.length > 0 &&
                 !config.employeeTypes.includes(userEmploymentType)) {
@@ -33,21 +187,19 @@ const runMonthlyAccrual = async (companyId) => {
             let balance = await LeaveBalance.findOne({ user: user._id, leaveType: config.leaveType, year: currentYear, companyId });
 
             if (!balance) {
-                // If balance doesn't exist for this year, create it
-                balance = await LeaveBalance.create({ user: user._id, leaveType: config.leaveType, year: currentYear, companyId });
+                const opening = override?.allocatedBalance !== undefined ? override.allocatedBalance : 0;
+                balance = await LeaveBalance.create({ user: user._id, leaveType: config.leaveType, year: currentYear, openingBalance: opening, companyId });
             }
 
-            // Add Accrual, capped at maxLimitPerYear if set
-            const proposedAccrual = balance.accrued + config.accrualAmount;
+            const effectiveAccrualAmount = override?.accrualAmount !== undefined ? override.accrualAmount : config.accrualAmount;
+            const maxAccumulationCap = (override?.expiryBalance > 0 ? override.expiryBalance : (override?.maxCarryForward > 0 ? override.maxCarryForward : config.maxLimitPerYear)) || 0;
+            const validityMonths = parseInt(override?.expiryMonths !== undefined ? override.expiryMonths : (config.expiryMonths || 2), 10) || 2;
 
-            if (config.maxLimitPerYear > 0 && proposedAccrual > config.maxLimitPerYear) {
-                balance.accrued = config.maxLimitPerYear;
-            } else {
-                balance.accrued = proposedAccrual;
-            }
+            // 1. Expire outdated monthly buckets whose 2-month (or custom) validity has ended
+            expireOutdatedBuckets(balance, currentMonth, currentYear);
 
-            // Keep closingBalance in sync
-            balance.closingBalance = balance.openingBalance + balance.accrued - balance.utilized;
+            // 2. Credit the new monthly bucket lot (e.g. +1.5)
+            creditLeaveBucket(balance, effectiveAccrualAmount, currentMonth, currentYear, validityMonths, maxAccumulationCap);
 
             await balance.save();
             updates++;
@@ -125,4 +277,11 @@ const runYearlyProcessing = async (companyId, newYear) => {
     return { message: `Yearly Processing Completed for Company ${companyId}. Processed ${processed} records.` };
 };
 
-module.exports = { runMonthlyAccrual, runYearlyProcessing };
+module.exports = {
+    calculateBucketExpiry,
+    expireOutdatedBuckets,
+    creditLeaveBucket,
+    deductBucketsFIFO,
+    runMonthlyAccrual,
+    runYearlyProcessing
+};

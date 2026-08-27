@@ -250,6 +250,9 @@ const employeeProfileSchema = new mongoose.Schema({
     // --- Staging Area for Pending Updates ---
     pendingUpdates: { type: mongoose.Schema.Types.Mixed, default: null },
 
+    // --- Leave Policy Overrides (Revision-driven) ---
+    leaveOverrides: { type: mongoose.Schema.Types.Mixed, default: {} },
+
     // --- Metadata ---
     tags: [String],
     isConfidential: { type: Boolean, default: false } // VIP profile

@@ -286,7 +286,8 @@ const submitTimesheet = async (req, res) => {
                 title: 'Timesheet Submitted',
                 message: `${currentUser.firstName} ${currentUser.lastName} has submitted their timesheet for ${timesheet.month}.`,
                 type: 'Approval',
-                link: '/timesheet'
+                link: '/timesheet',
+                origin: req.headers?.origin || ''
             }));
             await NotificationService.createManyNotifications(io, notifications);
         }
@@ -676,7 +677,8 @@ const approveTimesheet = async (req, res) => {
             title: `Timesheet ${status}`,
             message: `Your timesheet for ${timesheet.month} has been ${status === 'APPROVED' ? 'approved' : 'rejected'}. ${reason ? 'Reason: ' + reason : ''}`,
             type: status === 'APPROVED' ? 'Info' : 'Alert',
-            link: '/timesheet'
+            link: '/timesheet',
+            origin: req.headers?.origin || ''
         });
 
         res.json(timesheet);
