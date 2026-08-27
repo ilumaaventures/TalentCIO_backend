@@ -21,6 +21,7 @@ const emailTemplateRoutes = require('../modules/email/routes/emailTemplate.route
 const candidateRoutes = require('../modules/talent-acquisition/routes/candidate.routes');
 const workflowRoutes = require('../modules/workflow/workflow.routes');
 const interviewWorkflowRoutes = require('../modules/talent-acquisition/routes/interviewWorkflow.routes');
+const interviewerRoutes = require('../modules/talent-acquisition/routes/interviewer.routes');
 const notificationRoutes = require('../modules/notification/notification.routes');
 const meetingRoutes = require('../modules/meeting/meeting.routes');
 const helpdeskRoutes = require('../modules/helpdesk/helpdesk.routes');
@@ -94,6 +95,7 @@ router.use('/ta/email-templates', emailTemplateRoutes);
 router.use('/ta/candidates', candidateRoutes);
 router.use('/ta', candidateDynamicPhaseRoutes);
 router.use('/ta/interview-workflows', interviewWorkflowRoutes);
+router.use('/ta/interviewers', interviewerRoutes);
 router.use('/workflows', workflowRoutes);
 router.use('/meetings', meetingRoutes);
 router.use('/helpdesk', helpdeskRoutes);
