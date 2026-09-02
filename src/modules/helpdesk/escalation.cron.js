@@ -150,7 +150,7 @@ const startEscalationCron = (io) => {
                         continue;
                     }
 
-                    const currentLevel = query.currentEscalationLevel || (query.status === 'Escalated' ? 1 : 0);
+                    const currentLevel = Number.isInteger(query.currentEscalationLevel) ? query.currentEscalationLevel : 0;
                     const nextLevel = levels.find(lvl => lvl.level > currentLevel);
 
                     // If already at or past highest configured level, nothing more to escalate
@@ -215,6 +215,7 @@ const startEscalationCron = (io) => {
 
                     await query.save();
 
+                    // Notify ticket raiser about the escalation
                     notificationsData.push({
                         user: query.raisedBy,
                         companyId: query.companyId,
@@ -225,7 +226,8 @@ const startEscalationCron = (io) => {
                         link: `/helpdesk/${query._id}`
                     });
 
-                    if (newAssignee && newAssignee.toString() !== oldAssignee) {
+                    // Notify designated escalation assignee for this tier
+                    if (newAssignee) {
                         notificationsData.push({
                             user: newAssignee,
                             companyId: query.companyId,

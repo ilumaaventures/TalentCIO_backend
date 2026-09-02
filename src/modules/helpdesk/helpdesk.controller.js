@@ -332,49 +332,45 @@ exports.createQuery = async (req, res) => {
 
         // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
-        const notificationTargets = new Set();
+        const assignedUserId = (qType.assignedPerson?._id || qType.assignedPerson)?.toString();
+        const raiserUserId = req.user._id.toString();
+        const notificationsData = [];
 
-        // Only Notify Specific Assigned Person
-        if (qType.assignedPerson) {
-            notificationTargets.add((qType.assignedPerson?._id || qType.assignedPerson).toString());
+        // 1. Notify the Assigned Initial Resolver
+        if (assignedUserId) {
+            notificationsData.push({
+                user: assignedUserId,
+                companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_created',
+                title: 'New Helpdesk Query Assigned',
+                message: `A new ${priority || 'Medium'} priority query "${subject}" has been assigned to you.`,
+                type: 'Alert',
+                link: `/helpdesk/${newQuery._id}`,
+                origin: req.headers?.origin || ''
+            });
         }
 
+        // 2. Notify the ticket raiser (Confirmation) if different from assigned person
+        const autoNote = (qType.autoResponse && qType.autoResponse.trim())
+            ? ` An initial response has been provided.`
+            : '';
 
-        // 4. Cleanup & Logging
-        notificationTargets.delete(req.user._id.toString()); // Don't notify the raiser twice
-        // console.log(`[NOTIF DEBUG] Total unique notification targets: ${notificationTargets.size}`);
-        // if (!io) console.warn('[NOTIF WARNING] Socket.io instance (io) NOT found in app context!');
-
-        const notificationsData = Array.from(notificationTargets).map(userId => ({
-            user: userId,
-            companyId: req.companyId,
-            preferenceKey: 'helpdesk_query_created',
-            title: 'New Helpdesk Query',
-            message: `A new ${priority || 'Medium'} priority query has been raised: "${subject}"`,
-            type: 'Alert',
-            link: `/helpdesk`,
-            origin: req.headers?.origin || ''
-        }));
+        if (raiserUserId !== assignedUserId) {
+            notificationsData.push({
+                user: raiserUserId,
+                companyId: req.companyId,
+                preferenceKey: 'helpdesk_query_created',
+                title: 'Query Raised Successfully',
+                message: `Your query "${subject}" has been submitted and is being reviewed.${autoNote}`,
+                type: 'Info',
+                link: `/helpdesk/${newQuery._id}`,
+                origin: req.headers?.origin || ''
+            });
+        }
 
         if (notificationsData.length > 0) {
             await NotificationService.createManyNotifications(io, notificationsData);
         }
-
-        // 5. Notify the raiser as well (Confirmation)
-        // Notify raiser — include auto-response hint if applicable to avoid a duplicate notification
-        const autoNote = (qType.autoResponse && qType.autoResponse.trim())
-            ? ` An initial response has been provided.`
-            : '';
-        await NotificationService.createNotification(io, {
-            user: req.user._id,
-            companyId: req.companyId,
-            preferenceKey: 'helpdesk_query_created',
-            title: 'Query Raised Successfully',
-            message: `Your query "${subject}" has been submitted and is being reviewed.${autoNote}`,
-            type: 'Info',
-            link: `/helpdesk`,
-            origin: req.headers?.origin || ''
-        });
 
         // POPULATE FOR INSTANT UI UPDATE
         const populatedQuery = await HelpdeskQuery.findById(newQuery._id)
@@ -696,7 +692,7 @@ exports.updateQueryStatus = async (req, res) => {
                     }];
                 }
 
-                const currentLevel = query.currentEscalationLevel || (query.status === 'Escalated' ? 1 : 0);
+                const currentLevel = Number.isInteger(query.currentEscalationLevel) ? query.currentEscalationLevel : 0;
                 let nextLevel = levels.find(l => l.level > currentLevel);
 
                 // If already at or past highest level, remain at highest level
@@ -706,7 +702,11 @@ exports.updateQueryStatus = async (req, res) => {
 
                 if (nextLevel && nextLevel.escalationPerson) {
                     const oldAssignee = query.assignedTo;
-                    const newAssignee = nextLevel.escalationPerson?._id || nextLevel.escalationPerson;
+                    const newAssigneeDoc = nextLevel.escalationPerson;
+                    const newAssignee = newAssigneeDoc?._id || newAssigneeDoc;
+                    const newAssigneeName = newAssigneeDoc?.firstName
+                        ? `${newAssigneeDoc.firstName} ${newAssigneeDoc.lastName || ''}`.trim()
+                        : 'Designated Escalation Contact';
                     const nextLevelNum = nextLevel.level || 1;
 
                     if (!query.originalAssignee) {
@@ -731,23 +731,42 @@ exports.updateQueryStatus = async (req, res) => {
                     // Add comment
                     query.comments.push({
                         user: req.user._id,
-                        text: `[SYSTEM] Manually escalated to Level ${nextLevelNum}. Ticket reassigned to next escalation tier contact.`,
+                        text: `[SYSTEM] Manually escalated to Level ${nextLevelNum}. Ticket reassigned to ${newAssigneeName}.`,
                         createdAt: Date.now()
                     });
 
-                    // Notify new assignee specifically
+                    // Notify new assignee and ticket raiser
                     const io = req.app.get('io');
-                    if (newAssignee.toString() !== (oldAssignee?._id?.toString() || oldAssignee?.toString())) {
-                        await NotificationService.createNotification(io, {
+                    const manualEscalationNotifs = [];
+
+                    if (newAssignee) {
+                        manualEscalationNotifs.push({
                             user: newAssignee,
                             companyId: req.companyId,
                             preferenceKey: 'helpdesk_query_escalated',
-                            title: `Manual Escalation (Level ${nextLevelNum})`,
+                            title: `Escalated Query Assigned (Level ${nextLevelNum})`,
                             message: `An escalated query (Level ${nextLevelNum}) "${query.subject}" has been assigned to you.`,
                             type: 'Alert',
                             link: `/helpdesk/${query._id}`,
                             origin: req.headers?.origin || ''
                         });
+                    }
+
+                    if (query.raisedBy && query.raisedBy.toString() !== req.user._id.toString()) {
+                        manualEscalationNotifs.push({
+                            user: query.raisedBy,
+                            companyId: req.companyId,
+                            preferenceKey: 'helpdesk_query_escalated',
+                            title: `Query Escalated (Level ${nextLevelNum})`,
+                            message: `Your query "${query.subject}" has been escalated to Level ${nextLevelNum} (${newAssigneeName}).`,
+                            type: 'Alert',
+                            link: `/helpdesk/${query._id}`,
+                            origin: req.headers?.origin || ''
+                        });
+                    }
+
+                    if (manualEscalationNotifs.length > 0) {
+                        await NotificationService.createManyNotifications(io, manualEscalationNotifs);
                     }
                 }
             }
