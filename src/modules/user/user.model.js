@@ -141,7 +141,15 @@ userSchema.index({ companyId: 1, department: 1 });
 userSchema.index({ companyId: 1, reportingManagers: 1 });
 userSchema.index({ companyId: 1, taAssignedClients: 1 });
 userSchema.index({ companyId: 1, email: 1 }, { unique: true });
-userSchema.index({ companyId: 1, employeeCode: 1 }, { unique: true, sparse: true });
+userSchema.index(
+    { companyId: 1, employeeCode: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            employeeCode: { $type: 'string', $gt: '' }
+        }
+    }
+);
 userSchema.index({ companyId: 1, isDeleted: 1 });
 
 // Encrypt password before save and handle token invalidation

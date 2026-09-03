@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon server.js",
     "indexes:performance": "node scripts/add-performance-indexes.js",
+    "fix:employee-code-index": "node scripts/fix-employee-code-index.js",
     "start": "node server.js"
   },
   "keywords": [],

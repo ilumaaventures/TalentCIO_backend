@@ -107,6 +107,27 @@ const buildUsersListQuery = (companyId, includeDeleted = false, extraFilters = {
         .populate('employeeProfile', 'hris')
 );
 
+const handleUserError = (error, res, fallbackMessage = 'Server Error') => {
+    console.error(error);
+    if (error?.code === 11000) {
+        if (error.keyPattern?.employeeCode || (error.keyValue && 'employeeCode' in error.keyValue)) {
+            const codeVal = error.keyValue?.employeeCode;
+            return res.status(400).json({
+                message: codeVal
+                    ? `Employee code "${codeVal}" is already in use.`
+                    : 'A user with this Employee Code already exists.'
+            });
+        }
+        if (error.keyPattern?.email || (error.keyValue && 'email' in error.keyValue)) {
+            return res.status(400).json({
+                message: `User with email "${error.keyValue?.email || ''}" already exists.`
+            });
+        }
+        return res.status(400).json({ message: 'Duplicate record already exists.' });
+    }
+    return res.status(500).json({ message: fallbackMessage });
+};
+
 // @desc    Get All Users
 // @route   GET /api/users
 // @access  Private (Admin) 
@@ -266,6 +287,10 @@ const createUser = async (req, res) => {
             finalReportingManagers = reportingManagers.filter(id => mongoose.Types.ObjectId.isValid(id));
         }
 
+        const normalizedEmployeeCode = typeof employeeCode === 'string' && employeeCode.trim() !== ''
+            ? employeeCode.trim()
+            : undefined;
+
         const user = await User.create({
             companyId: req.companyId,
             firstName,
@@ -278,7 +303,7 @@ const createUser = async (req, res) => {
             designationRef: resolvedDesignationRef,
             workLocation: normalizeWorkLocation(workLocation),
             employmentType,
-            employeeCode,
+            employeeCode: normalizedEmployeeCode,
             joiningDate,
             reportingManagers: finalReportingManagers,
             attendanceMode: attendanceMode || 'clock_in_out',
@@ -369,8 +394,7 @@ const createUser = async (req, res) => {
             res.status(400).json({ message: 'Invalid user data' });
         }
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        return handleUserError(error, res);
     }
 };
 
@@ -490,7 +514,11 @@ const updateUser = async (req, res) => {
             user.workLocation = normalizeWorkLocation(workLocation);
         }
         user.employmentType = employmentType || user.employmentType;
-        user.employeeCode = employeeCode || user.employeeCode;
+        if (Object.prototype.hasOwnProperty.call(req.body, 'employeeCode')) {
+            user.employeeCode = typeof employeeCode === 'string' && employeeCode.trim() !== ''
+                ? employeeCode.trim()
+                : undefined;
+        }
         user.attendanceMode = attendanceMode || user.attendanceMode;
         user.attendanceShiftCode = attendanceShiftCode || user.attendanceShiftCode;
         if (Object.prototype.hasOwnProperty.call(req.body, 'isTotalWorkforce')) {
@@ -635,8 +663,7 @@ const updateUser = async (req, res) => {
 
         res.json({ message: 'User updated successfully', user });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        return handleUserError(error, res);
     }
 };
 
