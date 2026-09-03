@@ -85,12 +85,80 @@ const parseBooleanQueryValue = (val) => {
     return undefined;
 };
 
-const applyDateRangeFilterToCandidateQuery = (filterQuery, startDate, endDate, field = 'createdAt') => {
-    if (!startDate && !endDate) return filterQuery;
+const parseDateValue = (val, isEndOfDay = false) => {
+    if (!val) return null;
+    if (val instanceof Date) {
+        return isNaN(val.getTime()) ? null : val;
+    }
+    if (typeof val === 'string' || typeof val === 'number') {
+        const str = String(val).trim();
+        if (!str || str === 'undefined' || str === 'null' || str.toLowerCase() === 'invalid date') return null;
+
+        // If it's a YYYY-MM-DD string, handle start vs end of day
+        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+            const dateStr = isEndOfDay ? `${str}T23:59:59.999Z` : `${str}T00:00:00.000Z`;
+            const d = new Date(dateStr);
+            if (!isNaN(d.getTime())) return d;
+        }
+
+        const d = new Date(val);
+        if (!isNaN(d.getTime())) {
+            if (isEndOfDay && !str.includes('T') && !str.includes(':')) {
+                d.setHours(23, 59, 59, 999);
+            }
+            return isNaN(d.getTime()) ? null : d;
+        }
+    }
+    return null;
+};
+
+const applyDateRangeFilterToCandidateQuery = (filterQuery, arg2, arg3, arg4) => {
+    if (!filterQuery || typeof filterQuery !== 'object') return filterQuery;
+
+    let targetField = 'createdAt';
+    let rawStartDate = null;
+    let rawEndDate = null;
+
+    if (arg2 && typeof arg2 === 'object' && !(arg2 instanceof Date) && (arg2.startDate !== undefined || arg2.endDate !== undefined || arg2.dateField !== undefined || arg2.field !== undefined)) {
+        targetField = arg2.dateField || arg2.field || 'createdAt';
+        rawStartDate = arg2.startDate;
+        rawEndDate = arg2.endDate;
+    } else {
+        const arg2IsDate = Boolean(parseDateValue(arg2));
+        const arg3IsDate = Boolean(parseDateValue(arg3));
+        const arg4IsDate = Boolean(parseDateValue(arg4));
+
+        if (!arg2IsDate && typeof arg2 === 'string' && arg2.trim() !== '') {
+            targetField = arg2.trim();
+            rawStartDate = arg3;
+            rawEndDate = arg4;
+        } else if (arg2IsDate) {
+            rawStartDate = arg2;
+            rawEndDate = arg3;
+            if (typeof arg4 === 'string' && arg4.trim() && !arg4IsDate) {
+                targetField = arg4.trim();
+            }
+        } else {
+            if (arg3IsDate || arg4IsDate) {
+                rawStartDate = arg3;
+                rawEndDate = arg4;
+            } else if (typeof arg4 === 'string' && arg4.trim() && !arg4IsDate) {
+                targetField = arg4.trim();
+            }
+        }
+    }
+
+    const start = parseDateValue(rawStartDate, false);
+    const end = parseDateValue(rawEndDate, true);
+
+    if (!start && !end) return filterQuery;
+
     const range = {};
-    if (startDate) range.$gte = new Date(startDate);
-    if (endDate) range.$lte = new Date(endDate);
-    filterQuery[field] = range;
+    if (start) range.$gte = start;
+    if (end) range.$lte = end;
+
+    const validField = typeof targetField === 'string' && targetField.trim() ? targetField.trim() : 'createdAt';
+    filterQuery[validField] = range;
     return filterQuery;
 };
 

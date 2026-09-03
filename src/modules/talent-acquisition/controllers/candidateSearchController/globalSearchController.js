@@ -5,7 +5,8 @@ const {
     TA_CAPABILITIES,
     buildAccessibleCandidateQuery,
     parseStringArrayQuery,
-    serializeCandidateForViewer
+    serializeCandidateForViewer,
+    applyDateRangeFilterToCandidateQuery
 } = require('../../utils/candidateAccess');
 
 const calculateCandidateMatchScore = (candidate, query) => {
@@ -442,6 +443,14 @@ exports.globalSearchCandidates = async (req, res) => {
 
         if (req.query.decision) {
             publicAppFilterQuery.reviewStatus = req.query.decision.trim();
+        }
+
+        const { startDate, endDate, dateField, dateFrom, dateTo } = req.query;
+        const effectiveStartDate = startDate || dateFrom;
+        const effectiveEndDate = endDate || dateTo;
+        if (effectiveStartDate || effectiveEndDate) {
+            applyDateRangeFilterToCandidateQuery(filterQuery, dateField, effectiveStartDate, effectiveEndDate);
+            applyDateRangeFilterToCandidateQuery(publicAppFilterQuery, dateField, effectiveStartDate, effectiveEndDate);
         }
 
         // Fetch matched candidate records (only IDs and creation dates)

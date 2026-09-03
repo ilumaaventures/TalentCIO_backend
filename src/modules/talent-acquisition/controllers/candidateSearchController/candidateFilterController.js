@@ -34,6 +34,8 @@ exports.getCandidateCardFilters = async (req, res) => {
             dateField,
             startDate,
             endDate,
+            dateFrom,
+            dateTo,
             search = '',
             filterPreference = 'All',
             filterExperience = '',
@@ -66,7 +68,9 @@ exports.getCandidateCardFilters = async (req, res) => {
             { capability: TA_CAPABILITIES.VIEW }
         );
 
-        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+        const effectiveStartDate = startDate || dateFrom;
+        const effectiveEndDate = endDate || dateTo;
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, effectiveStartDate, effectiveEndDate);
 
         const candidates = await Candidate.find(candidateQuery)
             .select('_id candidateName status decision profileShared uploadedAt interviewRounds profilePulledBy totalExperience relevantExperience preference isTransferred uploadedBy resumeUrl phase2Decision phase2InterviewStatus phase2InterviewerFeedback phase3Decision')
@@ -257,7 +261,9 @@ exports.getCandidateInterviewDetails = async (req, res) => {
             filterDynamicStage = 'All',
             dateField,
             startDate,
-            endDate
+            endDate,
+            dateFrom,
+            dateTo
         } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(hiringRequestId)) {
@@ -281,7 +287,9 @@ exports.getCandidateInterviewDetails = async (req, res) => {
             { capability: TA_CAPABILITIES.VIEW }
         );
 
-        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+        const effectiveStartDate = startDate || dateFrom;
+        const effectiveEndDate = endDate || dateTo;
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, effectiveStartDate, effectiveEndDate);
 
         const candidates = await Candidate.find(candidateQuery)
             .populate('uploadedBy', 'firstName lastName')
@@ -415,6 +423,8 @@ exports.getCandidateRoundSummary = async (req, res) => {
             dateField,
             startDate,
             endDate,
+            dateFrom,
+            dateTo,
             search = '',
             filterPulledBy,
             filterUploadedBy,
@@ -443,7 +453,9 @@ exports.getCandidateRoundSummary = async (req, res) => {
             { capability: TA_CAPABILITIES.VIEW }
         );
 
-        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+        const effectiveStartDate = startDate || dateFrom;
+        const effectiveEndDate = endDate || dateTo;
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, effectiveStartDate, effectiveEndDate);
 
         const candidates = await Candidate.find(candidateQuery)
             .select('candidateName interviewRounds profileShared decision profilePulledBy uploadedBy resumeUrl isTransferred phase2Decision phase2InterviewStatus phase2InterviewerFeedback')
