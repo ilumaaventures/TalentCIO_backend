@@ -122,7 +122,9 @@ exports.transferToActiveEmployee = async (req, res) => {
             department: employee.department || '',
             workLocation: employee.workLocation || '',
             employmentType: 'Full Time',
-            employeeCode: employeeCode || employee.tempEmployeeId,
+            employeeCode: (typeof employeeCode === 'string' && employeeCode.trim() !== '')
+                ? employeeCode.trim()
+                : (typeof employee.tempEmployeeId === 'string' && employee.tempEmployeeId.trim() !== '' ? employee.tempEmployeeId.trim() : undefined),
             joiningDate: employee.joiningDate || new Date(),
             isPasswordResetRequired: true
         });

@@ -26,3 +26,4 @@ scripts/
 *.sw?
 .env
 test_scripts
+.serena

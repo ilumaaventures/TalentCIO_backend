@@ -199,7 +199,13 @@ io.on('connection', (socket) => {
     });
 });
 
-app.use(express.json());
+app.use(express.json({
+    limit: '50mb',
+    verify: (req, res, buf) => {
+        req.rawBody = buf ? buf.toString('utf8') : '';
+    }
+}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(loggerMiddleware);
 
 require('./src/modules/user/permission.model');

@@ -612,6 +612,7 @@ exports.applyToJob = async (req, res) => {
             candidateName,
             email,
             mobile,
+            totalExperienceYears,
             currentCTC,
             expectedCTC,
             noticePeriod,
@@ -672,6 +673,9 @@ exports.applyToJob = async (req, res) => {
             candidateName: String(candidateName).trim(),
             email: normalizedEmail,
             mobile: String(mobile).trim(),
+            totalExperienceYears: totalExperienceYears !== undefined && totalExperienceYears !== ''
+                ? Number(totalExperienceYears)
+                : (profileSnapshot?.totalExperienceYears ?? undefined),
             currentCTC: currentCTC ? Number(currentCTC) : undefined,
             expectedCTC: expectedCTC ? Number(expectedCTC) : undefined,
             noticePeriod: noticePeriod ? Number(noticePeriod) : undefined,
