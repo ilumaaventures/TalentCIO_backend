@@ -11,6 +11,8 @@ const LeaveBalance = require('../leave/model/leaveBalance.model');
 const { creditLeaveBucket } = require('../leave/accrual.service');
 const { processCalculatedSalary } = require('../payroll/payrollMath');
 const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.service');
+const Company = require('../company/company.model');
+const { hasEnabledModule } = require('../company/enabledModules');
 const { checkIsAdmin, hasPermission } = require('./utils/dossierHelpers');
 
 const getStartOfDayUTC = (dateInput) => {
@@ -1260,6 +1262,21 @@ const getEmployeeLeaveBalances = async (req, res) => {
         const user = await User.findOne({ _id: employeeId, companyId: req.companyId }).select('_id firstName lastName email employmentType');
         if (!user) {
             return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        const company = await Company.findById(req.companyId).select('enabledModules');
+        const isLeavesEnabled = hasEnabledModule(company?.enabledModules || [], 'leaves');
+        if (!isLeavesEnabled) {
+            return res.json({
+                employee: {
+                    _id: user._id,
+                    name: `${user.firstName} ${user.lastName || ''}`.trim(),
+                    email: user.email,
+                    employmentType: user.employmentType || 'Full Time'
+                },
+                year: currentYear,
+                leaves: []
+            });
         }
 
         const profile = await EmployeeProfile.findOne({ user: user._id, companyId: req.companyId }).select('+compensation.ctc');

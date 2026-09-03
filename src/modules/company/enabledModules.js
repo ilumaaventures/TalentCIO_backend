@@ -63,6 +63,10 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
         return normalizedIds.includes('mySpace') || normalizedIds.includes('ess');
     }
 
+    if (targetModuleId === 'leave' || targetModuleId === 'leaves') {
+        return normalizedIds.includes('leaves') || normalizedIds.includes('leave');
+    }
+
     return normalizedIds.includes(targetModuleId);
 };
 
