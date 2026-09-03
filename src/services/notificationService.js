@@ -25,8 +25,17 @@ const resolveRelativeAppLink = (link = '', origin = '', subdomain = '') => {
         return normalizedLink;
     }
 
-    // Resolve base URL dynamically using request origin, fallback to configured frontend URL or local development port
-    const rawBaseUrl = origin ? String(origin).trim().replace(/\/+$/, '') : (process.env.FRONTEND_URL || 'http://localhost:5173');
+    // Resolve base URL: Prefer process.env.FRONTEND_URL if configured for non-localhost production
+    const configuredBase = process.env.FRONTEND_URL ? String(process.env.FRONTEND_URL).trim().replace(/\/+$/, '') : '';
+    let rawBaseUrl = '';
+
+    if (configuredBase && !configuredBase.includes('localhost') && !configuredBase.includes('127.0.0.1')) {
+        rawBaseUrl = configuredBase;
+    } else if (origin) {
+        rawBaseUrl = String(origin).trim().replace(/\/+$/, '');
+    } else {
+        rawBaseUrl = configuredBase || 'http://localhost:5173';
+    }
     let appBaseUrl = '';
 
     if (subdomain) {
