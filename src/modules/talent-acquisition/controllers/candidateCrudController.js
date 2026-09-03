@@ -421,6 +421,8 @@ const getCandidatesByHiringRequest = async (req, res) => {
             dateField,
             startDate,
             endDate,
+            dateFrom,
+            dateTo,
             paginate,
             page = 1,
             limit = 15
@@ -448,7 +450,9 @@ const getCandidatesByHiringRequest = async (req, res) => {
             { capability: TA_CAPABILITIES.VIEW }
         );
 
-        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, startDate, endDate);
+        const effectiveStartDate = startDate || dateFrom;
+        const effectiveEndDate = endDate || dateTo;
+        applyDateRangeFilterToCandidateQuery(candidateQuery, dateField, effectiveStartDate, effectiveEndDate);
 
         const candidates = await Candidate.find(candidateQuery)
             .populate('uploadedBy', 'firstName lastName email')
