@@ -732,6 +732,7 @@ const getCandidateByIdPayload = async (req) => {
     let candidateData = await Candidate.findOne({ _id: id, companyId: req.companyId })
         .populate('uploadedBy', 'firstName lastName email')
         .populate('hiringRequestId', 'requestId roleDetails requirements client clientConfidential')
+        .populate('transferredFrom', 'requestId roleDetails client')
         .populate('applicantId', APPLICANT_REVIEW_SELECT)
         .populate('statusHistory.changedBy', 'firstName lastName')
         .populate('interviewRounds.assignedTo', 'firstName lastName email')
@@ -787,6 +788,43 @@ const getCandidateByIdPayload = async (req) => {
     }
 
     let candidate = await enrichCandidatesWithPublicProfiles(candidateData, req.companyId);
+
+    if (candidate && candidate.remark) {
+        if (candidate.transferredFrom && typeof candidate.transferredFrom === 'object') {
+            const originIdStr = String(candidate.transferredFrom._id);
+            const originName = candidate.transferredFrom.roleDetails?.title || candidate.transferredFrom.roleDetails?.jobTitle || candidate.transferredFrom.requestId || 'previous requisition';
+
+            if (candidate.remark.includes(originIdStr)) {
+                candidate.remark = candidate.remark.split(originIdStr).join(originName);
+            }
+        }
+        candidate.remark = candidate.remark.replace(/REQ-[A-Za-z0-9_-]+\s*\(([^)]+)\)/g, '$1');
+        const hasDatePattern = /on \d{2} [A-Za-z]{3} \d{4}/.test(candidate.remark);
+        if (!hasDatePattern && (candidate.remark.startsWith('Transferred from') || candidate.remark.startsWith('Transferred and updated from'))) {
+            const transferDate = candidate.updatedAt || candidate.createdAt || new Date();
+            const d = new Date(transferDate);
+            const day = String(d.getDate()).padStart(2, '0');
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[d.getMonth()];
+            const year = d.getFullYear();
+            let hours = d.getHours();
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+            const strHours = String(hours).padStart(2, '0');
+            const formattedDate = `${day} ${month} ${year} at ${strHours}:${minutes} ${ampm}`;
+
+            candidate.remark = candidate.remark.replace(
+                /^(Transferred(?: and updated)? from [^.\n]+)/,
+                `$1 on ${formattedDate}`
+            );
+        }
+        candidate.remark = candidate.remark
+            .replace(/\.?\s*(?:Original|Latest)\s+remark:\s*(?:None|undefined|null)\s*$/i, '.')
+            .trim();
+    }
+
     const hasHiringRequestAccess = await canAccessHiringRequest(hiringRequest, req.companyId, req.user, { action: 'view' });
 
     if (!hasHiringRequestAccess) {
