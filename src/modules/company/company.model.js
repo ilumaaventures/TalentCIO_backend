@@ -9,6 +9,7 @@ const companySchema = new mongoose.Schema({
     industry: { type: String, trim: true },
     country: { type: String, trim: true },
     timezone: { type: String, default: 'Asia/Kolkata' },
+    address: { type: mongoose.Schema.Types.Mixed, default: '' },
     status: { type: String, enum: ['Active', 'Suspended', 'Trial', 'Inactive'], default: 'Active' },
     planId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },
     allowedDomains: { type: [String], default: [] },
@@ -267,7 +268,9 @@ const companySchema = new mongoose.Schema({
             encryptPayloads: { type: Boolean, default: false },
             encryptionSecret: { type: String, default: '' },
             webhookUrl: { type: String, default: '', trim: true },
-            webhookSecret: { type: String, default: '' }
+            webhookSecret: { type: String, default: '' },
+            syncMode: { type: String, enum: ['all', 'selected'], default: 'selected' },
+            allowedEmployeeIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
         },
         // Profile settings
         profile: {

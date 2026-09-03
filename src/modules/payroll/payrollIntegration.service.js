@@ -59,7 +59,9 @@ const normalizePayrollIntegrationSettings = (companyOrSettings = {}) => {
         encryptPayloads: base.encryptPayloads === true,
         encryptionSecret: String(base.encryptionSecret || '').trim(),
         webhookUrl: String(base.webhookUrl || '').trim(),
-        webhookSecret: String(base.webhookSecret || '').trim()
+        webhookSecret: String(base.webhookSecret || '').trim(),
+        syncMode: base.syncMode === 'all' ? 'all' : 'selected',
+        allowedEmployeeIds: Array.isArray(base.allowedEmployeeIds) ? base.allowedEmployeeIds.map(String) : []
     };
 };
 
@@ -213,7 +215,16 @@ const getEmployeePayloadByUserId = async ({ companyId, userId, includeDeleted = 
 };
 
 const listActiveEmployeesForPayroll = async (companyId) => {
-    const users = await User.find({ companyId, isActive: true })
+    const company = await Company.findById(companyId).select(PAYROLL_COMPANY_SELECT).lean();
+    const config = normalizePayrollIntegrationSettings(company);
+
+    const userQuery = { companyId, isActive: true };
+    if (config.syncMode === 'selected') {
+        const allowedIds = Array.isArray(config.allowedEmployeeIds) ? config.allowedEmployeeIds : [];
+        userQuery._id = { $in: allowedIds };
+    }
+
+    const users = await User.find(userQuery)
         .select(PAYROLL_USER_SELECT)
         .sort({ joiningDate: 1, createdAt: 1 })
         .lean();
@@ -262,6 +273,13 @@ const dispatchEmployeeWebhook = async ({
     const config = normalizePayrollIntegrationSettings(resolvedCompany);
     if (!config.enabled || !config.webhookUrl || !config.webhookSecret || !config.externalTenantId) {
         return { dispatched: false, reason: 'integration_not_configured' };
+    }
+
+    if (config.syncMode === 'selected') {
+        const allowedIds = (config.allowedEmployeeIds || []).map(id => String(id));
+        if (!allowedIds.includes(String(userId))) {
+            return { dispatched: false, reason: 'employee_not_allowed_for_sync' };
+        }
     }
 
     const employee = await getEmployeePayloadByUserId({ companyId: resolvedCompany._id || companyId, userId });

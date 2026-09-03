@@ -145,7 +145,13 @@ const getAttendanceSummary = async (req, res) => {
                 companyId: req.companyId,
                 date: { $gte: start, $lt: end }
             }).lean(),
-            User.find({ companyId: req.companyId }, null, { includeDeleted: true }).lean()
+            User.find(
+                req.payrollIntegration?.syncMode === 'selected'
+                    ? { companyId: req.companyId, _id: { $in: req.payrollIntegration.allowedEmployeeIds || [] } }
+                    : { companyId: req.companyId },
+                null,
+                { includeDeleted: true }
+            ).lean()
         ]);
 
         const holidayMap = new Map();
@@ -408,7 +414,161 @@ const getPayrollConfig = async (req, res) => {
 };
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const PayrollResult = require('./payrollResult.model');
+const EmployeeProfile = require('../dossier/employeeProfile.model');
+const { uploadBufferToCloudinary } = require('../../config/cloudinary');
+
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+async function storePayslipFile(item, companyId) {
+    if (!item.payslipPdfBase64) {
+        return item.payslipUrl || '';
+    }
+
+    try {
+        const buffer = Buffer.from(item.payslipPdfBase64, 'base64');
+        const monthStr = MONTH_NAMES[item.month - 1] || `M${item.month}`;
+        const fileName = `payslip_${item.employeeCode}_${monthStr}_${item.year}.pdf`;
+
+        // Try Cloudinary first if configured
+        if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY) {
+            try {
+                const cloudUrl = await uploadBufferToCloudinary(buffer, fileName, 'payslips');
+                if (cloudUrl) return cloudUrl;
+            } catch (cErr) {
+                console.warn('[storePayslipFile] Cloudinary upload failed, using local file:', cErr.message);
+            }
+        }
+
+        // Local storage fallback in /uploads/payslips/
+        const uploadDir = path.join(__dirname, '../../../uploads/payslips');
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        const filePath = path.join(uploadDir, fileName);
+        fs.writeFileSync(filePath, buffer);
+        return `/uploads/payslips/${fileName}`;
+    } catch (err) {
+        console.error('[storePayslipFile] Error storing payslip:', err.message);
+        return item.payslipUrl || '';
+    }
+}
+
+async function saveSinglePayrollResult(companyId, payrollResult) {
+    if (!payrollResult || !payrollResult.employeeCode || !Number.isInteger(payrollResult.month) || !Number.isInteger(payrollResult.year)) {
+        return null;
+    }
+
+    const payslipUrl = await storePayslipFile(payrollResult, companyId);
+    const monthStr = MONTH_NAMES[payrollResult.month - 1] || `Month ${payrollResult.month}`;
+    const period = `${monthStr} ${payrollResult.year}`;
+
+    // 1. Upsert into PayrollResult
+    const updatedResult = await PayrollResult.findOneAndUpdate(
+        {
+            companyId,
+            employeeCode: payrollResult.employeeCode,
+            month: payrollResult.month,
+            year: payrollResult.year,
+        },
+        {
+            $set: {
+                status: payrollResult.status || 'paid',
+                payslipUrl: payslipUrl || '',
+                netSalary: payrollResult.netSalary || 0,
+                grossSalary: payrollResult.grossSalary || 0,
+                totalDeductions: payrollResult.totalDeductions || 0,
+                paidDate: payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
+                breakdown: payrollResult.breakdown || {},
+                receivedAt: new Date(),
+            },
+        },
+        { upsert: true, new: true }
+    );
+
+    // 2. Sync into EmployeeProfile (for ESS MyPayslips and Dossier documents)
+    try {
+        const query = {
+            companyId,
+            $or: [
+                { employeeCode: String(payrollResult.employeeCode).trim() },
+                ...(payrollResult.email ? [{ email: String(payrollResult.email).trim().toLowerCase() }] : [])
+            ]
+        };
+        const user = await User.findOne(query).select('_id companyId');
+        if (user) {
+            const profile = await EmployeeProfile.findOne({ user: user._id });
+            if (profile) {
+                // Upsert payrollHistory
+                if (!profile.compensation) profile.compensation = {};
+                if (!Array.isArray(profile.compensation.payrollHistory)) profile.compensation.payrollHistory = [];
+
+                const historyIdx = profile.compensation.payrollHistory.findIndex(h => h.period === period);
+                const historyEntry = {
+                    period,
+                    netSalary: payrollResult.netSalary || 0,
+                    grossSalary: payrollResult.grossSalary || 0,
+                    totalDeductions: payrollResult.totalDeductions || 0,
+                    status: payrollResult.status === 'draft' ? 'Draft' : 'Paid',
+                    payslipUrl: payslipUrl || '',
+                    workingDays: payrollResult.workingDays !== undefined ? payrollResult.workingDays : 31,
+                    paidDays: payrollResult.paidDays !== undefined ? payrollResult.paidDays : 31,
+                    companyName: payrollResult.companyName || '',
+                    companyAddress: payrollResult.companyAddress || '',
+                    companyLogo: payrollResult.companyLogo || '',
+                    taxRegime: payrollResult.taxRegime || '',
+                    earningsLineItems: Array.isArray(payrollResult.earningsLineItems) ? payrollResult.earningsLineItems : [],
+                    deductionsLineItems: Array.isArray(payrollResult.deductionsLineItems) ? payrollResult.deductionsLineItems : [],
+                    breakdown: payrollResult.breakdown || {},
+                    taxWorksheet: payrollResult.taxWorksheet || null,
+                    processedDate: payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
+                };
+
+                if (historyIdx !== -1) {
+                    profile.compensation.payrollHistory[historyIdx] = {
+                        ...(profile.compensation.payrollHistory[historyIdx]?.toObject?.() || profile.compensation.payrollHistory[historyIdx]),
+                        ...historyEntry,
+                    };
+                } else {
+                    profile.compensation.payrollHistory.push(historyEntry);
+                }
+
+                // Upsert documents (category: 'Payslips')
+                if (payslipUrl) {
+                    if (!Array.isArray(profile.documents)) profile.documents = [];
+                    const docIdx = profile.documents.findIndex(d => d.category === 'Payslips' && d.title === `Payslip - ${period}`);
+                    const docEntry = {
+                        category: 'Payslips',
+                        title: `Payslip - ${period}`,
+                        fileName: `Payslip_${payrollResult.employeeCode}_${period.replace(/\s+/g, '_')}.pdf`,
+                        url: payslipUrl,
+                        uploadDate: new Date(),
+                        verificationStatus: 'Verified'
+                    };
+                    if (docIdx !== -1) {
+                        profile.documents[docIdx] = {
+                            ...(profile.documents[docIdx]?.toObject?.() || profile.documents[docIdx]),
+                            ...docEntry,
+                        };
+                    } else {
+                        profile.documents.push(docEntry);
+                    }
+                }
+
+                await profile.save();
+            }
+        }
+    } catch (profileErr) {
+        console.error('[PayrollIntegration] Error syncing payslip to employee profile:', profileErr.message);
+    }
+
+    return updatedResult;
+}
 
 const receivePayrollResult = async (req, res) => {
     try {
@@ -418,66 +578,64 @@ const receivePayrollResult = async (req, res) => {
             return res.status(401).json({ message: 'x-mybills-signature header is required.' });
         }
 
-        const { webhookSecret } = req.payrollIntegration;
-        if (!webhookSecret) {
+        const rawBody = req.rawBody
+            ? (Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : String(req.rawBody))
+            : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+        const jsonBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+        const tsHeader = req.headers['x-hrms-timestamp'];
+
+        const secretsToTry = Array.from(new Set([
+            req.payrollIntegration?.webhookSecret,
+            req.payrollIntegration?.accessToken
+        ].filter(Boolean)));
+
+        if (secretsToTry.length === 0) {
             return res.status(401).json({ message: 'Payroll integration webhook secret is not configured.' });
         }
 
-        const rawBody = req.rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
-        const tsHeader = req.headers['x-hrms-timestamp'];
-        const hmacInput = tsHeader ? `${tsHeader}.${rawBody}` : rawBody;
-        const computedSig = crypto.createHmac('sha256', webhookSecret).update(hmacInput).digest('hex');
+        const provided = Buffer.from(String(signature).trim(), 'hex');
+        let isValid = false;
 
-        const provided = Buffer.from(signature, 'hex');
-        const computed = Buffer.from(computedSig, 'hex');
-        let isValid = provided.length === computed.length && crypto.timingSafeEqual(provided, computed);
+        for (const secret of secretsToTry) {
+            const inputsToTry = [
+                tsHeader ? `${tsHeader}.${rawBody}` : null,
+                rawBody,
+                tsHeader ? `${tsHeader}.${jsonBody}` : null,
+                jsonBody
+            ].filter(Boolean);
 
-        if (!isValid && tsHeader) {
-            const fallbackSig = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
-            const fallbackBuf = Buffer.from(fallbackSig, 'hex');
-            if (provided.length === fallbackBuf.length && crypto.timingSafeEqual(provided, fallbackBuf)) {
-                isValid = true;
+            for (const input of inputsToTry) {
+                const computedHex = crypto.createHmac('sha256', secret).update(input).digest('hex');
+                const computed = Buffer.from(computedHex, 'hex');
+                if (provided.length === computed.length && crypto.timingSafeEqual(provided, computed)) {
+                    isValid = true;
+                    break;
+                }
             }
+            if (isValid) break;
         }
 
         if (!isValid) {
             return res.status(401).json({ message: 'Signature mismatch: HMAC verification failed.' });
         }
 
-        const { payrollResult } = req.body;
-        if (
-            !payrollResult ||
-            !payrollResult.employeeCode ||
-            !Number.isInteger(payrollResult.month) ||
-            !Number.isInteger(payrollResult.year)
-        ) {
+        const results = Array.isArray(req.body.payrollResults)
+            ? req.body.payrollResults
+            : (req.body.payrollResult ? [req.body.payrollResult] : []);
+
+        if (results.length === 0) {
             return res.status(400).json({
-                message: 'Invalid payroll result payload: employeeCode, month, and year are required.'
+                message: 'Invalid payload: payrollResult object or payrollResults array is required.'
             });
         }
 
-        await PayrollResult.findOneAndUpdate(
-            {
-                companyId: req.companyId,
-                employeeCode: payrollResult.employeeCode,
-                month: payrollResult.month,
-                year: payrollResult.year,
-            },
-            {
-                $set: {
-                    status: payrollResult.status || 'paid',
-                    netSalary: payrollResult.netSalary || 0,
-                    grossSalary: payrollResult.grossSalary || 0,
-                    totalDeductions: payrollResult.totalDeductions || 0,
-                    paidDate: payrollResult.paidDate ? new Date(payrollResult.paidDate) : new Date(),
-                    breakdown: payrollResult.breakdown || {},
-                    receivedAt: new Date(),
-                },
-            },
-            { upsert: true, new: true }
-        );
+        const saved = [];
+        for (const item of results) {
+            const resDoc = await saveSinglePayrollResult(req.companyId, item);
+            if (resDoc) saved.push(resDoc);
+        }
 
-        res.json({ message: 'Payroll result received and stored.' });
+        res.json({ message: `Successfully processed ${saved.length} payroll result(s).`, count: saved.length });
     } catch (error) {
         console.error('[PayrollIntegration] receivePayrollResult error:', error);
         res.status(500).json({ message: 'Failed to process payroll result.' });

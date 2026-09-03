@@ -121,7 +121,7 @@ const tenantMiddleware = async (req, res, next) => {
         // ── Step 5: Resolve to Company (DB query) ──
         // HIGH-4: select includes enabledModules so moduleGuard never re-queries
         const company = await Company.findOne({ subdomain })
-            .select('_id name subdomain status enabledModules trialEndsAt planId settings.attendance settings.timesheet settings.profile settings.logo settings.logoPublicId settings.workspaceBranding')
+            .select('_id name subdomain email contactPerson contactPhone industry country timezone address status enabledModules trialEndsAt planId settings.attendance settings.timesheet settings.profile settings.logo settings.logoPublicId settings.workspaceBranding')
             .lean();
 
         if (!company) {
