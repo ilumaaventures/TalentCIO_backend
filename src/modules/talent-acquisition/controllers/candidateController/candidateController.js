@@ -81,6 +81,173 @@ exports.getPreviousCandidates = async (req, res) => {
     }
 };
 
+const formatTransferDateTime = (date = new Date()) => {
+    const d = new Date(date);
+    const day = String(d.getDate()).padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const strHours = String(hours).padStart(2, '0');
+    return `${day} ${month} ${year} at ${strHours}:${minutes} ${ampm}`;
+};
+
+const buildTransferRemark = ({ originLabel, isUpdate = false, previousRemark = '', transferTimeStr }) => {
+    const timeStr = transferTimeStr || formatTransferDateTime();
+    const action = isUpdate ? 'Transferred and updated' : 'Transferred';
+    const mainMsg = `${action} from ${originLabel} on ${timeStr}`;
+
+    let cleanPrevRemark = '';
+    if (previousRemark && typeof previousRemark === 'string') {
+        const lines = previousRemark.split('\n');
+        const nonTransferLines = lines.filter(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return false;
+            if (trimmed.startsWith('Transferred from') || trimmed.startsWith('Transferred and updated from')) return false;
+            if (/^(?:Original|Latest)\s+remark:\s*(?:None|undefined|null)?$/i.test(trimmed)) return false;
+            return true;
+        });
+        cleanPrevRemark = nonTransferLines.join('\n').trim();
+        if (cleanPrevRemark.toLowerCase() === 'none') cleanPrevRemark = '';
+    }
+
+    if (cleanPrevRemark) {
+        const remarkPrefix = isUpdate ? 'Latest remark' : 'Original remark';
+        return `${mainMsg}.\n${remarkPrefix}: ${cleanPrevRemark}`;
+    }
+    return `${mainMsg}.`;
+};
+
+const buildTransferredCandidateData = (
+    candidate,
+    targetRequisitionId,
+    companyId,
+    user,
+    includeInterviewDetails = true,
+    sourceReq = null,
+    isUpdate = false
+) => {
+    const originName = sourceReq?.roleDetails?.title || sourceReq?.roleDetails?.jobTitle || sourceReq?.requestId || 'previous requisition';
+    const originLabel = originName;
+
+    const remark = buildTransferRemark({
+        originLabel,
+        isUpdate,
+        previousRemark: candidate.remark
+    });
+
+    const candidateData = {
+        hiringRequestId: targetRequisitionId,
+        companyId,
+        applicantId: candidate.applicantId || undefined,
+        publicApplicationId: candidate.publicApplicationId || undefined,
+        profileSnapshot: candidate.profileSnapshot || undefined,
+        candidateName: candidate.candidateName,
+        email: candidate.email ? String(candidate.email).trim().toLowerCase() : '',
+        mobile: candidate.mobile ? String(candidate.mobile).trim() : '',
+        source: candidate.source || 'Transfer',
+        totalExperience: Number(candidate.totalExperience) || 0,
+        relevantExperience: Number(candidate.relevantExperience) || 0,
+        qualification: candidate.qualification || '',
+        currentCompany: candidate.currentCompany || '',
+        pastExperience: Array.isArray(candidate.pastExperience) ? candidate.pastExperience.map(p => ({
+            companyName: p.companyName,
+            experienceYears: p.experienceYears,
+            role: p.role
+        })) : [],
+        mustHaveSkills: Array.isArray(candidate.mustHaveSkills) ? candidate.mustHaveSkills.map(s => ({
+            skill: s.skill,
+            experience: s.experience
+        })) : [],
+        niceToHaveSkills: Array.isArray(candidate.niceToHaveSkills) ? candidate.niceToHaveSkills.map(s => ({
+            skill: s.skill,
+            experience: s.experience
+        })) : [],
+        currentLocation: candidate.currentLocation || '',
+        preferredLocation: candidate.preferredLocation || '',
+        tatToJoin: candidate.tatToJoin !== undefined && candidate.tatToJoin !== '' ? Number(candidate.tatToJoin) : 0,
+        noticePeriod: candidate.noticePeriod !== undefined && candidate.noticePeriod !== '' ? Number(candidate.noticePeriod) : undefined,
+        lastWorkingDay: candidate.lastWorkingDay || undefined,
+        currentCTC: candidate.currentCTC !== undefined && candidate.currentCTC !== '' ? Number(candidate.currentCTC) : undefined,
+        expectedCTC: candidate.expectedCTC !== undefined && candidate.expectedCTC !== '' ? Number(candidate.expectedCTC) : undefined,
+        inHandOffer: Boolean(candidate.inHandOffer),
+        offerCompany: candidate.offerCompany || '',
+        offerCTC: candidate.offerCTC !== undefined && candidate.offerCTC !== '' ? Number(candidate.offerCTC) : undefined,
+        offerJoiningDate: candidate.offerJoiningDate || undefined,
+        preference: candidate.preference || undefined,
+        calledBy: candidate.calledBy || '',
+        rate: candidate.rate !== undefined && candidate.rate !== '' ? Number(candidate.rate) : undefined,
+        referralName: candidate.referralName || '',
+        resumeUrl: candidate.resumeUrl || '',
+        resumePublicId: candidate.resumePublicId || '',
+        uploadedBy: user?._id || candidate.uploadedBy,
+        profilePulledBy: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || candidate.profilePulledBy,
+        remark,
+        internalRemark: candidate.internalRemark || '',
+        isTransferred: true,
+        transferredFrom: candidate.hiringRequestId
+    };
+
+    if (includeInterviewDetails) {
+        candidateData.interviewRounds = Array.isArray(candidate.interviewRounds)
+            ? candidate.interviewRounds.map(r => ({
+                levelName: r.levelName,
+                assignAfterStage: r.assignAfterStage,
+                phase: r.phase,
+                assignedTo: Array.isArray(r.assignedTo) ? r.assignedTo : [],
+                status: r.status,
+                scheduledDate: r.scheduledDate,
+                feedback: r.feedback,
+                rating: r.rating,
+                evaluatedBy: r.evaluatedBy,
+                evaluatedAt: r.evaluatedAt,
+                skillRatings: Array.isArray(r.skillRatings) ? r.skillRatings : [],
+                customFields: Array.isArray(r.customFields) ? r.customFields : [],
+                emailTemplateId: r.emailTemplateId || null,
+                emailAccountId: r.emailAccountId || null,
+                cc: r.cc || '',
+                bcc: r.bcc || '',
+                customSubject: r.customSubject || '',
+                customHtmlBody: r.customHtmlBody || '',
+                mailSent: Boolean(r.mailSent),
+                mailSentAt: r.mailSentAt || null,
+                lastMailDetails: r.lastMailDetails || undefined
+            }))
+            : [];
+
+        candidateData.skillRatings = Array.isArray(candidate.skillRatings) ? candidate.skillRatings : [];
+        candidateData.status = candidate.status || 'Total Sourced';
+        candidateData.profileShared = Boolean(candidate.profileShared);
+        candidateData.decision = candidate.decision || 'None';
+        candidateData.phase2Decision = candidate.phase2Decision || 'None';
+        candidateData.phase2InterviewStatus = candidate.phase2InterviewStatus || 'None';
+        candidateData.phase2InterviewerFeedback = candidate.phase2InterviewerFeedback || '';
+        candidateData.phase3Decision = candidate.phase3Decision || 'None';
+        candidateData.phaseHistory = Array.isArray(candidate.phaseHistory) ? candidate.phaseHistory : [];
+        candidateData.currentPhaseId = candidate.currentPhaseId;
+        candidateData.currentPhaseOrder = candidate.currentPhaseOrder;
+        candidateData.currentPhaseStatus = candidate.currentPhaseStatus;
+        candidateData.currentPhaseName = candidate.currentPhaseName;
+    } else {
+        candidateData.interviewRounds = [];
+        candidateData.skillRatings = [];
+        candidateData.status = 'Total Sourced';
+        candidateData.profileShared = false;
+        candidateData.decision = 'None';
+        candidateData.phase2Decision = 'None';
+        candidateData.phase2InterviewStatus = 'None';
+        candidateData.phase2InterviewerFeedback = '';
+        candidateData.phase3Decision = 'None';
+        candidateData.phaseHistory = [];
+    }
+
+    return candidateData;
+};
+
 exports.transferCandidate = async (req, res) => {
     try {
         const { candidateId } = req.params;
@@ -92,6 +259,10 @@ exports.transferCandidate = async (req, res) => {
         if (!targetRequisitionId) {
             return res.status(400).json({ message: 'Target hiring request ID is required' });
         }
+
+        const includeInterviewDetails = req.body?.includeInterviewDetails !== undefined
+            ? Boolean(req.body.includeInterviewDetails)
+            : (req.body?.shareInterviewDetails !== undefined ? Boolean(req.body.shareInterviewDetails) : true);
 
         const candidate = await Candidate.findOne({ _id: candidateId, companyId: req.companyId });
         if (!candidate) {
@@ -127,38 +298,57 @@ exports.transferCandidate = async (req, res) => {
             })
             : null;
 
+        const sourceReq = await HiringRequest.findOne({
+            _id: candidate.hiringRequestId,
+            companyId: req.companyId
+        }).select('requestId roleDetails client');
+
+        const candidateData = buildTransferredCandidateData(
+            candidate,
+            targetRequisitionId,
+            req.companyId,
+            req.user,
+            includeInterviewDetails,
+            sourceReq,
+            Boolean(existingCandidateInTarget)
+        );
+
         if (existingCandidateInTarget) {
-            return res.status(409).json({ message: 'This candidate already exists in the target requisition' });
+            // Update existing candidate in target requisition with latest details from source
+            if (!includeInterviewDetails) {
+                delete candidateData.interviewRounds;
+                delete candidateData.skillRatings;
+                delete candidateData.status;
+                delete candidateData.profileShared;
+                delete candidateData.decision;
+                delete candidateData.phase2Decision;
+                delete candidateData.phase2InterviewStatus;
+                delete candidateData.phase2InterviewerFeedback;
+                delete candidateData.phase3Decision;
+                delete candidateData.phaseHistory;
+                delete candidateData.currentPhaseId;
+                delete candidateData.currentPhaseOrder;
+                delete candidateData.currentPhaseStatus;
+                delete candidateData.currentPhaseName;
+            }
+
+            Object.assign(existingCandidateInTarget, candidateData);
+            await existingCandidateInTarget.save();
+
+            await Candidate.findByIdAndUpdate(candidate._id, {
+                isTransferred: true,
+                transferredTo: targetRequisitionId
+            });
+
+            return res.status(200).json({
+                message: `Candidate ${candidate.candidateName} updated successfully in ${targetReq.requestId}`,
+                candidate: existingCandidateInTarget,
+                newCandidate: existingCandidateInTarget,
+                isUpdated: true
+            });
         }
 
-        const newCandidate = new Candidate({
-            hiringRequestId: targetRequisitionId,
-            companyId: req.companyId,
-            applicantId: candidate.applicantId || undefined,
-            publicApplicationId: candidate.publicApplicationId || undefined,
-            profileSnapshot: candidate.profileSnapshot || undefined,
-            candidateName: candidate.candidateName,
-            email: String(candidate.email || '').trim().toLowerCase(),
-            mobile: String(candidate.mobile || '').trim(),
-            source: candidate.source || 'Transfer',
-            totalExperience: candidate.totalExperience || 0,
-            currentCTC: candidate.currentCTC || '',
-            expectedCTC: candidate.expectedCTC || '',
-            noticePeriod: candidate.noticePeriod || '',
-            resumeUrl: candidate.resumeUrl || '',
-            resumePublicId: candidate.resumePublicId || '',
-            uploadedBy: req.user._id,
-            profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
-            remark: `Transferred from ${candidate.hiringRequestId}. Original remark: ${candidate.remark || 'None'}`,
-            status: 'Total Sourced',
-            profileShared: false,
-            decision: 'None',
-            phase2Decision: 'None',
-            phase3Decision: 'None',
-            isTransferred: true,
-            transferredFrom: candidate.hiringRequestId
-        });
-
+        const newCandidate = new Candidate(candidateData);
         await newCandidate.save();
 
         await Candidate.findByIdAndUpdate(candidate._id, {
@@ -168,7 +358,8 @@ exports.transferCandidate = async (req, res) => {
 
         res.status(201).json({
             message: `Candidate ${candidate.candidateName} transferred successfully to ${targetReq.requestId}`,
-            newCandidate
+            newCandidate,
+            isUpdated: false
         });
 
     } catch (error) {
@@ -194,7 +385,11 @@ exports.transferCandidateToRequisition = async (req, res) => {
 
 exports.transferCandidatesBulk = async (req, res) => {
     try {
-        let { candidateIds, targetRequisitionId, transfers } = req.body || {};
+        let { candidateIds, targetRequisitionId, transfers, includeInterviewDetails } = req.body || {};
+
+        const defaultIncludeInterviewDetails = includeInterviewDetails !== undefined
+            ? Boolean(includeInterviewDetails)
+            : (req.body?.shareInterviewDetails !== undefined ? Boolean(req.body.shareInterviewDetails) : true);
 
         if (Array.isArray(transfers) && transfers.length > 0) {
             candidateIds = transfers.map(t => t.candidateId || t._id).filter(Boolean);
@@ -231,10 +426,25 @@ exports.transferCandidatesBulk = async (req, res) => {
         const targetCandidates = await Candidate.find({
             hiringRequestId: targetRequisitionId,
             companyId: req.companyId
-        }).select('email mobile');
+        });
 
-        const existingEmails = new Set(targetCandidates.map(c => c.email ? String(c.email).trim().toLowerCase() : '').filter(Boolean));
-        const existingMobiles = new Set(targetCandidates.map(c => c.mobile ? String(c.mobile).trim() : '').filter(Boolean));
+        const targetCandidatesByEmail = new Map();
+        const targetCandidatesByMobile = new Map();
+        for (const tc of targetCandidates) {
+            if (tc.email) targetCandidatesByEmail.set(String(tc.email).trim().toLowerCase(), tc);
+            if (tc.mobile) targetCandidatesByMobile.set(String(tc.mobile).trim(), tc);
+        }
+
+        const sourceReqIds = [...new Set(sourceCandidates.map(c => String(c.hiringRequestId)).filter(Boolean))];
+        const sourceReqs = await HiringRequest.find({
+            _id: { $in: sourceReqIds },
+            companyId: req.companyId
+        }).select('requestId roleDetails client');
+
+        const sourceReqMap = new Map();
+        for (const sr of sourceReqs) {
+            sourceReqMap.set(String(sr._id), sr);
+        }
 
         const results = {
             transferred: [],
@@ -256,59 +466,128 @@ exports.transferCandidatesBulk = async (req, res) => {
                 const candidateEmail = candidate.email ? String(candidate.email).trim().toLowerCase() : '';
                 const candidateMobile = candidate.mobile ? String(candidate.mobile).trim() : '';
 
-                const isEmailDuplicate = candidateEmail && existingEmails.has(candidateEmail);
-                const isMobileDuplicate = candidateMobile && existingMobiles.has(candidateMobile);
+                // Check transfer-level override for includeInterviewDetails
+                let candidateIncludeInterviews = defaultIncludeInterviewDetails;
+                if (Array.isArray(transfers)) {
+                    const matchedTransfer = transfers.find(t => String(t.candidateId || t._id) === String(candidate._id));
+                    if (matchedTransfer && matchedTransfer.includeInterviewDetails !== undefined) {
+                        candidateIncludeInterviews = Boolean(matchedTransfer.includeInterviewDetails);
+                    } else if (matchedTransfer && matchedTransfer.shareInterviewDetails !== undefined) {
+                        candidateIncludeInterviews = Boolean(matchedTransfer.shareInterviewDetails);
+                    }
+                }
 
-                if (isEmailDuplicate || isMobileDuplicate) {
-                    results.skipped.push({
+                const existingTarget = (candidateEmail && targetCandidatesByEmail.get(candidateEmail))
+                    || (candidateMobile && targetCandidatesByMobile.get(candidateMobile));
+
+                const sourceReq = sourceReqMap.get(String(candidate.hiringRequestId));
+
+                const candidateData = buildTransferredCandidateData(
+                    candidate,
+                    targetRequisitionId,
+                    req.companyId,
+                    req.user,
+                    candidateIncludeInterviews,
+                    sourceReq,
+                    Boolean(existingTarget)
+                );
+
+                if (existingTarget) {
+                    // Update existing candidate in target requisition with latest details
+                    if (!candidateIncludeInterviews) {
+                        delete candidateData.interviewRounds;
+                        delete candidateData.skillRatings;
+                        delete candidateData.status;
+                        delete candidateData.profileShared;
+                        delete candidateData.decision;
+                        delete candidateData.phase2Decision;
+                        delete candidateData.phase2InterviewStatus;
+                        delete candidateData.phase2InterviewerFeedback;
+                        delete candidateData.phase3Decision;
+                        delete candidateData.phaseHistory;
+                        delete candidateData.currentPhaseId;
+                        delete candidateData.currentPhaseOrder;
+                        delete candidateData.currentPhaseStatus;
+                        delete candidateData.currentPhaseName;
+                    }
+
+                    Object.assign(existingTarget, candidateData);
+                    await existingTarget.save();
+
+                    await Candidate.findByIdAndUpdate(candidate._id, {
+                        isTransferred: true,
+                        transferredTo: targetRequisitionId
+                    });
+
+                    results.transferred.push({
                         candidateId: candidate._id,
+                        newCandidateId: existingTarget._id,
                         name: candidate.candidateName,
-                        reason: 'Candidate with matching email or phone already exists in target requisition'
+                        isUpdated: true
                     });
                     continue;
                 }
 
-                const newCandidate = new Candidate({
-                    hiringRequestId: targetRequisitionId,
-                    companyId: req.companyId,
-                    applicantId: candidate.applicantId || undefined,
-                    publicApplicationId: candidate.publicApplicationId || undefined,
-                    profileSnapshot: candidate.profileSnapshot || undefined,
-                    candidateName: candidate.candidateName,
-                    email: candidateEmail,
-                    mobile: candidateMobile,
-                    source: candidate.source || 'Transfer',
-                    totalExperience: candidate.totalExperience || 0,
-                    currentCTC: candidate.currentCTC || '',
-                    expectedCTC: candidate.expectedCTC || '',
-                    noticePeriod: candidate.noticePeriod || '',
-                    resumeUrl: candidate.resumeUrl || '',
-                    resumePublicId: candidate.resumePublicId || '',
-                    uploadedBy: req.user._id,
-                    profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
-                    remark: `Bulk transferred from ${candidate.hiringRequestId}. Original remark: ${candidate.remark || 'None'}`,
-                    status: 'Total Sourced',
-                    profileShared: false,
-                    decision: 'None',
-                    phase2Decision: 'None',
-                    phase3Decision: 'None',
-                    isTransferred: true,
-                    transferredFrom: candidate.hiringRequestId
-                });
-
+                const newCandidate = new Candidate(candidateData);
                 await newCandidate.save();
 
-                if (candidateEmail) existingEmails.add(candidateEmail);
-                if (candidateMobile) existingMobiles.add(candidateMobile);
+                await Candidate.findByIdAndUpdate(candidate._id, {
+                    isTransferred: true,
+                    transferredTo: targetRequisitionId
+                });
+
+                if (candidateEmail) targetCandidatesByEmail.set(candidateEmail, newCandidate);
+                if (candidateMobile) targetCandidatesByMobile.set(candidateMobile, newCandidate);
 
                 results.transferred.push({
                     candidateId: candidate._id,
                     newCandidateId: newCandidate._id,
-                    name: candidate.candidateName
+                    name: candidate.candidateName,
+                    isUpdated: false
                 });
 
             } catch (err) {
                 if (err.code === 11000) {
+                    try {
+                        // Fallback: try finding and updating on race condition
+                        const candidateEmail = candidate.email ? String(candidate.email).trim().toLowerCase() : '';
+                        const candidateMobile = candidate.mobile ? String(candidate.mobile).trim() : '';
+                        const fallbackTarget = await Candidate.findOne({
+                            companyId: req.companyId,
+                            hiringRequestId: targetRequisitionId,
+                            $or: [
+                                ...(candidateEmail ? [{ email: candidateEmail }] : []),
+                                ...(candidateMobile ? [{ mobile: candidateMobile }] : [])
+                            ]
+                        });
+                        if (fallbackTarget) {
+                            const sourceReq = sourceReqMap.get(String(candidate.hiringRequestId));
+                            const candidateData = buildTransferredCandidateData(
+                                candidate,
+                                targetRequisitionId,
+                                req.companyId,
+                                req.user,
+                                defaultIncludeInterviewDetails,
+                                sourceReq,
+                                true
+                            );
+                            Object.assign(fallbackTarget, candidateData);
+                            await fallbackTarget.save();
+                            await Candidate.findByIdAndUpdate(candidate._id, {
+                                isTransferred: true,
+                                transferredTo: targetRequisitionId
+                            });
+                            results.transferred.push({
+                                candidateId: candidate._id,
+                                newCandidateId: fallbackTarget._id,
+                                name: candidate.candidateName,
+                                isUpdated: true
+                            });
+                            continue;
+                        }
+                    } catch (innerErr) {
+                        // Fall through to skipped
+                    }
                     results.skipped.push({
                         candidateId: candidate._id,
                         name: candidate.candidateName,
@@ -324,13 +603,30 @@ exports.transferCandidatesBulk = async (req, res) => {
             }
         }
 
+        const updatedCount = results.transferred.filter(t => t.isUpdated).length;
+        const newCount = results.transferred.length - updatedCount;
+
+        let message = `Bulk transfer completed: ${results.transferred.length} candidate(s) processed.`;
+        if (updatedCount > 0 && newCount > 0) {
+            message = `Bulk transfer completed: ${newCount} transferred, ${updatedCount} updated in ${targetReq.requestId}.`;
+        } else if (updatedCount > 0) {
+            message = `Bulk transfer completed: ${updatedCount} candidate(s) updated in ${targetReq.requestId}.`;
+        } else {
+            message = `Bulk transfer completed: ${newCount} candidate(s) transferred to ${targetReq.requestId}.`;
+        }
+
         res.status(200).json({
-            message: `Bulk transfer completed: ${results.transferred.length} transferred, ${results.skipped.length} skipped, ${results.failed.length} failed.`,
+            message,
             targetRequisition: {
                 _id: targetReq._id,
                 requestId: targetReq.requestId,
                 jobTitle: targetReq.roleDetails?.jobTitle
             },
+            transferred: results.transferred.length,
+            newlyTransferred: newCount,
+            updated: updatedCount,
+            skipped: results.skipped.length,
+            failed: results.failed.length,
             results
         });
 
