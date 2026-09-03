@@ -263,7 +263,9 @@ const sanitizePayrollIntegrationSettings = (incoming = {}, current = {}) => ({
     encryptPayloads: toBoolean(incoming?.encryptPayloads, current?.encryptPayloads ?? false),
     encryptionSecret: normalizeTrimmedString(incoming?.encryptionSecret ?? current?.encryptionSecret),
     webhookUrl: normalizeTrimmedString(incoming?.webhookUrl ?? current?.webhookUrl),
-    webhookSecret: normalizeTrimmedString(incoming?.webhookSecret ?? current?.webhookSecret)
+    webhookSecret: normalizeTrimmedString(incoming?.webhookSecret ?? current?.webhookSecret),
+    syncMode: incoming?.syncMode && ['all', 'selected'].includes(incoming.syncMode) ? incoming.syncMode : (current?.syncMode || 'selected'),
+    allowedEmployeeIds: Array.isArray(incoming?.allowedEmployeeIds) ? incoming.allowedEmployeeIds : (current?.allowedEmployeeIds || [])
 });
 
 const sanitizeAttendanceSelfService = (incoming = {}, current = {}) => ({
@@ -711,8 +713,8 @@ const updateOwnAttendanceSettings = async (req, res) => {
 // GET /api/admin/company-settings/branding
 const getOwnBrandingSettings = async (req, res) => {
     try {
-        const company = req.company || await Company.findById(req.companyId)
-            .select('name settings.logo settings.logoPublicId settings.workspaceBranding settings.profile')
+        const company = await Company.findById(req.companyId)
+            .select('name subdomain email contactPerson contactPhone industry country timezone address settings.logo settings.logoPublicId settings.workspaceBranding settings.profile')
             .lean();
 
         if (!company) {
@@ -720,6 +722,15 @@ const getOwnBrandingSettings = async (req, res) => {
         }
 
         return res.json({
+            name: company.name || '',
+            subdomain: company.subdomain || '',
+            email: company.email || '',
+            contactPerson: company.contactPerson || '',
+            contactPhone: company.contactPhone || '',
+            industry: company.industry || '',
+            country: company.country || '',
+            timezone: company.timezone || 'Asia/Kolkata',
+            address: typeof company.address === 'string' ? company.address : (company.address?.line1 ? `${company.address.line1}${company.address.city ? ', ' + company.address.city : ''}${company.address.state ? ', ' + company.address.state : ''}${company.address.zip ? ' - ' + company.address.zip : ''}` : ''),
             displayMode: normalizeWorkspaceLogoMode(company?.settings?.workspaceBranding?.displayMode),
             logoAlignment: normalizeWorkspaceLogoAlignment(company?.settings?.workspaceBranding?.logoAlignment),
             logoSize: normalizeWorkspaceLogoSize(company?.settings?.workspaceBranding?.logoSize),
@@ -741,19 +752,31 @@ const updateOwnBrandingSettings = async (req, res) => {
         const logoSize = normalizeWorkspaceLogoSize(req.body?.logoSize);
         const requireCameraCapture = Boolean(req.body?.requireCameraCapture);
 
+        const updateFields = {
+            'settings.workspaceBranding.displayMode': displayMode,
+            'settings.workspaceBranding.logoAlignment': logoAlignment,
+            'settings.workspaceBranding.logoSize': logoSize,
+            'settings.profile.requireCameraCapture': requireCameraCapture
+        };
+
+        if (req.body?.name !== undefined && typeof req.body.name === 'string' && req.body.name.trim()) {
+            updateFields.name = req.body.name.trim();
+        }
+        if (req.body?.contactPerson !== undefined) updateFields.contactPerson = String(req.body.contactPerson).trim();
+        if (req.body?.contactPhone !== undefined) updateFields.contactPhone = String(req.body.contactPhone).trim();
+        if (req.body?.industry !== undefined) updateFields.industry = String(req.body.industry).trim();
+        if (req.body?.country !== undefined) updateFields.country = String(req.body.country).trim();
+        if (req.body?.timezone !== undefined) updateFields.timezone = String(req.body.timezone).trim();
+        if (req.body?.address !== undefined) {
+            updateFields.address = typeof req.body.address === 'string' ? req.body.address.trim() : req.body.address;
+        }
+
         const company = await Company.findByIdAndUpdate(
             req.companyId,
-            {
-                $set: {
-                    'settings.workspaceBranding.displayMode': displayMode,
-                    'settings.workspaceBranding.logoAlignment': logoAlignment,
-                    'settings.workspaceBranding.logoSize': logoSize,
-                    'settings.profile.requireCameraCapture': requireCameraCapture
-                }
-            },
+            { $set: updateFields },
             {
                 new: true,
-                select: 'settings.logo settings.workspaceBranding settings.profile'
+                select: 'name subdomain email contactPerson contactPhone industry country timezone address settings.logo settings.workspaceBranding settings.profile'
             }
         ).lean();
 
@@ -764,7 +787,16 @@ const updateOwnBrandingSettings = async (req, res) => {
         invalidateTenantCache(req.company?.subdomain || company?.subdomain);
 
         return res.json({
-            message: 'Company branding updated successfully.',
+            message: 'Company settings updated successfully.',
+            name: company.name || '',
+            subdomain: company.subdomain || '',
+            email: company.email || '',
+            contactPerson: company.contactPerson || '',
+            contactPhone: company.contactPhone || '',
+            industry: company.industry || '',
+            country: company.country || '',
+            timezone: company.timezone || 'Asia/Kolkata',
+            address: company.address || '',
             displayMode,
             logoAlignment,
             logoSize,

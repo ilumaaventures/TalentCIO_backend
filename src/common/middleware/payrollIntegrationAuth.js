@@ -26,9 +26,9 @@ const safeTokenCompare = (providedToken, expectedToken) => {
 
 const protectPayrollIntegration = async (req, res, next) => {
     try {
-        const externalTenantId = String(req.query.tenantId || '').trim();
+        const externalTenantId = String(req.query.tenantId || req.body?.tenantId || '').trim();
         if (!externalTenantId) {
-            return res.status(400).json({ message: 'tenantId query parameter is required.' });
+            return res.status(400).json({ message: 'tenantId query parameter or body field is required.' });
         }
 
         const token = extractBearerToken(req);

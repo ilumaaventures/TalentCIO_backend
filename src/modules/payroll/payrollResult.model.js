@@ -10,7 +10,8 @@ const payrollResultSchema = new mongoose.Schema({
     employeeCode:    { type: String, required: true },
     month:           { type: Number, required: true, min: 1, max: 12 },
     year:            { type: Number, required: true },
-    status:          { type: String, default: 'paid', enum: ['paid'] },
+    status:          { type: String, default: 'paid', enum: ['paid', 'processed'] },
+    payslipUrl:      { type: String, default: '' },
 
     netSalary:       { type: Number, default: 0 },
     grossSalary:     { type: Number, default: 0 },

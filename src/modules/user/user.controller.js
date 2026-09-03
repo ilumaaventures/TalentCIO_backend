@@ -692,7 +692,7 @@ const getMyself = async (req, res) => {
             req.company
                 ? Promise.resolve(req.company)
                 : Company.findById(effectiveCompanyId)
-                    .select('name subdomain email timezone status enabledModules settings logo themeColor planId')
+                    .select('name subdomain email timezone status enabledModules settings logo themeColor planId address contactPerson')
                     .lean(),
             HiringRequest.countDocuments({
                 companyId: effectiveCompanyId,
