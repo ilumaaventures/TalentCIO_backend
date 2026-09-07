@@ -8,7 +8,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
-const { formatDate, formatCurrency } = require('../utils/onboardingHelpers');
+const { formatDate, formatCurrency, buildSalaryTableXml, preprocessDocxXml } = require('../utils/onboardingHelpers');
 
 const getTemplateContent = async (customUrl, defaultPath) => {
     try {
@@ -27,6 +27,37 @@ const getTemplateContent = async (customUrl, defaultPath) => {
 };
 
 exports.getTemplateContent = getTemplateContent;
+
+const DUMMY_EARNINGS = [
+    { name: 'Basic Salary', monthly: '₹ 1,00,000', annual: '₹ 12,00,000' },
+    { name: 'House Rent Allowance (HRA)', monthly: '₹ 40,000', annual: '₹ 4,80,000' },
+    { name: 'Special Allowance', monthly: '₹ 68,333', annual: '₹ 8,20,000' }
+];
+
+const DUMMY_CONTRIBUTIONS = [
+    { name: 'PF Employer Contribution', monthly: '₹ 1,800', annual: '₹ 21,600' },
+    { name: 'Gratuity Provision', monthly: '₹ 4,808', annual: '₹ 57,696' }
+];
+
+const DUMMY_DEDUCTIONS = [
+    { name: 'PF Employee Contribution', monthly: '₹ 1,800', annual: '₹ 21,600' },
+    { name: 'Professional Tax (PT)', monthly: '₹ 200', annual: '₹ 2,400' }
+];
+
+const DUMMY_TOTALS = {
+    monthlyGross: '₹ 2,08,333',
+    annualGross: '₹ 25,00,000',
+    monthlyContributions: '₹ 6,608',
+    annualContributions: '₹ 79,296',
+    monthlyCTC: '₹ 2,15,000',
+    annualCTC: '₹ 25,79,296',
+    monthlyDeductions: '₹ 2,000',
+    annualDeductions: '₹ 24,000',
+    monthlyNet: '₹ 2,06,333',
+    annualNet: '₹ 24,76,000'
+};
+
+const DUMMY_SALARY_TABLE_XML = buildSalaryTableXml(DUMMY_EARNINGS, DUMMY_CONTRIBUTIONS, DUMMY_DEDUCTIONS, DUMMY_TOTALS);
 
 const DUMMY_PREVIEW_DATA = {
     offer_date: formatDate(new Date()),
@@ -48,6 +79,16 @@ const DUMMY_PREVIEW_DATA = {
     special_allowance: '₹ 68,333',
     monthly_gross: '₹ 2,08,333',
     monthly_ctc: '₹ 2,15,000',
+    salary_table: DUMMY_SALARY_TABLE_XML,
+    salaryTable: DUMMY_SALARY_TABLE_XML,
+    earnings_breakdown: DUMMY_EARNINGS,
+    contributions_breakdown: DUMMY_CONTRIBUTIONS,
+    deductions_breakdown: DUMMY_DEDUCTIONS,
+    all_components: [
+        ...DUMMY_EARNINGS.map(e => ({ ...e, category: 'Earnings' })),
+        ...DUMMY_CONTRIBUTIONS.map(c => ({ ...c, category: 'Employer Contributions' })),
+        ...DUMMY_DEDUCTIONS.map(d => ({ ...d, category: 'Employee Deductions' }))
+    ],
     hr_name: 'Sarah Smith',
     hr_designation: 'HR Director',
     declaration_date: formatDate(new Date()),
@@ -301,6 +342,15 @@ exports.getTemplatePreview = async (req, res) => {
 
         const content = await getTemplateContent(customUrl, defaultPath);
         const zip = new PizZip(content);
+
+        try {
+            let docXml = zip.file('word/document.xml').asText();
+            docXml = preprocessDocxXml(docXml);
+            zip.file('word/document.xml', docXml);
+        } catch (xmlErr) {
+            console.error('Error preprocessing template preview document.xml:', xmlErr);
+        }
+
         const doc = new Docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,

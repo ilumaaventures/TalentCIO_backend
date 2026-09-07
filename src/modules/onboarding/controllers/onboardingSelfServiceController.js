@@ -287,7 +287,15 @@ exports.saveSection = async (req, res) => {
         }
 
         if (section === 'personalDetails') {
-            employee.personalDetails = { ...employee.personalDetails, ...data, isComplete: true };
+            const cleanData = { ...data };
+            if (cleanData.dateOfBirth === '' || cleanData.dateOfBirth === null) {
+                delete cleanData.dateOfBirth;
+                employee.personalDetails.dateOfBirth = undefined;
+            } else if (cleanData.dateOfBirth) {
+                const parsedDob = new Date(cleanData.dateOfBirth);
+                cleanData.dateOfBirth = isNaN(parsedDob.getTime()) ? undefined : parsedDob;
+            }
+            employee.personalDetails = { ...employee.personalDetails, ...cleanData, isComplete: true };
         } else if (section === 'emergencyContact') {
             employee.emergencyContact = { ...employee.emergencyContact, ...data, isComplete: true };
         } else if (section === 'bankDetails') {

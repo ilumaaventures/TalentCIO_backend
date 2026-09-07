@@ -44,48 +44,30 @@ exports.addEmployee = async (req, res) => {
             { type: 'character_certificate', label: 'Character Certificate' }
         ];
 
-        let calculatedSalary = salary || {};
-        if (calculatedSalary && (calculatedSalary.annualCTC || calculatedSalary.hourlyRate)) {
+        let calculatedSalary = salary ? { ...salary } : {};
+        if (calculatedSalary && Object.keys(calculatedSalary).length > 0) {
             try {
                 const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
                 if (config) {
-                    const payType = calculatedSalary.payType || 'salaried';
-                    let annualCTC = 0;
-                    let monthlyCTC = 0;
+                    let annualCTC = parseFloat(String(calculatedSalary.annualCTC || 0).replace(/[^0-9.]/g, '')) || 0;
+                    let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || 0).replace(/[^0-9.]/g, '')) || 0;
 
-                    if (payType === 'hourly') {
-                        const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
-                        const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
-                        monthlyCTC = hourlyRate * hoursWorked;
-                        annualCTC = monthlyCTC * 12;
-
-                        calculatedSalary.annualCTC = String(annualCTC);
-                        calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                        calculatedSalary.basic = String(Math.round(monthlyCTC));
-                        calculatedSalary.hra = '0';
-                        calculatedSalary.specialAllowance = '0';
-                        calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                    } else if (payType === 'flat') {
-                        monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
-                        annualCTC = monthlyCTC * 12;
-
-                        calculatedSalary.annualCTC = String(annualCTC);
-                        calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                        calculatedSalary.basic = String(Math.round(monthlyCTC));
-                        calculatedSalary.hra = '0';
-                        calculatedSalary.specialAllowance = '0';
-                        calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                    } else {
-                        annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
+                    if (annualCTC > 0 && !monthlyCTC) {
                         monthlyCTC = annualCTC / 12;
-
-                        processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
+                    } else if (monthlyCTC > 0 && !annualCTC) {
+                        annualCTC = monthlyCTC * 12;
                     }
+
+                    processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
                 }
             } catch (err) {
                 console.error('Error calculating candidate salary on backend add:', err);
             }
         }
+
+        const cleanJoiningDate = (joiningDate && typeof joiningDate === 'string' && joiningDate.trim()) ? new Date(joiningDate) : (joiningDate instanceof Date ? joiningDate : undefined);
+        const cleanOfferDate = (offerDate && typeof offerDate === 'string' && offerDate.trim()) ? new Date(offerDate) : (offerDate instanceof Date ? offerDate : undefined);
+        const cleanDeadline = (documentDeadline && typeof documentDeadline === 'string' && documentDeadline.trim()) ? new Date(documentDeadline) : (documentDeadline instanceof Date ? documentDeadline : undefined);
 
         const employee = new OnboardingEmployee({
             tempEmployeeId,
@@ -97,14 +79,14 @@ exports.addEmployee = async (req, res) => {
             phone: phone || '',
             designation: designation || '',
             department: department || '',
-            joiningDate: joiningDate || undefined,
-            offerDate: offerDate || undefined,
-            documentDeadline: documentDeadline || undefined,
+            joiningDate: cleanJoiningDate,
+            offerDate: cleanOfferDate,
+            documentDeadline: cleanDeadline,
             workLocation: workLocation || '',
             address: address || '',
             probationPeriod: probationPeriod || '',
             salary: calculatedSalary,
-            credentialsExpireAt: documentDeadline || undefined,
+            credentialsExpireAt: cleanDeadline,
             offerLetterUrl: offerLetterUrl || '',
             offerLetterPublicId: offerLetterPublicId || '',
             documents: defaultDocuments,
@@ -115,6 +97,7 @@ exports.addEmployee = async (req, res) => {
             auditLog: [{ action: 'CREATED', details: `Created by ${req.user.firstName || 'Admin'}. ID: ${tempEmployeeId}, Password: ${rawPassword}` }]
         });
 
+        employee.markModified('salary');
         await employee.save();
 
         res.status(201).json({
@@ -143,44 +126,46 @@ exports.addEmployee = async (req, res) => {
 exports.bulkAddEmployees = async (req, res) => {
     try {
         const { employees } = req.body;
+
         if (!Array.isArray(employees) || employees.length === 0) {
-            return res.status(400).json({ message: 'An array of employees is required' });
+            return res.status(400).json({ message: 'Employees array is required' });
         }
 
         const results = [];
+        const defaultDocuments = [
+            { type: 'resume', label: 'Updated Resume' },
+            { type: 'aadhaar_front', label: 'Aadhaar Card (Front)' },
+            { type: 'aadhaar_back', label: 'Aadhaar Card (Back)' },
+            { type: 'pan', label: 'PAN Card' },
+            { type: 'salary_slip', label: 'Salary Slip' },
+            { type: 'passport', label: 'Passport (Optional)' },
+            { type: '10th_marksheet', label: '10th Marksheet / Certificate' },
+            { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
+            { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
+            { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
+            { type: 'experience_certificate', label: 'Previous Experience Certificate' },
+            { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
+            { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
+            { type: 'character_certificate', label: 'Character Certificate' }
+        ];
+
         for (const empData of employees) {
             try {
                 const { firstName, lastName, email, phone, designation, department, joiningDate } = empData;
+
                 if (!firstName || !email) {
-                    results.push({ email: email || 'N/A', status: 'Failed', reason: 'First name and email required' });
+                    results.push({ email: email || 'N/A', status: 'Failed', reason: 'First name and email are required' });
                     continue;
                 }
 
                 const existing = await OnboardingEmployee.findOne({ email, companyId: req.companyId });
                 if (existing) {
-                    results.push({ email, status: 'Skipped', reason: 'Email already exists' });
+                    results.push({ email, status: 'Failed', reason: 'Email already exists' });
                     continue;
                 }
 
                 const tempEmployeeId = await OnboardingEmployee.generateTempId(req.companyId);
                 const rawPassword = generateTempPassword();
-
-                const defaultDocuments = [
-                    { type: 'resume', label: 'Updated Resume' },
-                    { type: 'aadhaar_front', label: 'Aadhaar Card (Front)' },
-                    { type: 'aadhaar_back', label: 'Aadhaar Card (Back)' },
-                    { type: 'pan', label: 'PAN Card' },
-                    { type: 'salary_slip', label: 'Salary Slip' },
-                    { type: 'passport', label: 'Passport (Optional)' },
-                    { type: '10th_marksheet', label: '10th Marksheet / Certificate' },
-                    { type: '12th_marksheet', label: '12th Marksheet / Certificate' },
-                    { type: 'graduation', label: 'Graduation Marksheet / Certificate' },
-                    { type: 'relieving_letter', label: 'Previous Employer Relieving Letter' },
-                    { type: 'experience_certificate', label: 'Previous Experience Certificate' },
-                    { type: 'passport_photo', label: 'Recent Passport-Size Photograph' },
-                    { type: 'live_photo', label: 'Live Photograph', requireLivePhoto: true },
-                    { type: 'character_certificate', label: 'Character Certificate' }
-                ];
 
                 const employee = new OnboardingEmployee({
                     tempEmployeeId,
@@ -192,7 +177,7 @@ exports.bulkAddEmployees = async (req, res) => {
                     phone: phone || '',
                     designation: designation || '',
                     department: department || '',
-                    joiningDate: joiningDate || undefined,
+                    joiningDate: joiningDate ? new Date(joiningDate) : undefined,
                     documents: defaultDocuments,
                     companyId: req.companyId,
                     createdBy: req.user._id,
@@ -283,6 +268,7 @@ exports.getOnboardingEmployee = async (req, res) => {
 
         const employeeObj = employee.toObject();
         delete employeeObj.pendingCredentialPassword;
+        delete employeeObj.tempPassword;
 
         const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
         const companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
@@ -325,62 +311,81 @@ exports.updateEmployee = async (req, res) => {
             }
         }
 
-        const allowedFields = ['firstName', 'lastName', 'phone', 'designation', 'department', 'joiningDate', 'offerDate', 'documentDeadline', 'workLocation', 'address', 'probationPeriod', 'salary', 'status', 'selectionDraft'];
-
-        allowedFields.forEach(field => {
+        // Handle Date fields safely to prevent Mongoose CastErrors with empty strings
+        const dateFields = ['joiningDate', 'offerDate', 'documentDeadline'];
+        for (const field of dateFields) {
             if (req.body[field] !== undefined) {
-                if (field === 'salary' && req.body.salary) {
-                    let calculatedSalary = { ...req.body.salary };
-                    try {
-                        const PayrollConfig = require('../../payroll/payrollConfig.model');
-                        PayrollConfig.findOne({ companyId: req.companyId }).then(config => {
-                            if (config) {
-                                const payType = calculatedSalary.payType || 'salaried';
-                                let annualCTC = 0;
-                                let monthlyCTC = 0;
-
-                                if (payType === 'hourly') {
-                                    const hourlyRate = parseFloat(calculatedSalary.hourlyRate) || 0;
-                                    const hoursWorked = parseFloat(calculatedSalary.hoursWorked) || 160;
-                                    monthlyCTC = hourlyRate * hoursWorked;
-                                    annualCTC = monthlyCTC * 12;
-
-                                    calculatedSalary.annualCTC = String(annualCTC);
-                                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                                    calculatedSalary.basic = String(Math.round(monthlyCTC));
-                                    calculatedSalary.hra = '0';
-                                    calculatedSalary.specialAllowance = '0';
-                                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                                } else if (payType === 'flat') {
-                                    monthlyCTC = parseFloat(calculatedSalary.flatSalary || calculatedSalary.monthlyCTC) || 0;
-                                    annualCTC = monthlyCTC * 12;
-
-                                    calculatedSalary.annualCTC = String(annualCTC);
-                                    calculatedSalary.monthlyCTC = String(Math.round(monthlyCTC));
-                                    calculatedSalary.basic = String(Math.round(monthlyCTC));
-                                    calculatedSalary.hra = '0';
-                                    calculatedSalary.specialAllowance = '0';
-                                    calculatedSalary.monthlyGross = String(Math.round(monthlyCTC));
-                                } else {
-                                    annualCTC = parseFloat(String(calculatedSalary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
-                                    monthlyCTC = annualCTC / 12;
-
-                                    processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
-                                }
-                            }
-                        }).catch(e => console.error('Error auto-calc salary:', e));
-                    } catch (e) {
-                        console.error('Error requiring PayrollConfig:', e);
-                    }
-                    employee.salary = calculatedSalary;
+                const rawVal = req.body[field];
+                if (!rawVal || (typeof rawVal === 'string' && rawVal.trim() === '')) {
+                    employee[field] = undefined;
                 } else {
-                    employee[field] = req.body[field];
+                    const parsed = new Date(rawVal);
+                    employee[field] = isNaN(parsed.getTime()) ? undefined : parsed;
                 }
             }
-        });
+        }
 
-        if (req.body.documentDeadline) {
-            employee.credentialsExpireAt = new Date(req.body.documentDeadline);
+        if (req.body.documentDeadline !== undefined) {
+            const rawDeadline = req.body.documentDeadline;
+            if (!rawDeadline || (typeof rawDeadline === 'string' && rawDeadline.trim() === '')) {
+                employee.credentialsExpireAt = undefined;
+            } else {
+                const parsed = new Date(rawDeadline);
+                employee.credentialsExpireAt = isNaN(parsed.getTime()) ? undefined : parsed;
+            }
+        }
+
+        // Standard string/scalar fields
+        const scalarFields = [
+            'firstName', 'lastName', 'phone', 'designation', 'department',
+            'workLocation', 'address', 'probationPeriod', 'status', 'selectionDraft'
+        ];
+        for (const field of scalarFields) {
+            if (req.body[field] !== undefined) {
+                employee[field] = req.body[field];
+            }
+        }
+
+        // Personal & bank details if provided
+        if (req.body.personalDetails && typeof req.body.personalDetails === 'object') {
+            const cleanPersonal = { ...req.body.personalDetails };
+            if (cleanPersonal.dateOfBirth === '' || cleanPersonal.dateOfBirth === null) {
+                delete cleanPersonal.dateOfBirth;
+            } else if (cleanPersonal.dateOfBirth) {
+                const parsedDob = new Date(cleanPersonal.dateOfBirth);
+                cleanPersonal.dateOfBirth = isNaN(parsedDob.getTime()) ? undefined : parsedDob;
+            }
+            employee.personalDetails = { ...(employee.personalDetails || {}), ...cleanPersonal };
+        }
+        if (req.body.emergencyContact && typeof req.body.emergencyContact === 'object') {
+            employee.emergencyContact = { ...(employee.emergencyContact || {}), ...req.body.emergencyContact };
+        }
+        if (req.body.bankDetails && typeof req.body.bankDetails === 'object') {
+            employee.bankDetails = { ...(employee.bankDetails || {}), ...req.body.bankDetails };
+        }
+
+        // Handle Salary with full asynchronous strategy engine calculation
+        if (req.body.salary && typeof req.body.salary === 'object') {
+            let calculatedSalary = { ...(employee.salary || {}), ...req.body.salary };
+            try {
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
+                if (config) {
+                    let annualCTC = parseFloat(String(calculatedSalary.annualCTC || 0).replace(/[^0-9.]/g, '')) || 0;
+                    let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || 0).replace(/[^0-9.]/g, '')) || 0;
+
+                    if (annualCTC > 0 && !monthlyCTC) {
+                        monthlyCTC = annualCTC / 12;
+                    } else if (monthlyCTC > 0 && !annualCTC) {
+                        annualCTC = monthlyCTC * 12;
+                    }
+
+                    processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
+                }
+            } catch (salaryErr) {
+                console.error('Error auto-calc salary on updateEmployee:', salaryErr);
+            }
+            employee.salary = calculatedSalary;
+            employee.markModified('salary');
         }
 
         employee.auditLog.push({
@@ -389,12 +394,23 @@ exports.updateEmployee = async (req, res) => {
         });
 
         await employee.save();
-        res.json({ message: 'Employee updated successfully', employee });
+
+        const employeeObj = employee.toObject();
+        delete employeeObj.pendingCredentialPassword;
+        delete employeeObj.tempPassword;
+
+        const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const companyDynamicTemplates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const companyPolicies = company?.settings?.onboarding?.policies || [];
+
+        employeeObj.companyDynamicTemplates = formatEmployeeDynamicTemplates(employeeObj, companyDynamicTemplates);
+        employeeObj.companyPolicies = companyPolicies;
+
+        res.json({ message: 'Employee updated successfully', employee: employeeObj });
     } catch (error) {
         console.error('Error updating onboarding employee:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
-
 };
 
 exports.regenerateCredentials = async (req, res) => {

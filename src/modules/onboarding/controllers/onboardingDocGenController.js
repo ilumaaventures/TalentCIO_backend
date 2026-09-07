@@ -4,20 +4,31 @@ const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const path = require('path');
 const { getTemplateContent } = require('./onboardingSettingsController');
-const { formatDate, formatCurrency } = require('../utils/onboardingHelpers');
+const { formatDate, formatCurrency, buildSalaryTableXml, preprocessDocxXml } = require('../utils/onboardingHelpers');
 
 const getSalaryBreakups = async (employee) => {
     const breakups = {};
-    if (!employee.salary || !employee.salary.annualCTC) return breakups;
+    if (!employee || !employee.salary) return breakups;
+
+    const rawAnnual = employee.salary.annualCTC;
+    const rawMonthly = employee.salary.monthlyCTC || employee.salary.flatSalary;
+    let annualCTC = parseFloat(String(rawAnnual || 0).replace(/[^0-9.]/g, '')) || 0;
+    let monthlyCTC = parseFloat(String(rawMonthly || 0).replace(/[^0-9.]/g, '')) || 0;
+
+    if (!annualCTC && monthlyCTC > 0) annualCTC = monthlyCTC * 12;
+    if (!monthlyCTC && annualCTC > 0) monthlyCTC = annualCTC / 12;
+
+    if (annualCTC <= 0 && monthlyCTC <= 0) {
+        breakups['salary_table'] = '';
+        breakups['salaryTable'] = '';
+        return breakups;
+    }
 
     try {
         const PayrollConfig = require('../../payroll/payrollConfig.model');
         const { processCalculatedSalary, buildPayrollSnapshot } = require('../../payroll/payrollMath');
         const config = await PayrollConfig.findOne({ companyId: employee.companyId });
         if (config) {
-            const annualCTC = parseFloat(String(employee.salary.annualCTC).replace(/[^0-9.]/g, '')) || 0;
-            const monthlyCTC = annualCTC / 12;
-
             const { master } = processCalculatedSalary(employee.salary || {}, config, annualCTC, monthlyCTC);
             if (master) {
                 const earningsList = [];
@@ -140,6 +151,36 @@ const getSalaryBreakups = async (employee) => {
                 deductionsList.forEach(item => allComponentsList.push({ ...item, category: 'Employee Deductions' }));
                 breakups['all_components'] = allComponentsList;
 
+                // Totals for table
+                const totalMonthlyGross = master.totalEarnings || monthlyCTC;
+                const totalAnnualGross = totalMonthlyGross * 12;
+
+                const totalMonthlyContrib = (master.pfEmployer || 0) + (master.esiEmployer || 0) + (master.gratuity || 0) + (master.lwfEmployer || 0) + (master.insurance || 0) + (master.employerNPS || 0);
+                const totalAnnualContrib = totalMonthlyContrib * 12;
+
+                const totalMonthlyDeductions = (payroll?.deductions?.pfEmployee || 0) + (payroll?.deductions?.esiEmployee || 0) + (payroll?.deductions?.lwfEmployee || 0) + (payroll?.deductions?.professionalTax || 0) + (payroll?.deductions?.tds || 0);
+                const totalAnnualDeductions = totalMonthlyDeductions * 12;
+
+                const netMonthly = master.netTakeHome || Math.max(0, totalMonthlyGross - totalMonthlyDeductions);
+                const netAnnual = netMonthly * 12;
+
+                const totals = {
+                    monthlyGross: formatCurrency(totalMonthlyGross),
+                    annualGross: formatCurrency(totalAnnualGross),
+                    monthlyContributions: formatCurrency(totalMonthlyContrib),
+                    annualContributions: formatCurrency(totalAnnualContrib),
+                    monthlyCTC: formatCurrency(monthlyCTC),
+                    annualCTC: formatCurrency(annualCTC),
+                    monthlyDeductions: formatCurrency(totalMonthlyDeductions),
+                    annualDeductions: formatCurrency(totalAnnualDeductions),
+                    monthlyNet: formatCurrency(netMonthly),
+                    annualNet: formatCurrency(netAnnual)
+                };
+
+                const salaryTableXml = buildSalaryTableXml(earningsList, contributionsList, deductionsList, totals);
+                breakups['salary_table'] = salaryTableXml;
+                breakups['salaryTable'] = salaryTableXml;
+
                 if (master.earningsMap) {
                     Object.entries(master.earningsMap).forEach(([id, val]) => {
                         breakups[id] = formatCurrency(val);
@@ -166,36 +207,31 @@ const getSalaryBreakups = async (employee) => {
     } catch (err) {
         console.error('Error computing dynamic onboarding salary breakups:', err);
     }
+
+    // Fallback if no table was built yet (e.g. no PayrollConfig)
+    if (!breakups['salary_table'] && (annualCTC > 0 || monthlyCTC > 0)) {
+        const basic = Math.round(monthlyCTC * 0.5);
+        const hra = Math.round(basic * 0.5);
+        const special = Math.max(0, monthlyCTC - basic - hra);
+        const fallbackEarnings = [
+            { name: 'Basic Salary', monthly: formatCurrency(basic), annual: formatCurrency(basic * 12) },
+            { name: 'House Rent Allowance (HRA)', monthly: formatCurrency(hra), annual: formatCurrency(hra * 12) },
+            { name: 'Special Allowance', monthly: formatCurrency(special), annual: formatCurrency(special * 12) }
+        ];
+        const fallbackTotals = {
+            monthlyGross: formatCurrency(monthlyCTC),
+            annualGross: formatCurrency(annualCTC),
+            monthlyCTC: formatCurrency(monthlyCTC),
+            annualCTC: formatCurrency(annualCTC),
+            monthlyNet: formatCurrency(monthlyCTC),
+            annualNet: formatCurrency(annualCTC)
+        };
+        const fallbackTable = buildSalaryTableXml(fallbackEarnings, [], [], fallbackTotals);
+        breakups['salary_table'] = fallbackTable;
+        breakups['salaryTable'] = fallbackTable;
+    }
+
     return breakups;
-};
-
-const preprocessDocxXml = (xmlString) => {
-    return xmlString.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
-        if (paragraphHtml.includes('{@')) {
-            const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
-            if (rawTagMatch) {
-                const tag = rawTagMatch[1];
-                const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
-                const pPr = pPrMatch ? pPrMatch[0] : '';
-                let cleanedHtml = paragraphHtml.replace(tag, '');
-
-                let hasActualText = false;
-                const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
-                tMatches.forEach(match => {
-                    if (match[1].trim() !== '') {
-                        hasActualText = true;
-                    }
-                });
-
-                if (!hasActualText) {
-                    return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
-                }
-
-                return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
-            }
-        }
-        return paragraphHtml;
-    });
 };
 
 const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaultPath = null) => {
