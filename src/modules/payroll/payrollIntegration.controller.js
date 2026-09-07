@@ -46,8 +46,16 @@ const countLeaveDaysInRange = ({
 };
 
 const resolveMonthRange = (month, year) => {
-    const parsedMonth = Number.parseInt(month, 10);
-    const parsedYear = Number.parseInt(year, 10);
+    let parsedMonth = Number.parseInt(month, 10);
+    let parsedYear = Number.parseInt(year, 10);
+
+    if (typeof month === 'string' && month.includes('-')) {
+        const parts = month.split('-');
+        if (parts.length === 2) {
+            parsedYear = Number.parseInt(parts[0], 10);
+            parsedMonth = Number.parseInt(parts[1], 10);
+        }
+    }
 
     if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
         return null;
@@ -70,7 +78,7 @@ const resolveMonthRange = (month, year) => {
     const start = parseDateAsIST(`${parsedYear}-${paddedMonth}-01`);
     const end = parseDateAsIST(`${nextYear}-${paddedNextMonth}-01`);
 
-    return { start, end };
+    return { start, end, parsedMonth, parsedYear };
 };
 
 
@@ -118,7 +126,7 @@ const getAttendanceSummary = async (req, res) => {
             return res.status(400).json({ message: 'Valid month and year query parameters are required.' });
         }
 
-        const { start, end } = monthRange;
+        const { start, end, parsedMonth, parsedYear } = monthRange;
         // Read weekly off days from company attendance settings.
         // Falls back to ['Sunday'] if not configured so the sync never breaks.
         const weeklyOffs = Array.isArray(req.company?.settings?.attendance?.weeklyOff)
@@ -126,8 +134,17 @@ const getAttendanceSummary = async (req, res) => {
             ? req.company.settings.attendance.weeklyOff
             : ['Sunday'];
 
-        // Bug 7 fix: used to assign working hours for present_only employees who have no clock times
         const companyWorkingHours = req.company?.settings?.attendance?.workingHours || 8;
+
+        // If syncMode is 'selected' and allowedEmployeeIds is configured, restrict by allowed IDs;
+        // otherwise default to all company users so the sync never produces an empty 0-employee result by accident.
+        const isSelectedMode = req.payrollIntegration?.syncMode === 'selected'
+            && Array.isArray(req.payrollIntegration.allowedEmployeeIds)
+            && req.payrollIntegration.allowedEmployeeIds.length > 0;
+
+        const userQuery = isSelectedMode
+            ? { companyId: req.companyId, _id: { $in: req.payrollIntegration.allowedEmployeeIds } }
+            : { companyId: req.companyId };
 
         const [attendanceRecords, approvedLeaves, leaveConfigs, holidays, users] = await Promise.all([
             Attendance.find({
@@ -145,13 +162,7 @@ const getAttendanceSummary = async (req, res) => {
                 companyId: req.companyId,
                 date: { $gte: start, $lt: end }
             }).lean(),
-            User.find(
-                req.payrollIntegration?.syncMode === 'selected'
-                    ? { companyId: req.companyId, _id: { $in: req.payrollIntegration.allowedEmployeeIds || [] } }
-                    : { companyId: req.companyId },
-                null,
-                { includeDeleted: true }
-            ).lean()
+            User.find(userQuery, null, { includeDeleted: true }).lean()
         ]);
 
         const holidayMap = new Map();
@@ -174,26 +185,43 @@ const getAttendanceSummary = async (req, res) => {
             }
         });
 
-        const now = new Date();
-        const parsedMonth = Number.parseInt(month, 10);
-        const parsedYear = Number.parseInt(year, 10);
         const totalDaysInMonth = new Date(parsedYear, parsedMonth, 0).getDate();
+        const paddedMonth = String(parsedMonth).padStart(2, '0');
+        const monthStartStr = `${parsedYear}-${paddedMonth}-01`;
+        const monthEndStr = `${parsedYear}-${paddedMonth}-${String(totalDaysInMonth).padStart(2, '0')}`;
 
-        // Evaluate the full calendar month (e.g. 31 days) so all recorded attendance
-        // entries in the database for days 1..31 are evaluated for payroll sync.
-        const elapsedDays = totalDaysInMonth;
+        // Identify current date in IST for ongoing month check
+        const now = new Date();
+        const nowLocal = toLocalTimezoneRep(now);
+        const todayStr = format(nowLocal, 'yyyy-MM-dd');
+        const isCurrentMonth = (nowLocal.getFullYear() === parsedYear && (nowLocal.getMonth() + 1) === parsedMonth);
+        const currentDayIST = isCurrentMonth ? nowLocal.getDate() : totalDaysInMonth;
+        const elapsedDays = isCurrentMonth ? Math.min(totalDaysInMonth, currentDayIST) : totalDaysInMonth;
 
-        const evalEndPadded = String(elapsedDays).padStart(2, '0');
+        const evalEndPadded = String(totalDaysInMonth).padStart(2, '0');
         const evalEndMonthPadded = String(parsedMonth).padStart(2, '0');
         const evalEnd = parseDateAsIST(`${parsedYear}-${evalEndMonthPadded}-${evalEndPadded}`);
         evalEnd.setSeconds(evalEnd.getSeconds() + (23 * 3600 + 59 * 60 + 59));
 
         const response = users
             .filter((user) => {
-                if (!user.employeeCode) return false;
+                const userIdStr = String(user._id);
+
+                // Exclude users who had not yet joined by the end of this month
+                if (user.joiningDate) {
+                    const joinStr = format(toLocalTimezoneRep(user.joiningDate), 'yyyy-MM-dd');
+                    if (joinStr > monthEndStr) return false;
+                }
+
+                // Exclude users who left before this month started
+                if (user.dateOfLeaving) {
+                    const leaveStr = format(toLocalTimezoneRep(user.dateOfLeaving), 'yyyy-MM-dd');
+                    if (leaveStr < monthStartStr) return false;
+                }
+
                 return user.isActive
-                    || attendanceRecords.some(r => String(r.user?._id || r.user) === String(user._id))
-                    || approvedLeaves.some(l => String(l.user?._id || l.user) === String(user._id));
+                    || attendanceRecords.some(r => String(r.user?._id || r.user) === userIdStr)
+                    || approvedLeaves.some(l => String(l.user?._id || l.user) === userIdStr);
             })
             .map((user) => {
                 const userIdStr = String(user._id);
@@ -227,6 +255,7 @@ const getAttendanceSummary = async (req, res) => {
 
                     const hasJoined = !joiningDateStr || dateStr >= joiningDateStr;
                     const hasLeft = dateOfLeavingStr && dateStr > dateOfLeavingStr;
+                    const isFutureDate = isCurrentMonth && dateStr > todayStr;
 
                     if (hasJoined && !hasLeft) {
                         const isWeeklyOffDay = isDayWeeklyOff(dayName, dateStr, userWeeklyOffs);
@@ -247,12 +276,19 @@ const getAttendanceSummary = async (req, res) => {
                         let workingHours = 0;
 
                         if (attendanceRec) {
-                            if (attendanceRec.attendanceMode === 'present_only' && status === 'PRESENT') {
-                                workingHours = companyWorkingHours;
-                            } else if (attendanceRec.clockIn && attendanceRec.clockOut) {
-                                const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
-                                if (diffMs > 0) {
-                                    workingHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
+                            if (status === 'PRESENT') {
+                                if (attendanceRec.clockIn && attendanceRec.clockOut) {
+                                    const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
+                                    workingHours = diffMs > 0 ? Number((diffMs / (1000 * 60 * 60)).toFixed(2)) : companyWorkingHours;
+                                } else {
+                                    workingHours = companyWorkingHours;
+                                }
+                            } else if (status === 'HALF_DAY') {
+                                if (attendanceRec.clockIn && attendanceRec.clockOut) {
+                                    const diffMs = new Date(attendanceRec.clockOut).getTime() - new Date(attendanceRec.clockIn).getTime();
+                                    workingHours = diffMs > 0 ? Number((diffMs / (1000 * 60 * 60)).toFixed(2)) : Number((companyWorkingHours / 2).toFixed(2));
+                                } else {
+                                    workingHours = Number((companyWorkingHours / 2).toFixed(2));
                                 }
                             }
                         }
@@ -264,7 +300,9 @@ const getAttendanceSummary = async (req, res) => {
                         }
 
                         let dayStatus = 'ABSENT';
-                        if (isWeeklyOffDay) {
+                        if (isFutureDate && !hasEntry && !matchingLeave) {
+                            dayStatus = isWeeklyOffDay ? 'WEEKLY_OFF' : (isHolidayDay ? 'HOLIDAY' : 'UPCOMING');
+                        } else if (isWeeklyOffDay) {
                             dayStatus = 'WEEKLY_OFF';
                         } else if (isHolidayDay) {
                             dayStatus = 'HOLIDAY';
@@ -307,6 +345,8 @@ const getAttendanceSummary = async (req, res) => {
                                     else unpaidLeaves += leaveDays;
                                 }
                             }
+                        } else if (isFutureDate && !hasEntry && !matchingLeave) {
+                            // Future unelapsed days in ongoing month: do not mark absent
                         } else {
                             workingDaysTillDate += 1;
                             totalWorkingHours += workingHours;
@@ -353,7 +393,6 @@ const getAttendanceSummary = async (req, res) => {
                                 }
                             }
                         }
-
                     }
 
                     cursor.setDate(cursor.getDate() + 1);
@@ -369,8 +408,19 @@ const getAttendanceSummary = async (req, res) => {
                     console.warn(`[Validation Warning] user ${user._id}: sum (${sumDays}) != workingDaysTillDate (${workingDaysTillDate})`);
                 }
 
+                const empCode = user.employeeCode || '';
+                const empId = empCode || String(user._id);
+                const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || user.email;
+
                 return {
-                    employeeNumber: user.employeeCode,
+                    employeeId: empId,
+                    employeeCode: empCode,
+                    employeeNumber: empCode || empId,
+                    userId: String(user._id),
+                    email: user.email || '',
+                    fullName,
+                    firstName: user.firstName || '',
+                    lastName: user.lastName || '',
                     totalDaysInMonth,
                     elapsedDays,
                     workingDays: elapsedDays,
@@ -388,9 +438,7 @@ const getAttendanceSummary = async (req, res) => {
                     dailyDetails
                 };
             })
-            // Bug 8 fix: guard against null/undefined employeeCode to prevent TypeError crash
-            // (even though the filter above should prevent it, defensive code avoids a full 500).
-            .sort((left, right) => (left.employeeNumber || '').localeCompare(right.employeeNumber || ''));
+            .sort((left, right) => (left.employeeCode || left.employeeId || '').localeCompare(right.employeeCode || right.employeeId || ''));
 
         const responsePayload = buildEncryptedResponseIfNeeded(response, req.payrollIntegration);
         res.json(responsePayload);

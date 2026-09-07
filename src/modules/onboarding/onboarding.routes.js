@@ -54,8 +54,15 @@ const onboardingController = {
     uploadAndSetTemplate: settingsController.uploadAndSetTemplate,
     deleteBaseTemplate: settingsController.deleteBaseTemplate,
     addPolicy: settingsController.addPolicy,
+    updatePolicy: settingsController.updatePolicy,
     deletePolicy: settingsController.deletePolicy,
     addDynamicTemplate: settingsController.addDynamicTemplate,
+    getDynamicTemplateContent: settingsController.getDynamicTemplateContent,
+    generateTemplatePreviewBuffer: settingsController.generateTemplatePreviewBuffer,
+    generateCandidatePreviewBuffer: docGenController.generateCandidatePreviewBuffer,
+    updateDynamicTemplate: settingsController.updateDynamicTemplate,
+    getEmployeeTemplateContent: settingsController.getEmployeeTemplateContent,
+    updateEmployeeTemplateContent: settingsController.updateEmployeeTemplateContent,
     deleteDynamicTemplate: settingsController.deleteDynamicTemplate,
     getTemplatePreview: settingsController.getTemplatePreview,
     downloadTemplate: settingsController.downloadTemplate,
@@ -186,6 +193,9 @@ router.get('/employees/:id/download', protect, requireOnboardingReview, onboardi
 router.get('/employees/:id/offer-letter', protect, requireOnboardingRequest, onboardingController.generateOfferLetter);
 router.get('/employees/:id/declaration', protect, requireOnboardingRequest, onboardingController.generateDeclaration);
 router.get('/employees/:id/dynamic-template/:templateId', protect, requireOnboardingRequest, onboardingController.generateDynamicTemplate);
+router.get('/employees/:id/templates/:templateId/content', protect, requireOnboardingRequest, onboardingController.getEmployeeTemplateContent);
+router.post('/employees/:id/templates/:templateId/preview-buffer', protect, requireOnboardingRequest, onboardingController.generateCandidatePreviewBuffer);
+router.put('/employees/:id/templates/:templateId', protect, requireOnboardingRequest, onboardingController.updateEmployeeTemplateContent);
 router.post('/employees/:id/transfer-to-active', protect, requireOnboardingComplete, onboardingController.transferToActiveEmployee);
 
 // --- Email History ---
@@ -198,6 +208,9 @@ router.get('/settings', protect, requireOnboardingView, onboardingController.get
 router.post('/settings/templates', protect, requireOnboardingRequest, onboardingController.updateTemplate);
 router.post('/settings/templates/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.uploadAndSetTemplate);
 router.post('/settings/templates/dynamic/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addDynamicTemplate);
+router.get('/settings/templates/dynamic/:templateId/content', protect, requireOnboardingView, onboardingController.getDynamicTemplateContent);
+router.post('/settings/templates/dynamic/:templateId/preview-buffer', protect, requireOnboardingView, onboardingController.generateTemplatePreviewBuffer);
+router.put('/settings/templates/dynamic/:templateId', protect, requireOnboardingRequest, upload.single('document'), onboardingController.updateDynamicTemplate);
 router.delete('/settings/templates/dynamic/:templateId', protect, requireOnboardingRequest, onboardingController.deleteDynamicTemplate);
 router.get('/settings/templates/:type/preview', protect, requireOnboardingView, onboardingController.getTemplatePreview);
 router.delete('/settings/templates/:type', protect, requireOnboardingRequest, onboardingController.deleteBaseTemplate);
@@ -205,6 +218,7 @@ router.get('/settings/templates/:type/download', protect, requireOnboardingView,
 
 // --- Policies ---
 router.post('/settings/policies/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addPolicy);
+router.put('/settings/policies/:policyId', protect, requireOnboardingRequest, upload.single('document'), onboardingController.updatePolicy);
 router.delete('/settings/policies/:policyId', protect, requireOnboardingRequest, onboardingController.deletePolicy);
 
 // ==========================================

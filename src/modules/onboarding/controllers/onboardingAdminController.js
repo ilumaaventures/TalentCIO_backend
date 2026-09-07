@@ -202,12 +202,15 @@ const formatEmployeeDynamicTemplates = (employeeObj, companyDynamicTemplates = [
     return (companyDynamicTemplates || [])
         .filter((template) => template && template.isDeleted !== true)
         .map((template) => {
-            const templateIdStr = template._id ? template._id.toString() : '';
+            const templateObj = template.toObject ? template.toObject() : template;
+            const templateIdStr = templateObj._id ? templateObj._id.toString() : (templateObj.id ? templateObj.id.toString() : '');
 
             return {
-                ...template,
+                ...templateObj,
+                _id: templateIdStr,
+                id: templateIdStr,
                 candidateName: `${employeeObj.firstName || ''} ${employeeObj.lastName || ''}`.trim() || employeeObj.firstName || 'Candidate',
-                name: template.name
+                name: templateObj.name
             };
         });
 };
