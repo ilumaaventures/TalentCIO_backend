@@ -301,7 +301,18 @@ exports.saveSection = async (req, res) => {
         } else if (section === 'bankDetails') {
             employee.bankDetails = { ...employee.bankDetails, ...data, isComplete: true };
         } else if (section === 'offerDeclaration') {
-            employee.offerDeclaration = { ...employee.offerDeclaration, ...data, isComplete: true };
+            const candidateFullName = `${employee.firstName} ${employee.lastName || ''}`.trim() || employee.firstName || 'Candidate';
+            const eSignName = (data.eSignName || employee.offerDeclaration?.eSignName || '').trim() || candidateFullName;
+            const eSignDate = data.eSignDate || employee.offerDeclaration?.eSignDate || new Date();
+            const eSignIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || employee.offerDeclaration?.eSignIp || '';
+            employee.offerDeclaration = {
+                ...employee.offerDeclaration,
+                ...data,
+                eSignName,
+                eSignDate,
+                eSignIp,
+                isComplete: true
+            };
         }
 
         employee.auditLog.push({ action: 'SECTION_SAVE', details: `Saved section ${section}` });
@@ -556,19 +567,33 @@ exports.acceptTemplate = async (req, res) => {
         const { templateId } = req.params;
         const employeeId = req.onboardingEmployee._id;
 
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
         const company = await Company.findById(req.onboardingEmployee.companyId).select('settings.onboarding').lean();
-        const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) ||
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name))
+        );
 
         if (!template) return res.status(404).json({ message: 'Template not found' });
 
         const employee = await OnboardingEmployee.findById(employeeId);
-        const alreadyAccepted = employee.offerDeclaration.acceptedTemplates.find(t => t.templateId === templateId);
+        const templateIdKey = template._id ? template._id.toString() : normId;
+        const alreadyAccepted = (employee.offerDeclaration?.acceptedTemplates || []).find(t => 
+            t.templateId === templateIdKey || t.templateId === normId || t.name === template.name
+        );
         if (alreadyAccepted) return res.json({ message: 'Template already accepted' });
 
         await OnboardingEmployee.findByIdAndUpdate(employeeId, {
             $push: {
                 'offerDeclaration.acceptedTemplates': {
-                    templateId,
+                    templateId: templateIdKey,
                     name: template.name,
                     acceptedAt: new Date()
                 }
@@ -594,9 +619,11 @@ exports.getMyOfferLetter = async (req, res) => {
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
         const customUrl = company?.settings?.onboarding?.offerLetterTemplateUrl;
-        const defaultPath = path.join(__dirname, '../../../templates/offer_letter_template.docx');
+        if (!customUrl) {
+            return res.status(404).json({ message: 'Offer letter template not found. Please contact HR.' });
+        }
 
-        const buffer = await getPopulatedDocumentBuffer(employee, company, customUrl, defaultPath);
+        const buffer = await getPopulatedDocumentBuffer(employee, company, customUrl);
 
         await OnboardingEmployee.findByIdAndUpdate(employee._id, {
             $push: {
@@ -660,9 +687,10 @@ exports.acceptOfferLetter = async (req, res) => {
             }
         });
 
-        const { eSignName, eSignType, eSignValue } = req.body;
-        if (!eSignName) {
-            return res.status(400).json({ message: 'Signature name is required.' });
+        let { eSignName, eSignType, eSignValue } = req.body;
+        const candidateFullName = `${employee.firstName} ${employee.lastName || ''}`.trim() || employee.firstName || 'Candidate';
+        if (!eSignName || !eSignName.trim()) {
+            eSignName = candidateFullName;
         }
 
         employee.offerDeclaration.hasReadOfferLetter = true;
@@ -710,12 +738,50 @@ exports.downloadTemplateById = async (req, res) => {
             Company.findById(req.onboardingEmployee.companyId).select('settings.onboarding').lean()
         ]);
 
-        const template = company.settings.onboarding.dynamicTemplates.find(t => t._id.toString() === templateId);
-        if (!template) return res.status(404).json({ message: 'Template not found' });
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
 
-        const buffer = await getPopulatedDocumentBuffer(employee, company, template.url);
+        const customTpl = employee.customTemplates?.find(t => 
+            t.templateId === normId ||
+            (t._id && t._id.toString() === normId) ||
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name))
+        );
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) ||
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+        let templateUrl = customTpl?.url || template?.url;
+        if (!templateUrl && (/offer/i.test(normId) || normClean === 'offerletter')) {
+            templateUrl = employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl;
+        }
+        if (!templateUrl && (/declaration/i.test(normId) || normClean === 'declaration')) {
+            templateUrl = company?.settings?.onboarding?.declarationTemplateUrl;
+        }
+        if (!templateUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                templateUrl = activeTpl.url;
+            } else if (employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl) {
+                templateUrl = employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl;
+            }
+        }
+        if (!templateUrl) return res.status(404).json({ message: 'Template not found' });
+
+        const buffer = await getPopulatedDocumentBuffer(employee, company, templateUrl);
         const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
-        const safeName = template.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+        const docName = customTpl?.name || template?.name || 'Document';
+        const safeName = docName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
         res.setHeader('Content-Disposition', `attachment; filename=${candidateName}_${safeName}.docx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.send(buffer);

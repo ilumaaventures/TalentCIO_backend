@@ -7,23 +7,64 @@ const Docxtemplater = require('docxtemplater');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const mammoth = require('mammoth');
+const { uploadBufferToCloudinary } = require('../../../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
 const { formatDate, formatCurrency, buildSalaryTableXml, preprocessDocxXml } = require('../utils/onboardingHelpers');
 
-const getTemplateContent = async (customUrl, defaultPath) => {
-    try {
-        if (customUrl && typeof customUrl === 'string' && customUrl.startsWith('http')) {
-            const response = await axios.get(customUrl, { responseType: 'arraybuffer' });
-            return response.data;
-        }
-    } catch (err) {
-        console.error('Failed to fetch remote template, falling back to default:', err.message);
-    }
+const escapeXml = (unsafe) => String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 
-    if (!fs.existsSync(defaultPath)) {
-        throw new Error(`Default template not found at ${defaultPath}. Please run the template generation script.`);
+const updateDocxWithText = (originalBuffer, textContent) => {
+    const zip = new PizZip(originalBuffer);
+    const currentXml = zip.file('word/document.xml') ? zip.file('word/document.xml').asText() : '';
+    const sectPrMatch = currentXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/);
+    const sectPrXml = sectPrMatch ? sectPrMatch[0] : '';
+
+    const normalized = (textContent || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/^[ \t]+$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    const lines = normalized.split('\n');
+    let consecutiveEmpty = 0;
+    const paragraphsXml = lines.map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            consecutiveEmpty++;
+            if (consecutiveEmpty > 1) return '';
+            return '<w:p/>';
+        }
+        consecutiveEmpty = 0;
+        const isAnnexure = /^Annexure\s+[A-Z]/i.test(trimmed);
+        const pageBreakXml = isAnnexure ? '<w:r><w:br w:type="page"/></w:r>' : '';
+        return `<w:p>${pageBreakXml}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`;
+    }).filter(Boolean).join('');
+
+    const newDocXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${paragraphsXml}
+    ${sectPrXml}
+  </w:body>
+</w:document>`;
+
+    zip.file('word/document.xml', newDocXml);
+    return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+};
+
+const getTemplateContent = async (customUrl) => {
+    if (customUrl && typeof customUrl === 'string' && customUrl.startsWith('http')) {
+        const response = await axios.get(customUrl, { responseType: 'arraybuffer' });
+        return response.data;
     }
-    return fs.readFileSync(defaultPath, 'binary');
+    throw new Error('Template document not found or URL is invalid. Please upload a template in Document Settings.');
 };
 
 exports.getTemplateContent = getTemplateContent;
@@ -253,6 +294,52 @@ exports.deletePolicy = async (req, res) => {
     }
 };
 
+exports.updatePolicy = async (req, res) => {
+    try {
+        const { policyId } = req.params;
+        const { name, isRequired } = req.body;
+
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const policy = company.settings?.onboarding?.policies?.find(p => p._id.toString() === policyId);
+        if (!policy) return res.status(404).json({ message: 'Policy not found' });
+
+        if (name && typeof name === 'string' && name.trim()) {
+            policy.name = name.trim();
+        }
+
+        if (isRequired !== undefined) {
+            policy.isRequired = isRequired === 'true' || isRequired === true;
+        }
+
+        if (req.file) {
+            const oldPublicId = policy.publicId;
+            if (oldPublicId) {
+                const { cloudinary } = require('../../../config/cloudinary');
+                try {
+                    await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
+                } catch (e) {
+                    console.error('Failed to delete old policy file on Cloudinary:', e.message);
+                }
+            }
+
+            policy.url = req.file.path;
+            policy.publicId = extractPublicIdFromUrl(req.file.path);
+        }
+
+        await company.save();
+
+        res.status(200).json({
+            message: 'Policy updated successfully!',
+            policy
+        });
+    } catch (error) {
+        console.error('Error updating policy:', error);
+        res.status(500).json({ message: 'Failed to update policy', error: error.message });
+    }
+};
+
 exports.addDynamicTemplate = async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
@@ -263,18 +350,23 @@ exports.addDynamicTemplate = async (req, res) => {
         const url = req.file.path;
         const publicId = extractPublicIdFromUrl(url);
 
-        const newTemplate = {
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+        if (!company.settings) company.settings = {};
+        if (!company.settings.onboarding) company.settings.onboarding = {};
+        if (!company.settings.onboarding.dynamicTemplates) company.settings.onboarding.dynamicTemplates = [];
+
+        company.settings.onboarding.dynamicTemplates.push({
             name,
             url,
             publicId,
-            isRequired: isRequired === 'true' || isRequired === true
-        };
-
-        await Company.findByIdAndUpdate(req.companyId, {
-            $push: { 'settings.onboarding.dynamicTemplates': newTemplate }
+            isRequired: isRequired === 'true' || isRequired === true,
+            isDeleted: false
         });
+        await company.save();
 
-        res.status(200).json({ message: 'Dynamic template uploaded successfully!', template: newTemplate });
+        const createdTemplate = company.settings.onboarding.dynamicTemplates[company.settings.onboarding.dynamicTemplates.length - 1];
+        res.status(200).json({ message: 'Dynamic template uploaded successfully!', template: createdTemplate });
     } catch (error) {
         console.error('Error adding dynamic template:', error);
         res.status(500).json({ message: 'Failed to add template', error: error.message });
@@ -329,6 +421,151 @@ exports.deleteDynamicTemplate = async (req, res) => {
     }
 };
 
+exports.getDynamicTemplateContent = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const company = await Company.findById(req.companyId).select('settings.onboarding');
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        let template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId || 
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+
+        let targetUrl = template?.url;
+        let templateName = template?.name;
+
+        if (!targetUrl) {
+            if (/offer/i.test(normId) || normClean === 'offerletter') {
+                targetUrl = company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = templateName || 'Offer letter';
+            } else if (/declaration/i.test(normId) || normClean === 'declaration') {
+                targetUrl = company.settings?.onboarding?.declarationTemplateUrl;
+                templateName = templateName || 'Declaration';
+            }
+        }
+
+        if (!targetUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                targetUrl = activeTpl.url;
+                templateName = activeTpl.name;
+            } else if (company.settings?.onboarding?.offerLetterTemplateUrl) {
+                targetUrl = company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = 'Offer letter';
+            }
+        }
+
+        if (!targetUrl) return res.status(404).json({ message: 'Template not found' });
+
+        const buffer = await getTemplateContent(targetUrl);
+        const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
+        const content = (rawContent || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/^[ \t]+$/gm, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+        res.json({ content, name: templateName || template?.name || 'Document' });
+    } catch (error) {
+        console.error('Error getting dynamic template content:', error);
+        res.status(500).json({ message: 'Failed to extract template content', error: error.message });
+    }
+};
+
+exports.updateDynamicTemplate = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const { name, isRequired, content } = req.body;
+
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        let template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId || 
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+        if (!template && (normId === 'undefined' || normId === 'null' || !normId)) {
+            template = dynamicTemplates.find(t => !t.isDeleted && t.url);
+        }
+        if (!template) return res.status(404).json({ message: 'Template not found' });
+
+        if (name && typeof name === 'string' && name.trim()) {
+            template.name = name.trim();
+        }
+
+        if (isRequired !== undefined) {
+            template.isRequired = isRequired === 'true' || isRequired === true;
+        }
+
+        if (req.file) {
+            const oldPublicId = template.publicId;
+            if (oldPublicId) {
+                const { cloudinary } = require('../../../config/cloudinary');
+                try {
+                    await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
+                } catch (e) {
+                    console.error('Failed to delete old template on Cloudinary:', e.message);
+                }
+            }
+
+            template.url = req.file.path;
+            template.publicId = extractPublicIdFromUrl(req.file.path);
+        } else if (content !== undefined && typeof content === 'string') {
+            if (!template.url) return res.status(400).json({ message: 'No template file to update. Please upload a .docx file.' });
+            const originalBuffer = await getTemplateContent(template.url);
+            const updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+
+            const oldPublicId = template.publicId;
+            if (oldPublicId) {
+                const { cloudinary } = require('../../../config/cloudinary');
+                try {
+                    await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
+                } catch (e) {
+                    console.error('Failed to delete old template on Cloudinary:', e.message);
+                }
+            }
+
+            const safeFileName = `${(template.name || 'template').replace(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
+            const uploadedUrl = await uploadBufferToCloudinary(updatedBuffer, safeFileName, 'onboarding_documents');
+            template.url = uploadedUrl;
+            template.publicId = extractPublicIdFromUrl(uploadedUrl);
+        }
+
+        await company.save();
+
+        res.status(200).json({
+            message: 'Dynamic template updated successfully!',
+            template
+        });
+    } catch (error) {
+        console.error('Error updating dynamic template:', error);
+        res.status(500).json({ message: 'Failed to update template', error: error.message });
+    }
+};
+
 exports.getTemplatePreview = async (req, res) => {
     try {
         const { type } = req.params;
@@ -336,11 +573,11 @@ exports.getTemplatePreview = async (req, res) => {
         const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
 
         const customUrl = type === 'offerLetter' ? company?.settings?.onboarding?.offerLetterTemplateUrl : company?.settings?.onboarding?.declarationTemplateUrl;
-        const defaultPath = type === 'offerLetter' ?
-            path.join(__dirname, '../../../templates/offer_letter_template.docx') :
-            path.join(__dirname, '../../../templates/declaration_template.docx');
+        if (!customUrl) {
+            return res.status(404).json({ message: `No ${type === 'offerLetter' ? 'Offer Letter' : 'Declaration'} template uploaded yet. Please upload a template in Settings first.` });
+        }
 
-        const content = await getTemplateContent(customUrl, defaultPath);
+        const content = await getTemplateContent(customUrl);
         const zip = new PizZip(content);
 
         try {
@@ -400,11 +637,11 @@ exports.downloadTemplate = async (req, res) => {
         const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
 
         const customUrl = type === 'offerLetter' ? company?.settings?.onboarding?.offerLetterTemplateUrl : company?.settings?.onboarding?.declarationTemplateUrl;
-        const defaultPath = type === 'offerLetter' ?
-            path.join(__dirname, '../../../templates/offer_letter_template.docx') :
-            path.join(__dirname, '../../../templates/declaration_template.docx');
+        if (!customUrl) {
+            return res.status(404).json({ message: `No ${type === 'offerLetter' ? 'Offer Letter' : 'Declaration'} template uploaded yet.` });
+        }
 
-        const content = await getTemplateContent(customUrl, defaultPath);
+        const content = await getTemplateContent(customUrl);
 
         const filename = `${type === 'offerLetter' ? 'OfferLetter' : 'Declaration'}_Template.docx`;
         res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
@@ -414,5 +651,217 @@ exports.downloadTemplate = async (req, res) => {
     } catch (error) {
         console.error('Error downloading template:', error);
         res.status(500).json({ message: 'Failed to download template', error: error.message });
+    }
+};
+
+exports.getEmployeeTemplateContent = async (req, res) => {
+    try {
+        const { id, templateId } = req.params;
+        const [employee, company] = await Promise.all([
+            OnboardingEmployee.findOne({ _id: id, companyId: req.companyId }),
+            Company.findById(req.companyId).select('settings.onboarding').lean()
+        ]);
+
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        const custom = employee.customTemplates?.find(t => 
+            t.templateId === normId || 
+            (t._id && t._id.toString() === normId) || 
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name))
+        );
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const dynamicTemplate = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) || 
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+
+        let targetUrl = custom?.url || dynamicTemplate?.url;
+        let templateName = custom?.name || dynamicTemplate?.name || 'Document';
+
+        if (!targetUrl) {
+            if (/offer/i.test(normId) || normClean === 'offerletter' || /offer/i.test(templateName)) {
+                targetUrl = employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = templateName || 'Offer letter';
+            } else if (/declaration/i.test(normId) || normClean === 'declaration' || /declaration/i.test(templateName)) {
+                targetUrl = company.settings?.onboarding?.declarationTemplateUrl;
+                templateName = templateName || 'Declaration';
+            }
+        }
+
+        if (!targetUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                targetUrl = activeTpl.url;
+                templateName = activeTpl.name;
+            } else if (employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl) {
+                targetUrl = employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = 'Offer letter';
+            }
+        }
+
+        if (!targetUrl) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+
+        const buffer = await getTemplateContent(targetUrl);
+        const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
+        const content = (rawContent || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/^[ \t]+$/gm, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+        res.json({
+            content,
+            name: templateName,
+            isCustomized: Boolean(custom)
+        });
+    } catch (error) {
+        console.error('Error getting employee template content:', error);
+        res.status(500).json({ message: 'Failed to extract template content', error: error.message });
+    }
+};
+
+exports.updateEmployeeTemplateContent = async (req, res) => {
+    try {
+        const { id, templateId } = req.params;
+        const { content } = req.body;
+
+        if (typeof content !== 'string') {
+            return res.status(400).json({ message: 'Content is required' });
+        }
+
+        const [employee, company] = await Promise.all([
+            OnboardingEmployee.findOne({ _id: id, companyId: req.companyId }),
+            Company.findById(req.companyId).select('settings.onboarding').lean()
+        ]);
+
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        const isOffer = /offer/i.test(normId) || normClean === 'offerletter';
+        const isAlreadyAccepted = (employee.offerDeclaration?.acceptedTemplates || []).some(at => 
+            at.templateId === normId || (at._id && at._id.toString() === normId)
+        ) || (isOffer && (employee.offerStatus === 'Accepted' || employee.status === 'Submitted'));
+
+        if (isAlreadyAccepted) {
+            return res.status(400).json({ message: 'Cannot edit document after it has been accepted by the candidate' });
+        }
+
+        const existingCustom = employee.customTemplates?.find(t => 
+            t.templateId === normId || 
+            (t._id && t._id.toString() === normId) || 
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name))
+        );
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const dynamicTemplate = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+
+        let baseTemplateUrl = existingCustom?.url || dynamicTemplate?.url;
+        let templateName = existingCustom?.name || dynamicTemplate?.name || 'Document';
+
+        if (!baseTemplateUrl) {
+            if (/offer/i.test(normId) || normClean === 'offerletter' || /offer/i.test(templateName)) {
+                baseTemplateUrl = employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = templateName || 'Offer letter';
+            } else if (/declaration/i.test(normId) || normClean === 'declaration' || /declaration/i.test(templateName)) {
+                baseTemplateUrl = company.settings?.onboarding?.declarationTemplateUrl;
+                templateName = templateName || 'Declaration';
+            }
+        }
+
+        if (!baseTemplateUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                baseTemplateUrl = activeTpl.url;
+                templateName = activeTpl.name;
+            } else if (employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl) {
+                baseTemplateUrl = employee.offerLetterUrl || company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = 'Offer letter';
+            }
+        }
+
+        if (!baseTemplateUrl) {
+            return res.status(404).json({ message: 'Base template not found to customize' });
+        }
+
+        const originalBuffer = await getTemplateContent(baseTemplateUrl);
+        const updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+
+        if (existingCustom?.publicId) {
+            const { cloudinary } = require('../../../config/cloudinary');
+            try {
+                await cloudinary.uploader.destroy(existingCustom.publicId, { resource_type: 'raw' });
+            } catch (e) {
+                console.error('Failed to destroy old candidate custom template:', e.message);
+            }
+        }
+
+        const safeCandidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_');
+        const safeDocName = templateName.replace(/[^a-zA-Z0-9]/g, '_');
+        const fileName = `${safeCandidateName}_${safeDocName}.docx`;
+        const uploadedUrl = await uploadBufferToCloudinary(updatedBuffer, fileName, 'onboarding_documents');
+        const publicId = extractPublicIdFromUrl(uploadedUrl);
+
+        if (!employee.customTemplates) {
+            employee.customTemplates = [];
+        }
+
+        const existingIndex = employee.customTemplates.findIndex(t => t.templateId === templateId);
+        const entry = {
+            templateId,
+            name: templateName,
+            url: uploadedUrl,
+            publicId,
+            updatedAt: new Date()
+        };
+
+        if (existingIndex > -1) {
+            employee.customTemplates[existingIndex] = entry;
+        } else {
+            employee.customTemplates.push(entry);
+        }
+
+        employee.auditLog.push({
+            action: 'TEMPLATE_CUSTOMIZED',
+            details: `Customized ${templateName} template specifically for this employee.`
+        });
+
+        await employee.save();
+
+        res.status(200).json({
+            message: `${templateName} customized successfully for ${employee.firstName}!`,
+            customTemplates: employee.customTemplates
+        });
+    } catch (error) {
+        console.error('Error updating employee template content:', error);
+        res.status(500).json({ message: 'Failed to customize template for employee', error: error.message });
     }
 };

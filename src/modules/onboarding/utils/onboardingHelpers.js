@@ -382,15 +382,6 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
         }
     }
 
-    // Net Take-Home Pay
-    if (totals.monthlyNet || totals.annualNet) {
-        rows.push(makeRow([
-            makeCell({ text: 'Net Take-Home Pay', align: 'left', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.monthlyNet, align: 'right', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.annualNet, align: 'right', isBold: true, fill: totalFill })
-        ]));
-    }
-
     return `
         <w:tbl>
             <w:tblPr>
@@ -424,32 +415,35 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
 const preprocessDocxXml = (xmlString) => {
     if (!xmlString || typeof xmlString !== 'string') return xmlString;
 
-    // Normalize {salary_table} without @ to {@salary_table} so users don't break templates
-    let normalized = xmlString.replace(/\{salary_table\}/g, '{@salary_table}');
+    // Normalize {salary_table} and {salarytable} without @ to {@salary_table} so users don't break templates
+    let normalized = xmlString
+        .replace(/\{salary_table\}/g, '{@salary_table}')
+        .replace(/\{salarytable\}/g, '{@salary_table}')
+        .replace(/\{@salarytable\}/g, '{@salary_table}');
+    normalized = normalized.replace(/\{employee_signature\}/g, '{@employee_signature}');
+    normalized = normalized.replace(/\{candidate_signature\}/g, '{@employee_signature}');
 
+    // Only block-level table replacements (e.g. salary_table) should be extracted into their own paragraph
     return normalized.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
-        if (paragraphHtml.includes('{@')) {
-            const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
-            if (rawTagMatch) {
-                const tag = rawTagMatch[1];
-                const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
-                const pPr = pPrMatch ? pPrMatch[0] : '';
-                let cleanedHtml = paragraphHtml.replace(tag, '');
+        if (paragraphHtml.includes('{@salary_table}')) {
+            const tag = '{@salary_table}';
+            const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
+            const pPr = pPrMatch ? pPrMatch[0] : '';
+            let cleanedHtml = paragraphHtml.replace(tag, '');
 
-                let hasActualText = false;
-                const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
-                tMatches.forEach(match => {
-                    if (match[1].trim() !== '') {
-                        hasActualText = true;
-                    }
-                });
-
-                if (!hasActualText) {
-                    return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+            let hasActualText = false;
+            const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+            tMatches.forEach(match => {
+                if (match[1].trim() !== '') {
+                    hasActualText = true;
                 }
+            });
 
-                return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+            if (!hasActualText) {
+                return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
             }
+
+            return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
         }
         return paragraphHtml;
     });

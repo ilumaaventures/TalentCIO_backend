@@ -190,6 +190,15 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     offerLetterUrl: { type: String, default: '' },
     offerLetterPublicId: { type: String, default: '' },
 
+    // --- Candidate-Specific Custom Dynamic Templates ---
+    customTemplates: [{
+        templateId: { type: String, required: true },
+        name: { type: String, default: '' },
+        url: { type: String, required: true },
+        publicId: { type: String, default: '' },
+        updatedAt: { type: Date, default: Date.now }
+    }],
+
     // --- Selective Onboarding (Items checked by HR) ---
     requestedSections: [{
         label: { type: String, required: true },
