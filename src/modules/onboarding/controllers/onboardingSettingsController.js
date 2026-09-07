@@ -25,6 +25,18 @@ const updateDocxWithText = (originalBuffer, textContent) => {
     const sectPrMatch = currentXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/);
     const sectPrXml = sectPrMatch ? sectPrMatch[0] : '';
 
+    // Extract all original paragraphs with their pPr
+    const origParagraphs = currentXml.match(/<w:p\b[\s\S]*?<\/w:p>/g) || [];
+    const origPPrMap = [];
+    origParagraphs.forEach(p => {
+        const t = [...p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(m => m[1]).join('').trim();
+        const pPrMatch = p.match(/<w:pPr[\s\S]*?<\/w:pPr>/);
+        const pPr = pPrMatch ? pPrMatch[0] : '';
+        if (t) {
+            origPPrMap.push({ text: t, pPr });
+        }
+    });
+
     const normalized = (textContent || '')
         .replace(/\r\n/g, '\n')
         .replace(/^[ \t]+$/gm, '')
@@ -32,18 +44,71 @@ const updateDocxWithText = (originalBuffer, textContent) => {
         .trim();
 
     const lines = normalized.split('\n');
+    let nonBlankIdx = 0;
     let consecutiveEmpty = 0;
+
     const paragraphsXml = lines.map(line => {
         const trimmed = line.trim();
         if (!trimmed) {
             consecutiveEmpty++;
             if (consecutiveEmpty > 1) return '';
-            return '<w:p/>';
+            return '<w:p><w:pPr><w:spacing w:after="120" w:line="240" w:lineRule="auto"/></w:pPr></w:p>';
         }
         consecutiveEmpty = 0;
+
+        // Check if we can reuse an original pPr
+        let pPr = '';
+        const exactMatch = origPPrMap.find(item => item.text === trimmed);
+        if (exactMatch && exactMatch.pPr) {
+            pPr = exactMatch.pPr;
+        } else if (nonBlankIdx < origPPrMap.length && origPPrMap[nonBlankIdx].pPr) {
+            pPr = origPPrMap[nonBlankIdx].pPr;
+        }
+        nonBlankIdx++;
+
+        if (!pPr) {
+            const isTitle = nonBlankIdx <= 2 && trimmed.length < 50;
+            const isHeading = /^(\d+\.|\bAnnexure\b|[A-Z]\.)/i.test(trimmed) || (trimmed.length < 50 && trimmed === trimmed.toUpperCase());
+            if (isTitle) {
+                pPr = '<w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="240"/><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:pPr>';
+            } else if (isHeading) {
+                pPr = '<w:pPr><w:spacing w:before="240" w:after="120"/><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:pPr>';
+            } else {
+                pPr = '<w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:pPr>';
+            }
+        }
+
         const isAnnexure = /^Annexure\s+[A-Z]/i.test(trimmed);
         const pageBreakXml = isAnnexure ? '<w:r><w:br w:type="page"/></w:r>' : '';
-        return `<w:p>${pageBreakXml}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`;
+
+        const isHeadingText = /^(\d+\.|\bAnnexure\b|[A-Z]\.)/i.test(trimmed) || /^(PRIVATE\s*&\s*CONFIDENTIAL|Letter of Intent|Dear\b)/i.test(trimmed);
+        let runXml = '';
+
+        if (trimmed.includes('**')) {
+            const parts = [];
+            const regex = /\*\*(.*?)\*\*/g;
+            let lastIndex = 0;
+            let match;
+            while ((match = regex.exec(trimmed)) !== null) {
+                if (match.index > lastIndex) parts.push({ text: trimmed.substring(lastIndex, match.index), bold: false });
+                parts.push({ text: match[1], bold: true });
+                lastIndex = match.index + match[0].length;
+            }
+            if (lastIndex < trimmed.length) parts.push({ text: trimmed.substring(lastIndex), bold: false });
+            runXml = parts.map(p => {
+                const rPr = p.bold
+                    ? '<w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/></w:rPr>'
+                    : '<w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr>';
+                return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(p.text)}</w:t></w:r>`;
+            }).join('');
+        } else {
+            const rPr = isHeadingText
+                ? '<w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/></w:rPr>'
+                : '<w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr>';
+            runXml = `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r>`;
+        }
+
+        return `<w:p>${pageBreakXml}${pPr}${runXml}</w:p>`;
     }).filter(Boolean).join('');
 
     const newDocXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -484,6 +549,79 @@ exports.getDynamicTemplateContent = async (req, res) => {
     }
 };
 
+exports.generateTemplatePreviewBuffer = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const { content, targetUrl: explicitUrl } = req.body || {};
+
+        const company = await Company.findById(req.companyId).select('settings.onboarding');
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        let template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId || 
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+
+        let targetUrl = explicitUrl || template?.url;
+        let templateName = template?.name;
+
+        if (!targetUrl) {
+            if (/offer/i.test(normId) || normClean === 'offerletter') {
+                targetUrl = company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = templateName || 'Offer letter';
+            } else if (/declaration/i.test(normId) || normClean === 'declaration') {
+                targetUrl = company.settings?.onboarding?.declarationTemplateUrl;
+                templateName = templateName || 'Declaration';
+            }
+        }
+
+        if (!targetUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                targetUrl = activeTpl.url;
+                templateName = activeTpl.name;
+            } else if (company.settings?.onboarding?.offerLetterTemplateUrl) {
+                targetUrl = company.settings?.onboarding?.offerLetterTemplateUrl;
+                templateName = 'Offer letter';
+            }
+        }
+
+        if (!targetUrl) return res.status(404).json({ message: 'Template not found' });
+
+        const originalBuffer = await getTemplateContent(targetUrl);
+        let previewBuffer = Buffer.from(originalBuffer);
+
+        if (content && typeof content === 'string' && content.trim()) {
+            const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(originalBuffer) });
+            const normalize = (s) => (s || '').replace(/\r\n/g, '\n').replace(/^[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+            const isChanged = normalize(content) !== normalize(rawContent);
+
+            if (isChanged) {
+                previewBuffer = updateDocxWithText(previewBuffer, content);
+            }
+        }
+
+        const safeDocName = (templateName || 'Document').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `inline; filename="${safeDocName}_preview.docx"`);
+        res.send(previewBuffer);
+    } catch (error) {
+        console.error('Error generating template preview buffer:', error);
+        res.status(500).json({ message: 'Failed to generate preview', error: error.message });
+    }
+};
+
 exports.updateDynamicTemplate = async (req, res) => {
     try {
         const { templateId } = req.params;
@@ -536,22 +674,27 @@ exports.updateDynamicTemplate = async (req, res) => {
         } else if (content !== undefined && typeof content === 'string') {
             if (!template.url) return res.status(400).json({ message: 'No template file to update. Please upload a .docx file.' });
             const originalBuffer = await getTemplateContent(template.url);
-            const updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+            const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(originalBuffer) });
+            const normalize = (s) => (s || '').replace(/\r\n/g, '\n').replace(/^[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+            const isChanged = normalize(content) !== normalize(rawContent);
 
-            const oldPublicId = template.publicId;
-            if (oldPublicId) {
-                const { cloudinary } = require('../../../config/cloudinary');
-                try {
-                    await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
-                } catch (e) {
-                    console.error('Failed to delete old template on Cloudinary:', e.message);
+            if (isChanged) {
+                const updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+                const oldPublicId = template.publicId;
+                if (oldPublicId) {
+                    const { cloudinary } = require('../../../config/cloudinary');
+                    try {
+                        await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
+                    } catch (e) {
+                        console.error('Failed to delete old template on Cloudinary:', e.message);
+                    }
                 }
-            }
 
-            const safeFileName = `${(template.name || 'template').replace(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
-            const uploadedUrl = await uploadBufferToCloudinary(updatedBuffer, safeFileName, 'onboarding_documents');
-            template.url = uploadedUrl;
-            template.publicId = extractPublicIdFromUrl(uploadedUrl);
+                const safeFileName = `${(template.name || 'template').replace(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
+                const uploadedUrl = await uploadBufferToCloudinary(updatedBuffer, safeFileName, 'onboarding_documents');
+                template.url = uploadedUrl;
+                template.publicId = extractPublicIdFromUrl(uploadedUrl);
+            }
         }
 
         await company.save();
@@ -813,7 +956,14 @@ exports.updateEmployeeTemplateContent = async (req, res) => {
         }
 
         const originalBuffer = await getTemplateContent(baseTemplateUrl);
-        const updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+        const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(originalBuffer) });
+        const normalize = (s) => (s || '').replace(/\r\n/g, '\n').replace(/^[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+        const isChanged = normalize(content) !== normalize(rawContent);
+
+        let updatedBuffer = Buffer.from(originalBuffer);
+        if (isChanged) {
+            updatedBuffer = updateDocxWithText(Buffer.from(originalBuffer), content);
+        }
 
         if (existingCustom?.publicId) {
             const { cloudinary } = require('../../../config/cloudinary');
@@ -865,3 +1015,5 @@ exports.updateEmployeeTemplateContent = async (req, res) => {
         res.status(500).json({ message: 'Failed to customize template for employee', error: error.message });
     }
 };
+
+exports.updateDocxWithText = updateDocxWithText;

@@ -4,7 +4,7 @@ const User = require('../../modules/user/user.model');
 const EmployeeProfile = require('../dossier/employeeProfile.model');
 const { signWebhookPayload } = require('./payrollCrypto');
 
-const PAYROLL_COMPANY_SELECT = 'name status settings.payrollIntegration settings.attendance.weeklyOff';
+const PAYROLL_COMPANY_SELECT = 'name status settings.payrollIntegration settings.attendance.weeklyOff settings.attendance.workingHours settings.attendance.defaultAttendanceMode';
 const PAYROLL_USER_SELECT = [
     '_id',
     'firstName',

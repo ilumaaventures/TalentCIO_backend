@@ -3,7 +3,8 @@ const Company = require('../../company/company.model');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const path = require('path');
-const { getTemplateContent } = require('./onboardingSettingsController');
+const mammoth = require('mammoth');
+const { getTemplateContent, updateDocxWithText } = require('./onboardingSettingsController');
 const { formatDate, formatCurrency, buildSalaryTableXml, preprocessDocxXml } = require('../utils/onboardingHelpers');
 
 const getSalaryBreakups = async (employee) => {
@@ -237,7 +238,7 @@ const getSalaryBreakups = async (employee) => {
 };
 
 const getPopulatedDocumentBuffer = async (employee, company, templateUrl, defaultPath = null) => {
-    const content = await getTemplateContent(templateUrl, defaultPath);
+    const content = Buffer.isBuffer(templateUrl) ? templateUrl : await getTemplateContent(templateUrl, defaultPath);
     const zip = new PizZip(content);
 
     const fullName = employee.personalDetails?.fullName || `${employee.firstName} ${employee.lastName || ''}`.trim() || employee.firstName || 'Candidate';
@@ -650,5 +651,87 @@ exports.generateDynamicTemplate = async (req, res) => {
     } catch (error) {
         console.error('Error generating dynamic template preview:', error);
         res.status(500).json({ message: 'Failed to generate document', error: error.message });
+    }
+};
+
+exports.generateCandidatePreviewBuffer = async (req, res) => {
+    try {
+        const { id, templateId } = req.params;
+        const { content } = req.body || {};
+
+        const [employee, company] = await Promise.all([
+            OnboardingEmployee.findOne({ _id: id, companyId: req.companyId })
+                .populate('createdBy', 'firstName lastName designation')
+                .lean(),
+            Company.findById(req.companyId).select('settings.onboarding').lean()
+        ]);
+
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        const normId = (templateId || '').trim();
+        const normClean = normId.replace(/[\s_-]+/g, '').toLowerCase();
+
+        const customTpl = employee.customTemplates?.find(t => 
+            t.templateId === normId || 
+            (t._id && t._id.toString() === normId) || 
+            t.name === normId ||
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name))
+        );
+        const dynamicTemplates = company.settings?.onboarding?.dynamicTemplates || [];
+        const template = dynamicTemplates.find(t => 
+            (t._id && t._id.toString() === normId) || 
+            (t.id && t.id.toString() === normId) ||
+            t.name === normId || 
+            t.name?.toLowerCase() === normId.toLowerCase() ||
+            (normClean && t.name?.replace(/[\s_-]+/g, '').toLowerCase() === normClean) ||
+            (/offer/i.test(normId) && /offer/i.test(t.name)) ||
+            (/declaration/i.test(normId) && /declaration/i.test(t.name)) ||
+            (/loi/i.test(normId) && /loi/i.test(t.name)) ||
+            (/^cl$/i.test(normId) && /^cl$/i.test(t.name))
+        );
+        let templateUrl = customTpl?.url || template?.url;
+        if (!templateUrl && (/offer/i.test(normId) || normClean === 'offerletter')) {
+            templateUrl = employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl;
+        }
+        if (!templateUrl && (/declaration/i.test(normId) || normClean === 'declaration')) {
+            templateUrl = company?.settings?.onboarding?.declarationTemplateUrl;
+        }
+        if (!templateUrl && (normId === 'undefined' || normId === 'null' || !normId)) {
+            const activeTpl = dynamicTemplates.find(t => !t.isDeleted && t.url);
+            if (activeTpl) {
+                templateUrl = activeTpl.url;
+            } else if (employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl) {
+                templateUrl = employee.offerLetterUrl || company?.settings?.onboarding?.offerLetterTemplateUrl;
+            }
+        }
+        if (!templateUrl) return res.status(404).json({ message: 'Template not found' });
+
+        let inputDoc = templateUrl;
+        if (content && typeof content === 'string' && content.trim()) {
+            const rawBaseBuffer = await getTemplateContent(templateUrl);
+            const { value: rawContent } = await mammoth.extractRawText({ buffer: Buffer.from(rawBaseBuffer) });
+            const normalize = (s) => (s || '').replace(/\r\n/g, '\n').replace(/^[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+            const isChanged = normalize(content) !== normalize(rawContent);
+
+            if (isChanged) {
+                inputDoc = updateDocxWithText(Buffer.from(rawBaseBuffer), content);
+            } else {
+                inputDoc = Buffer.from(rawBaseBuffer);
+            }
+        }
+
+        const buffer = await getPopulatedDocumentBuffer(employee, company, inputDoc);
+
+        const candidateName = `${employee.firstName}_${employee.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
+        const docName = customTpl?.name || template?.name || 'Document';
+        const safeName = docName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `inline; filename=${candidateName}_${safeName}_preview.docx`);
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error generating candidate dynamic template preview buffer:', error);
+        res.status(500).json({ message: 'Failed to generate preview', error: error.message });
     }
 };
