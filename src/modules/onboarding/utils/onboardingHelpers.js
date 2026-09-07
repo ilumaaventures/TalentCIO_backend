@@ -245,6 +245,216 @@ const buildPreOnboardingTemplateData = ({
     };
 };
 
+const escapeXml = (unsafe) => {
+    if (!unsafe) return '';
+    return String(unsafe)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+};
+
+const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [], totals = {}) => {
+    // Clean, simple, professional formal palette (no bright colors)
+    const headerFill = 'F1F5F9'; // Subtle neutral grey for header
+    const sectionFill = 'F8FAFC'; // Very light neutral grey for section divider
+    const totalFill = 'FFFFFF'; // Clean white for rows and totals
+    const textColor = '000000'; // Standard formal black text
+    const borderColor = 'CBD5E1'; // Standard clean table border
+
+    const makeCell = ({ text, align = 'left', isBold = false, fill = '', colSpan = 1 }) => {
+        const shdXml = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
+        const gridSpanXml = colSpan > 1 ? `<w:gridSpan w:val="${colSpan}"/>` : '';
+        const bXml = isBold ? '<w:b/>' : '';
+        const jcXml = align !== 'left' ? `<w:jc w:val="${align}"/>` : '<w:jc w:val="left"/>';
+
+        return `
+            <w:tc>
+                <w:tcPr>
+                    ${gridSpanXml}
+                    ${shdXml}
+                    <w:tcMar>
+                        <w:top w:w="120" w:type="dxa"/>
+                        <w:bottom w:w="120" w:type="dxa"/>
+                        <w:left w:w="160" w:type="dxa"/>
+                        <w:right w:w="160" w:type="dxa"/>
+                    </w:tcMar>
+                </w:tcPr>
+                <w:p>
+                    <w:pPr>${jcXml}</w:pPr>
+                    <w:r>
+                        <w:rPr>${bXml}<w:color w:val="${textColor}"/><w:sz w:val="20"/></w:rPr>
+                        <w:t xml:space="preserve">${escapeXml(text)}</w:t>
+                    </w:r>
+                </w:p>
+            </w:tc>
+        `.trim();
+    };
+
+    const makeRow = (cells, isHeader = false) => {
+        const trPr = isHeader ? '<w:trPr><w:tblHeader/></w:trPr>' : '';
+        return `<w:tr>${trPr}${cells.join('')}</w:tr>`;
+    };
+
+    const rows = [];
+
+    // Header Row (Simple neutral header, bold black text)
+    rows.push(makeRow([
+        makeCell({ text: 'Salary Component', align: 'left', isBold: true, fill: headerFill }),
+        makeCell({ text: 'Monthly (₹)', align: 'right', isBold: true, fill: headerFill }),
+        makeCell({ text: 'Annual (₹)', align: 'right', isBold: true, fill: headerFill })
+    ], true));
+
+    // Section A: Earnings & Allowances
+    rows.push(makeRow([
+        makeCell({ text: 'A. EARNINGS & ALLOWANCES', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+    ]));
+
+    (earnings || []).forEach(item => {
+        rows.push(makeRow([
+            makeCell({ text: item.name, align: 'left' }),
+            makeCell({ text: item.monthly, align: 'right' }),
+            makeCell({ text: item.annual, align: 'right' })
+        ]));
+    });
+
+    if (totals.monthlyGross || totals.annualGross) {
+        rows.push(makeRow([
+            makeCell({ text: 'Total Gross Earnings', align: 'left', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.monthlyGross, align: 'right', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.annualGross, align: 'right', isBold: true, fill: totalFill })
+        ]));
+    }
+
+    // Section B: Employer Contributions & Benefits
+    if (contributions && contributions.length > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'B. EMPLOYER CONTRIBUTIONS & BENEFITS', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+        ]));
+
+        contributions.forEach(item => {
+            rows.push(makeRow([
+                makeCell({ text: item.name, align: 'left' }),
+                makeCell({ text: item.monthly, align: 'right' }),
+                makeCell({ text: item.annual, align: 'right' })
+            ]));
+        });
+
+        if (totals.monthlyContributions || totals.annualContributions) {
+            rows.push(makeRow([
+                makeCell({ text: 'Total Employer Contributions', align: 'left', isBold: true, fill: totalFill }),
+                makeCell({ text: totals.monthlyContributions, align: 'right', isBold: true, fill: totalFill }),
+                makeCell({ text: totals.annualContributions, align: 'right', isBold: true, fill: totalFill })
+            ]));
+        }
+    }
+
+    // Total Cost to Company (CTC)
+    if (totals.monthlyCTC || totals.annualCTC) {
+        rows.push(makeRow([
+            makeCell({ text: 'Total Cost to Company', align: 'left', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.monthlyCTC, align: 'right', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.annualCTC, align: 'right', isBold: true, fill: totalFill })
+        ]));
+    }
+
+    // Section C: Employee Deductions
+    if (deductions && deductions.length > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'C. EMPLOYEE DEDUCTIONS', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+        ]));
+
+        deductions.forEach(item => {
+            rows.push(makeRow([
+                makeCell({ text: item.name, align: 'left' }),
+                makeCell({ text: item.monthly, align: 'right' }),
+                makeCell({ text: item.annual, align: 'right' })
+            ]));
+        });
+
+        if (totals.monthlyDeductions || totals.annualDeductions) {
+            rows.push(makeRow([
+                makeCell({ text: 'Total Deductions', align: 'left', isBold: true, fill: totalFill }),
+                makeCell({ text: totals.monthlyDeductions, align: 'right', isBold: true, fill: totalFill }),
+                makeCell({ text: totals.annualDeductions, align: 'right', isBold: true, fill: totalFill })
+            ]));
+        }
+    }
+
+    // Net Take-Home Pay
+    if (totals.monthlyNet || totals.annualNet) {
+        rows.push(makeRow([
+            makeCell({ text: 'Net Take-Home Pay', align: 'left', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.monthlyNet, align: 'right', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.annualNet, align: 'right', isBold: true, fill: totalFill })
+        ]));
+    }
+
+    return `
+        <w:tbl>
+            <w:tblPr>
+                <w:tblW w:w="5000" w:type="pct"/>
+                <w:jc w:val="center"/>
+                <w:tblBorders>
+                    <w:top w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:left w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:bottom w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:right w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:insideH w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:insideV w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                </w:tblBorders>
+                <w:tblCellMar>
+                    <w:top w:w="100" w:type="dxa"/>
+                    <w:bottom w:w="100" w:type="dxa"/>
+                    <w:left w:w="150" w:type="dxa"/>
+                    <w:right w:w="150" w:type="dxa"/>
+                </w:tblCellMar>
+            </w:tblPr>
+            <w:tblGrid>
+                <w:gridCol w:w="5000"/>
+                <w:gridCol w:w="2500"/>
+                <w:gridCol w:w="2500"/>
+            </w:tblGrid>
+            ${rows.join('')}
+        </w:tbl>
+    `.trim().replace(/\s+/g, ' ');
+};
+
+const preprocessDocxXml = (xmlString) => {
+    if (!xmlString || typeof xmlString !== 'string') return xmlString;
+
+    // Normalize {salary_table} without @ to {@salary_table} so users don't break templates
+    let normalized = xmlString.replace(/\{salary_table\}/g, '{@salary_table}');
+
+    return normalized.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
+        if (paragraphHtml.includes('{@')) {
+            const rawTagMatch = paragraphHtml.match(/({@[a-zA-Z0-9_]+})/);
+            if (rawTagMatch) {
+                const tag = rawTagMatch[1];
+                const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
+                const pPr = pPrMatch ? pPrMatch[0] : '';
+                let cleanedHtml = paragraphHtml.replace(tag, '');
+
+                let hasActualText = false;
+                const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+                tMatches.forEach(match => {
+                    if (match[1].trim() !== '') {
+                        hasActualText = true;
+                    }
+                });
+
+                if (!hasActualText) {
+                    return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+                }
+
+                return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
+            }
+        }
+        return paragraphHtml;
+    });
+};
+
 module.exports = {
     syncTADecision,
     generateTempPassword,
@@ -259,5 +469,7 @@ module.exports = {
     CURRENT_EXPERIENCE_CERTIFICATE_LABEL,
     normalizeOnboardingExperienceCertificateLabels,
     getUniqueDocumentLabel,
-    buildPreOnboardingTemplateData
+    buildPreOnboardingTemplateData,
+    buildSalaryTableXml,
+    preprocessDocxXml
 };
