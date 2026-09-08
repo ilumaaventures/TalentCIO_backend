@@ -107,6 +107,7 @@ router.use('/offboarding', offboardingRoutes);
 router.use('/hr-email', hrEmailRoutes);
 router.use('/bin', binRoutes);
 router.use('/company/email-settings', emailSettingsRoutes);
+router.use('/email-settings', emailSettingsRoutes);
 router.use('/company/notification-settings', notificationSettingsRoutes);
 router.use('/email-branding', emailBrandingRoutes);
 router.use('/email-templates', emailBrandingTemplateRoutes);
