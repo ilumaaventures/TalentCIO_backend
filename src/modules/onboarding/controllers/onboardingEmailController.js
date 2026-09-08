@@ -884,7 +884,9 @@ exports.resendOnboardingEmail = async (req, res) => {
             }
         }
 
-        await sendEmailForCompany({
+        const branding = await getCompanyEmailBranding(req.companyId, req.company);
+
+        const emailSent = await sendEmailForCompany({
             companyId: req.companyId,
             emailAccountId: accountIdToUse,
             to: recipientEmail,
@@ -896,6 +898,12 @@ exports.resendOnboardingEmail = async (req, res) => {
             attachments,
             ...branding
         });
+
+        if (emailSent === false) {
+            return res.status(502).json({
+                message: 'Failed to send email via the selected sender account. Please verify your sender credentials in Company Settings.'
+            });
+        }
 
         // Create new log for the resend event
         const newLog = await HREmailLog.create({
