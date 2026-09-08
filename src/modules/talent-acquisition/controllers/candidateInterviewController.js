@@ -960,6 +960,13 @@ const deleteInterviewRound = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to update this candidate' });
         }
 
+        if (roundId === 'phase2-imported-interview' || roundId === 'phase2-imported-interview-summary') {
+            candidate.phase2InterviewerFeedback = '';
+            candidate.phase2InterviewStatus = 'None';
+            await candidate.save();
+            return res.status(200).json({ message: 'Imported interview round cleared successfully' });
+        }
+
         const round = candidate.interviewRounds.id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
@@ -1054,6 +1061,74 @@ const evaluateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Candidate not found' });
         }
 
+        const isSyntheticPhase2 = roundId === 'phase2-imported-interview' || roundId === 'phase2-imported-interview-summary';
+
+        if (isSyntheticPhase2) {
+            const { hasAccess } = await ensureCandidateCapability(
+                candidate,
+                req.companyId,
+                req.user,
+                TA_CAPABILITIES.EDIT
+            );
+            if (!hasAccess) {
+                return res.status(403).json({ message: 'Forbidden: You are not authorized to evaluate this round' });
+            }
+
+            const parsedRating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? parseInt(rating, 10) : undefined;
+            const newRound = {
+                levelName: 'Round 1',
+                assignAfterStage: 'Shortlisted',
+                assignedTo: [],
+                phase: 2,
+                status: status || candidate.phase2InterviewStatus || 'Passed',
+                feedback: feedback !== undefined ? feedback : (candidate.phase2InterviewerFeedback || ''),
+                rating: (parsedRating >= 1 && parsedRating <= 10) ? parsedRating : undefined,
+                evaluatedBy: req.user._id,
+                evaluatedAt: new Date(),
+                skillRatings: (skillRatings && Array.isArray(skillRatings)) ? skillRatings.map(sr => ({
+                    skill: sr.skill,
+                    rating: sr.rating,
+                    category: sr.category || 'Additional'
+                })) : []
+            };
+
+            if (!Array.isArray(candidate.interviewRounds)) {
+                candidate.interviewRounds = [];
+            }
+            candidate.interviewRounds.push(newRound);
+            candidate.phase2InterviewerFeedback = '';
+            candidate.phase2InterviewStatus = 'None';
+
+            if (skillRatings && Array.isArray(skillRatings)) {
+                skillRatings.forEach(newSr => {
+                    const globalSrIndex = candidate.skillRatings.findIndex(s => s.skill === newSr.skill);
+                    if (globalSrIndex !== -1) {
+                        candidate.skillRatings[globalSrIndex].rating = newSr.rating;
+                    } else {
+                        candidate.skillRatings.push({
+                            skill: newSr.skill,
+                            rating: newSr.rating,
+                            category: newSr.category || 'Additional'
+                        });
+                    }
+                });
+            }
+
+            await candidate.save();
+
+            const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+                .populate('hiringRequestId', 'requestId client roleDetails')
+                .populate('interviewRounds.assignedTo', 'firstName lastName email')
+                .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+
+            const createdRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
+            return res.status(200).json({
+                message: `Round evaluated as ${newRound.status}`,
+                round: createdRound,
+                candidate: updatedCandidate
+            });
+        }
+
         const round = candidate.interviewRounds.id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
@@ -1074,9 +1149,11 @@ const evaluateInterviewRound = async (req, res) => {
             ? req.user.permissions
             : (req.user?.roles || []).flatMap((role) => (role.permissions || []).map((permission) => permission.key));
         const hasSuperApprove = userPermissions.includes('ta.super_approve') || userPermissions.includes('*');
-        const isAssigned = round.assignedTo.some(id => (id._id || id).toString() === req.user._id.toString());
+        const isAssigned = Array.isArray(round.assignedTo) && round.assignedTo.some(id => (id._id || id).toString() === req.user._id.toString());
+        const isUnassigned = !Array.isArray(round.assignedTo) || round.assignedTo.length === 0;
+        const canManageCandidateEdits = userPermissions.includes('ta.candidate.edit') || userPermissions.includes('ta.edit') || userPermissions.includes('ta.candidate.manage.all') || userPermissions.includes('ta.candidate.manage.assigned') || (req.user?.roles || []).some(r => (typeof r === 'string' ? r === 'Admin' : r?.name === 'Admin'));
 
-        if (!isAssigned && !hasSuperApprove) {
+        if (!isAssigned && !hasSuperApprove && !(isUnassigned && canManageCandidateEdits)) {
             return res.status(403).json({ message: 'Forbidden: You are not authorized to evaluate this round' });
         }
 
