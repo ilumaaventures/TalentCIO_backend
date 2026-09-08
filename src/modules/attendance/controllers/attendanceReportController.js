@@ -22,7 +22,7 @@ exports.getTeamAttendanceReport = async (req, res) => {
             userFilter.reportingManagers = req.user._id;
         }
 
-        const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation profileImage').lean();
+        const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation profileImage joiningDate dateOfLeaving flexWeeklyOffCount customFlexibleOffDays roles employmentType').lean();
 
         let attendanceQuery = { user: { $in: teamMembers.map(m => m._id) }, companyId: req.companyId };
 
@@ -81,8 +81,9 @@ exports.getTeamAttendanceReport = async (req, res) => {
         const attendanceRecords = await Attendance.find(attendanceQuery).lean();
         const company = await Company.findById(req.companyId);
         const weeklyOff = company?.settings?.attendance?.weeklyOff || ['Saturday', 'Sunday'];
+        const flexWeeklyOff = company?.settings?.attendance?.flexWeeklyOff || {};
 
-        res.json({ teamMembers, attendanceRecords, holidays, leaveRecords, weeklyOff });
+        res.json({ teamMembers, attendanceRecords, holidays, leaveRecords, weeklyOff, flexWeeklyOff });
     } catch (error) {
         console.error('getTeamAttendanceReport error:', error);
         res.status(500).json({ message: 'Server Error' });
@@ -111,7 +112,7 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
             userFilter.reportingManagers = req.user._id;
         }
 
-        const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation').lean();
+        const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation joiningDate dateOfLeaving customFlexibleOffDays').lean();
         const userIds = teamMembers.map(m => m._id);
 
         const { start: startDate, end: endDate } = buildTimesheetPeriodRange(`${year}-${String(month).padStart(2, '0')}`, 'Monthly');
@@ -139,7 +140,7 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
             $or: [
                 { startDate: { $gte: startDate, $lte: endDate } },
                 { endDate: { $gte: startDate, $lte: endDate } },
-                { startDate: { $lte: start }, endDate: { $gte: endDate } }
+                { startDate: { $lte: startDate }, endDate: { $gte: endDate } }
             ]
         }).lean();
 
@@ -154,6 +155,8 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
         sheet.addRow(headers);
         sheet.getRow(1).eachCell(cell => Object.assign(cell, headerStyle));
 
+        const todayIST = getStartOfDayIST();
+
         teamMembers.forEach(member => {
             const rowData = [member.employeeCode, `${member.firstName} ${member.lastName}`];
             let presentCount = 0;
@@ -162,21 +165,48 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
             let leaveCount = 0;
             let absentCount = 0;
 
+            const memberJoining = member.joiningDate ? startOfDay(toLocalTimezoneRep(member.joiningDate)) : null;
+            const memberLeaving = member.dateOfLeaving ? startOfDay(toLocalTimezoneRep(member.dateOfLeaving)) : null;
+            const userFlexDays = Array.isArray(member.customFlexibleOffDays) ? member.customFlexibleOffDays : [];
+
             days.forEach(day => {
                 const localDay = toLocalTimezoneRep(day);
+                const dayStart = startOfDay(localDay);
                 const dayStr = format(localDay, 'yyyy-MM-dd');
                 const dayName = format(localDay, 'EEEE');
                 
+                const isBeforeJoining = memberJoining && dayStart < memberJoining;
+                const isAfterLeaving = memberLeaving && dayStart > memberLeaving;
+                const isFuture = dayStart > todayIST;
+
+                if (isBeforeJoining || isAfterLeaving) {
+                    rowData.push('-');
+                    return;
+                }
+
                 const holiday = holidays.find(h => format(toLocalTimezoneRep(h.date), 'yyyy-MM-dd') === dayStr);
-                const isWeeklyOff = weeklyOffs.some(woff => woff.trim().toLowerCase() === dayName.toLowerCase());
+                const isCompanyWeeklyOff = weeklyOffs.some(woff => woff.trim().toLowerCase() === dayName.toLowerCase());
+                const isCustomFlexOff = userFlexDays.some(d => String(d).trim().toLowerCase() === dayStr.toLowerCase() || String(d).trim().toLowerCase() === dayName.toLowerCase());
+                const isWeeklyOff = isCompanyWeeklyOff || isCustomFlexOff;
                 
                 const onLeave = leaves.find(l => {
                     if (l.user.toString() !== member._id.toString()) return false;
                     const lStart = startOfDay(toLocalTimezoneRep(l.startDate));
                     const lEnd = startOfDay(toLocalTimezoneRep(l.endDate));
-                    const current = startOfDay(localDay);
-                    return current >= lStart && current <= lEnd;
+                    return dayStart >= lStart && dayStart <= lEnd;
                 });
+
+                const hasAtt = attendanceRecords.find(a => 
+                    a.user.toString() === member._id.toString() && 
+                    format(toLocalTimezoneRep(a.date), 'yyyy-MM-dd') === dayStr &&
+                    (a.clockIn || a.status === 'PRESENT' || a.status === 'HALF_DAY')
+                );
+
+                if (hasAtt) {
+                    rowData.push('P');
+                    presentCount++;
+                    return;
+                }
 
                 if (onLeave) {
                     const isOffDay = !!holiday || isWeeklyOff;
@@ -201,18 +231,13 @@ exports.exportTeamAttendanceExcel = async (req, res) => {
                     return;
                 }
 
-                const hasAtt = attendanceRecords.find(a => 
-                    a.user.toString() === member._id.toString() && 
-                    format(toLocalTimezoneRep(a.date), 'yyyy-MM-dd') === dayStr
-                );
-
-                if (hasAtt) {
-                    rowData.push('P');
-                    presentCount++;
-                } else {
-                    rowData.push('A');
-                    absentCount++;
+                if (isFuture) {
+                    rowData.push('-');
+                    return;
                 }
+
+                rowData.push('A');
+                absentCount++;
             });
 
             rowData.push(presentCount, holidayCount, weekoffCount, leaveCount, absentCount);

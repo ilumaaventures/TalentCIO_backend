@@ -19,10 +19,14 @@ const isLocalhostRequest = (req) => {
 const ensureRGWorkspace = (req, res, next) => {
     const tenantSlug = resolveTenantSlug(req);
     const isAllowedTenant = tenantSlug === 'rg' || (isLocalhostRequest(req) && tenantSlug === 'telentcio');
+    const isAttendanceDocsEnabled = Boolean(
+        req.company?.settings?.timesheet?.requireAttachment
+        || req.company?.settings?.attendance?.requireAttachment
+    );
 
-    if (!isAllowedTenant) {
+    if (!isAllowedTenant && !isAttendanceDocsEnabled) {
         return res.status(403).json({
-            message: 'This feature is only available for the RG workspace.'
+            message: 'Attendance documents feature is not enabled for this workspace.'
         });
     }
 

@@ -71,7 +71,17 @@ const attendanceSchema = new mongoose.Schema({
     timesheetSyncError: {
         type: Boolean,
         default: false
-    }
+    },
+    isRegularized: {
+        type: Boolean,
+        default: false
+    },
+    regularizedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    regularizedAt: Date,
+    regularizationReason: String
 }, { timestamps: true });
 
 // Ensure one entry per user per day per company

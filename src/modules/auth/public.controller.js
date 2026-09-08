@@ -619,7 +619,8 @@ exports.applyToJob = async (req, res) => {
             coverNote,
             useProfileResume,
             profileResumeUrl,
-            profileResumePublicId
+            profileResumePublicId,
+            source
         } = req.body;
 
         if (!candidateName?.trim() || !email?.trim() || !mobile?.trim()) {
@@ -682,7 +683,10 @@ exports.applyToJob = async (req, res) => {
             coverNote: coverNote?.trim() || '',
             resumeUrl,
             resumePublicId,
-            source: 'Public Job Board',
+            source: (source && String(source).trim())
+                || (req.headers.referer && (req.headers.referer.toLowerCase().includes('resource-gateway') || req.headers.referer.toLowerCase().includes('rg')))
+                || (req.headers.origin && (req.headers.origin.toLowerCase().includes('resource-gateway') || req.headers.origin.toLowerCase().includes('rg')))
+                || 'Public Job Board',
             profileSnapshot: profileSnapshot || undefined
         });
 

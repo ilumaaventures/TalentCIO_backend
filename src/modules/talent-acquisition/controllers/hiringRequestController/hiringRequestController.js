@@ -352,6 +352,89 @@ exports.getHiringRequests = async (req, res) => {
             .limit(limitNum)
             .lean();
 
+        const reqIds = requests.map(r => r._id);
+        if (reqIds.length > 0) {
+            const candidateCounts = await Candidate.aggregate([
+                {
+                    $match: {
+                        companyId: req.companyId,
+                        isDeleted: { $ne: true },
+                        hiringRequestId: { $in: reqIds }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$hiringRequestId',
+                        totalSourced: { $sum: 1 },
+                        totalInterested: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $or: [
+                                            { $eq: ['$status', 'Interested'] },
+                                            { $in: ['Interested', { $ifNull: ['$statusHistory.status', []] }] }
+                                        ]
+                                    },
+                                    1,
+                                    0
+                                ]
+                            }
+                        },
+                        totalInterviewScheduled: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $or: [
+                                            { $eq: ['$status', 'Interview Scheduled'] },
+                                            { $eq: ['$status', 'In Interview'] },
+                                            { $in: ['Scheduled', { $ifNull: ['$interviewRounds.status', []] }] },
+                                            {
+                                                $gt: [
+                                                    {
+                                                        $size: {
+                                                            $filter: {
+                                                                input: { $ifNull: ['$interviewRounds', []] },
+                                                                as: 'ir',
+                                                                cond: {
+                                                                    $or: [
+                                                                        { $eq: ['$$ir.status', 'Scheduled'] },
+                                                                        { $ne: [{ $ifNull: ['$$ir.scheduledDate', null] }, null] }
+                                                                    ]
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    0
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    1,
+                                    0
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]);
+
+            const countMap = {};
+            candidateCounts.forEach(c => {
+                countMap[String(c._id)] = {
+                    totalSourced: c.totalSourced || 0,
+                    totalInterested: c.totalInterested || 0,
+                    totalInterviewScheduled: c.totalInterviewScheduled || 0
+                };
+            });
+
+            requests.forEach(r => {
+                const stats = countMap[String(r._id)] || {};
+                r.totalSourcedCandidates = stats.totalSourced || 0;
+                r.totalInterestedCandidates = stats.totalInterested || 0;
+                r.totalInterviewScheduledCandidates = stats.totalInterviewScheduled || 0;
+            });
+        }
+
         res.json({
             requests,
             totalPages,
