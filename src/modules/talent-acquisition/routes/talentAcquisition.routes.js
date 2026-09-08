@@ -189,9 +189,45 @@ router.get('/public-applications', protect, async (req, res) => {
 
         const apps = await PublicApplication.find(query)
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
-            .populate('hiringRequestId', 'requestId roleDetails client')
+            .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
             .sort({ createdAt: -1 })
             .lean();
+
+        const hiringRequestIds = apps
+            .map(a => a.hiringRequestId?._id || a.hiringRequestId)
+            .filter(Boolean);
+
+        if (hiringRequestIds.length > 0) {
+            const candidateCounts = await Candidate.aggregate([
+                {
+                    $match: {
+                        companyId: req.companyId,
+                        isDeleted: { $ne: true },
+                        hiringRequestId: { $in: hiringRequestIds }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$hiringRequestId',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
+
+            const countMap = {};
+            candidateCounts.forEach(c => {
+                countMap[String(c._id)] = c.count;
+            });
+
+            apps.forEach(a => {
+                const hId = a.hiringRequestId?._id || a.hiringRequestId;
+                const count = hId ? (countMap[String(hId)] || 0) : 0;
+                a.sourcedCandidatesCount = count;
+                if (a.hiringRequestId && typeof a.hiringRequestId === 'object') {
+                    a.hiringRequestId.totalSourcedCandidates = count;
+                }
+            });
+        }
 
         const appsWithHistory = await attachLastApplicationData(apps);
         res.json(appsWithHistory);
