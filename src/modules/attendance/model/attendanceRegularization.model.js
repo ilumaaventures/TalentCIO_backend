@@ -41,6 +41,12 @@ const attendanceRegularizationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
+    adminComment: {
+        type: String
+    },
+    approvedAt: {
+        type: Date
+    },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',

@@ -4,7 +4,12 @@ const User = require('../../user/user.model');
 const Role = require('../../user/role.model');
 const Company = require('../../company/company.model');
 const NotificationService = require('../../../services/notificationService');
-const { getISTTime, getStartOfDayIST } = require('../attendancePolicy');
+const { getISTTime, getStartOfDayIST, buildAttendancePolicy } = require('../attendancePolicy');
+const {
+    ensureTimesheetPeriodEditable,
+    applyPolicyMetadata,
+    applyPresentOnlyRecord
+} = require('../utils/attendanceHelpers');
 
 exports.requestRegularization = async (req, res) => {
     try {
@@ -17,6 +22,27 @@ exports.requestRegularization = async (req, res) => {
         const dateObj = new Date(date);
         const startOfDayDate = getStartOfDayIST(dateObj);
         const endOfDayDate = new Date(startOfDayDate.getTime() + 24 * 60 * 60 * 1000);
+        const todayStart = getStartOfDayIST();
+
+        if (startOfDayDate > todayStart) {
+            return res.status(400).json({ message: 'Cannot request regularization for future dates.' });
+        }
+
+        const userDoc = await User.findById(req.user._id).select('department firstName lastName joiningDate reportingManagers').lean();
+        if (userDoc?.joiningDate && startOfDayDate < getStartOfDayIST(userDoc.joiningDate)) {
+            return res.status(400).json({ message: 'Cannot regularize attendance prior to joining date.' });
+        }
+
+        const company = req.company || await Company.findById(req.companyId).select('settings.timesheet settings.attendance').lean();
+        const editability = await ensureTimesheetPeriodEditable({
+            company,
+            companyId: req.companyId,
+            userId: req.user._id,
+            dateValue: startOfDayDate
+        });
+        if (!editability.ok) {
+            return res.status(400).json({ message: editability.message });
+        }
 
         const existingPending = await AttendanceRegularization.findOne({
             user: req.user._id,
@@ -31,20 +57,48 @@ exports.requestRegularization = async (req, res) => {
 
         const rawClockIn = requestedClockIn || clockIn;
         const rawClockOut = requestedClockOut || clockOut;
-        const finalClockIn = rawClockIn ? new Date(rawClockIn) : null;
-        const finalClockOut = rawClockOut ? new Date(rawClockOut) : null;
 
         let finalType = type;
         if (!finalType) {
-            if (finalClockIn && finalClockOut) finalType = 'BOTH';
-            else if (finalClockIn) finalType = 'IN';
-            else if (finalClockOut) finalType = 'OUT';
+            if (rawClockIn && rawClockOut) finalType = 'BOTH';
+            else if (rawClockIn) finalType = 'IN';
+            else if (rawClockOut) finalType = 'OUT';
             else finalType = 'PRESENT';
         }
+
+        let finalClockIn = (finalType === 'IN' || finalType === 'BOTH') && rawClockIn ? new Date(rawClockIn) : null;
+        let finalClockOut = (finalType === 'OUT' || finalType === 'BOTH') && rawClockOut ? new Date(rawClockOut) : null;
+
+        if (finalType === 'BOTH') {
+            if (!finalClockIn || !finalClockOut) {
+                return res.status(400).json({ message: 'Both check-in and check-out times are required for BOTH type.' });
+            }
+            if (finalClockIn >= finalClockOut) {
+                return res.status(400).json({ message: 'Check-in time must be before check-out time.' });
+            }
+        } else if (finalType === 'IN') {
+            if (!finalClockIn) {
+                return res.status(400).json({ message: 'Check-in time is required for IN type.' });
+            }
+            finalClockOut = null;
+        } else if (finalType === 'OUT') {
+            if (!finalClockOut) {
+                return res.status(400).json({ message: 'Check-out time is required for OUT type.' });
+            }
+            finalClockIn = null;
+        } else if (finalType === 'PRESENT') {
+            finalClockIn = null;
+            finalClockOut = null;
+        }
+
+        const primaryManager = (userDoc?.reportingManagers && userDoc.reportingManagers.length > 0)
+            ? userDoc.reportingManagers[0]
+            : null;
 
         const regularization = await AttendanceRegularization.create({
             companyId: req.companyId,
             user: req.user._id,
+            manager: primaryManager,
             date: startOfDayDate,
             type: finalType,
             reason,
@@ -54,41 +108,31 @@ exports.requestRegularization = async (req, res) => {
         });
 
         const io = req.app.get('io');
-        const userWithDept = await User.findById(req.user._id).select('department firstName lastName').lean();
         
+        // Target notifications: ONLY direct reporting managers + active Admins/HR Admins
+        const directManagerIds = (userDoc?.reportingManagers || []).map(id => id.toString());
         const targetRoles = await Role.find({
             companyId: req.companyId,
-            name: { $in: ['Admin', 'Manager', 'HR Admin', 'System Admin'] },
+            name: { $in: ['Admin', 'HR Admin', 'System Admin'] },
             isActive: true
         }).select('_id').lean();
 
         const roleIds = targetRoles.map(r => r._id);
-        const orConditions = [];
-        if (roleIds.length > 0) {
-            orConditions.push({ roles: { $in: roleIds } });
-        }
-        if (userWithDept?.department) {
-            orConditions.push({ department: userWithDept.department });
-        }
+        const adminUsers = roleIds.length > 0
+            ? await User.find({ companyId: req.companyId, roles: { $in: roleIds }, isActive: true }).select('_id').lean()
+            : [];
+        const adminUserIds = adminUsers.map(u => u._id.toString());
 
-        const managerQuery = {
-            companyId: req.companyId,
-            isActive: true
-        };
-        if (orConditions.length > 0) {
-            managerQuery.$or = orConditions;
-        }
+        const recipientIds = [...new Set([...directManagerIds, ...adminUserIds])]
+            .filter(id => id !== req.user._id.toString());
 
-        const managers = await User.find(managerQuery).select('_id').lean();
-        const managerIds = managers.map(m => m._id.toString()).filter(id => id !== req.user._id.toString());
-
-        if (managerIds.length > 0) {
-            await NotificationService.createManyNotifications(io, managerIds.map(managerId => ({
+        if (recipientIds.length > 0) {
+            await NotificationService.createManyNotifications(io, recipientIds.map(managerId => ({
                 user: managerId,
                 companyId: req.companyId,
                 preferenceKey: 'attendance_regularization_submitted',
                 title: 'New Regularization Request',
-                message: `${userWithDept?.firstName || 'An employee'} requested attendance regularization for ${startOfDayDate.toLocaleDateString()}.`,
+                message: `${userDoc?.firstName || 'An employee'} requested attendance regularization for ${startOfDayDate.toLocaleDateString()}.`,
                 type: 'Info',
                 link: '/attendance?tab=regularize',
                 origin: req.headers?.origin || ''
@@ -107,12 +151,26 @@ exports.getRegularizationRequests = async (req, res) => {
         const { status, page = 1, limit = 20 } = req.query;
         const filter = { companyId: req.companyId };
 
-        const isManager = req.user?.roles?.some(r => ['Admin', 'Manager', 'HR Admin', 'System Admin'].includes(typeof r === 'string' ? r : r.name))
+        const isAdmin = req.user?.roles?.some(r => ['Admin', 'HR Admin', 'System Admin'].includes(typeof r === 'string' ? r : r.name))
             || req.user?.permissions?.includes('*')
+            || req.user?.permissions?.includes('attendance.view_all')
+            || req.user?.permissions?.includes('attendance.update_others');
+
+        const isManager = req.user?.roles?.some(r => (typeof r === 'string' ? r : r.name) === 'Manager')
+            || (req.user?.directReports && req.user.directReports.length > 0)
             || req.user?.permissions?.includes('attendance.approve');
 
-        if (!isManager) {
-            filter.user = req.user._id;
+        if (!isAdmin) {
+            if (isManager) {
+                const directReports = await User.find({
+                    companyId: req.companyId,
+                    reportingManagers: req.user._id
+                }).select('_id').lean();
+                const directReportIds = directReports.map(u => u._id);
+                filter.user = { $in: [req.user._id, ...directReportIds] };
+            } else {
+                filter.user = req.user._id;
+            }
         }
 
         if (status) {
@@ -120,8 +178,9 @@ exports.getRegularizationRequests = async (req, res) => {
         }
 
         const requests = await AttendanceRegularization.find(filter)
-            .populate('user', 'firstName lastName email department profilePicture')
+            .populate('user', 'firstName lastName email department profilePicture employeeCode')
             .populate('approvedBy', 'firstName lastName')
+            .populate('manager', 'firstName lastName')
             .sort({ createdAt: -1 })
             .skip((page - 1) * limit)
             .limit(Number(limit))
@@ -170,6 +229,24 @@ exports.processRegularizationRequest = async (req, res) => {
             return res.status(404).json({ message: 'Pending regularization request not found.' });
         }
 
+        // Self-Approval Prevention
+        const isSelf = regularization.user.toString() === req.user._id.toString();
+        if (isSelf) {
+            return res.status(403).json({ message: 'You cannot approve or reject your own regularization request.' });
+        }
+
+        // Authorization Check: Admin/HR Admin or direct reporting manager
+        const isAdmin = req.user?.roles?.some(r => ['Admin', 'HR Admin', 'System Admin'].includes(typeof r === 'string' ? r : r.name))
+            || req.user?.permissions?.includes('*')
+            || req.user?.permissions?.includes('attendance.approve');
+
+        const targetUser = await User.findById(regularization.user).select('reportingManagers attendanceMode attendanceShiftCode').lean();
+        const isDirectManager = targetUser?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
+
+        if (!isAdmin && !isDirectManager) {
+            return res.status(403).json({ message: 'Not authorized to process this regularization request.' });
+        }
+
         const finalComment = adminComment || rejectionReason || '';
         regularization.status = effectiveAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
         regularization.approvedBy = req.user._id;
@@ -192,6 +269,8 @@ exports.processRegularizationRequest = async (req, res) => {
                 }
             });
 
+            const company = req.company || await Company.findById(req.companyId).select('settings.attendance').lean();
+
             if (!attendance) {
                 attendance = new Attendance({
                     user: regularization.user,
@@ -200,16 +279,40 @@ exports.processRegularizationRequest = async (req, res) => {
                 });
             }
 
-            if (regularization.requestedClockIn) {
-                attendance.clockIn = regularization.requestedClockIn;
-                attendance.clockInIST = getISTTime(regularization.requestedClockIn);
+            // Apply Shift Policy Metadata
+            const policy = buildAttendancePolicy({
+                company,
+                user: targetUser,
+                attendanceDate: startOfDayDate,
+                clockInTime: regularization.requestedClockIn || attendance.clockIn
+            });
+            applyPolicyMetadata(attendance, policy);
+
+            // Shift Integrity & Safe Update:
+            // ONLY update clockIn if regularization is for IN or BOTH
+            if (regularization.type === 'IN' || regularization.type === 'BOTH') {
+                if (regularization.requestedClockIn) {
+                    attendance.clockIn = regularization.requestedClockIn;
+                    attendance.clockInIST = getISTTime(regularization.requestedClockIn);
+                }
             }
-            if (regularization.requestedClockOut) {
-                attendance.clockOut = regularization.requestedClockOut;
-                attendance.clockOutIST = getISTTime(regularization.requestedClockOut);
+
+            // ONLY update clockOut if regularization is for OUT or BOTH
+            // If type === 'IN', attendance.clockOut is left untouched (null if currently on active shift, or preserving existing clockOut)
+            if (regularization.type === 'OUT' || regularization.type === 'BOTH') {
+                if (regularization.requestedClockOut) {
+                    attendance.clockOut = regularization.requestedClockOut;
+                    attendance.clockOutIST = getISTTime(regularization.requestedClockOut);
+                }
+            }
+
+            if (regularization.type === 'PRESENT' || policy.mode === 'present_only') {
+                applyPresentOnlyRecord(attendance, '[Regularized as Present]');
             }
 
             attendance.status = 'PRESENT';
+            attendance.approvalStatus = 'APPROVED';
+            attendance.approvedBy = req.user._id;
             attendance.isRegularized = true;
             attendance.regularizedBy = req.user._id;
             attendance.regularizedAt = new Date();
