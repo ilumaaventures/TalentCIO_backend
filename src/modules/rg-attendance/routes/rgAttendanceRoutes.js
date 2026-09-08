@@ -13,10 +13,6 @@ router.use(ensureRGWorkspace);
 
 router.get(
     '/document-summary',
-    authorizeRoleOrPermission({
-        roles: ['Admin', 'Manager'],
-        permissions: ['attendance.view', 'attendance.view_others', 'user.read']
-    }),
     getDocumentSummary
 );
 

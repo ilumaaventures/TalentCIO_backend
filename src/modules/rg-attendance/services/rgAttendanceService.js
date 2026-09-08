@@ -34,7 +34,10 @@ const buildVisibleUsers = async ({ companyId, requester }) => {
     };
 
     if (!canViewCompanyWideRGDocuments(requester)) {
-        query.reportingManagers = requester._id;
+        query.$or = [
+            { reportingManagers: requester._id },
+            { _id: requester._id }
+        ];
     }
 
     return User.find(query)
