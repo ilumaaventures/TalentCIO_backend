@@ -125,9 +125,18 @@ const createCompany = async (req, res) => {
         }
 
         // 1. Pre-flight Validation
-        const existingSubdomain = await Company.findOne({ subdomain: companyData.subdomain.toLowerCase() });
+        if (!companyData.subdomain || typeof companyData.subdomain !== 'string' || !companyData.subdomain.trim()) {
+            return res.status(400).json({ message: 'Subdomain is required.' });
+        }
+        companyData.subdomain = companyData.subdomain.trim().toLowerCase();
+
+        const existingSubdomain = await Company.findOne({ subdomain: companyData.subdomain });
         if (existingSubdomain) {
             return res.status(400).json({ message: `Subdomain '${companyData.subdomain}' is already taken. Please choose another one.` });
+        }
+
+        if (!companyData.planId || (typeof companyData.planId === 'string' && !companyData.planId.trim())) {
+            companyData.planId = null;
         }
 
         if (companyData.enabledModules) {
@@ -176,7 +185,7 @@ const createCompany = async (req, res) => {
 
         // 2. Creation Process
         if (companyData.status === 'Trial' && !companyData.trialEndsAt) {
-            const plan = await require('../plan/plan.model').findById(companyData.planId);
+            const plan = companyData.planId ? await require('../plan/plan.model').findById(companyData.planId) : null;
             const trialDays = plan ? plan.trialDays : 14;
             companyData.trialEndsAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
         }
@@ -483,7 +492,7 @@ const updateCompany = async (req, res) => {
         const fieldsToUpdate = ['name', 'email', 'contactPerson', 'contactPhone', 'industry', 'country', 'timezone', 'status', 'planId', 'allowedDomains', 'enabledModules'];
         fieldsToUpdate.forEach(field => {
             if (req.body[field] !== undefined) {
-                if (field === 'planId' && req.body[field] === "") {
+                if (field === 'planId' && (req.body[field] === "" || (typeof req.body[field] === 'string' && !req.body[field].trim()))) {
                     company[field] = null;
                 } else if (field === 'enabledModules') {
                     company[field] = normalizeEnabledModules(req.body[field]);
