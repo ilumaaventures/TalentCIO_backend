@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const clientPortalController = require('./clientPortal.controller');
 const { protectClient, requireClientRole } = require('../../common/middleware/clientAuthMiddleware');
+const { requireModule } = require('../../common/middleware/moduleGuard');
 
-// All client portal routes require protectClient
+// All client portal routes require protectClient & active clientPortal / talentAcquisition module
 router.use(protectClient);
+router.use(requireModule(['clientPortal', 'talentAcquisition']));
 
 router.get('/dashboard', clientPortalController.getDashboard);
 router.get('/requisitions', clientPortalController.getRequisitions);

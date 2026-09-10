@@ -28,7 +28,11 @@ const buildClientRequisitionQuery = (req, extraFilter = {}) => {
 
         const uniqueNames = Array.from(new Set(names));
         uniqueNames.forEach(name => {
-            clientOr.push({ client: new RegExp(`^${escapeRegex(name)}$`, 'i') });
+            clientOr.push({
+                client: new RegExp(`^${escapeRegex(name)}$`, 'i'),
+                // Prevent matching a requisition assigned to a different client
+                clientId: { $in: [null, undefined, req.clientId] }
+            });
         });
     }
 
@@ -260,8 +264,26 @@ exports.getCandidateById = async (req, res) => {
 exports.getMyInterviews = async (req, res) => {
     try {
         const isClientAdmin = req.clientUser.role === 'ClientAdmin';
+
+        // Pre-fetch client's accessible requisitions
+        const visibleReqs = await HiringRequest.find(
+            buildClientRequisitionQuery(req, {
+                'clientVisibility.enabled': { $ne: false },
+                status: { $nin: ['Draft', 'Rejected'] }
+            })
+        ).lean();
+
+        const reqMap = new Map(visibleReqs.map(r => [String(r._id), r]));
+        const visibleReqIds = Array.from(reqMap.keys());
+
+        if (visibleReqIds.length === 0) {
+            return res.json([]);
+        }
+
         const query = {
             companyId: req.companyId,
+            hiringRequestId: { $in: visibleReqIds },
+            hiddenFromClient: { $ne: true },
             isDeleted: false
         };
 
@@ -271,23 +293,18 @@ exports.getMyInterviews = async (req, res) => {
             query['interviewRounds.assignedClientUsers'] = req.clientUser._id;
         }
 
-        const candidates = await Candidate.find(query)
-            .populate('hiringRequestId', '_id requestId roleDetails clientId client')
-            .lean();
+        const candidates = await Candidate.find(query).lean();
 
         const myInterviews = [];
-        const clientNames = req.client
-            ? [req.client.name, req.client.companyName, req.client.nickname].filter(Boolean).map(n => String(n).toLowerCase().trim())
-            : [];
 
         candidates.forEach(c => {
-            const reqDoc = c.hiringRequestId;
+            const reqDoc = reqMap.get(String(c.hiringRequestId));
             if (!reqDoc) return;
 
-            const isClientIdMatch = reqDoc.clientId && String(reqDoc.clientId) === String(req.clientId);
-            const isClientNameMatch = reqDoc.client && clientNames.includes(String(reqDoc.client).toLowerCase().trim());
-
-            if (!isClientIdMatch && !isClientNameMatch) return;
+            // Enforce visibility engine
+            if (!isCandidateVisibleToClient(c, reqDoc, req.clientUser)) {
+                return;
+            }
 
             // Auto-heal clientId if missing on requisition
             if (!reqDoc.clientId && req.clientId) {
@@ -361,6 +378,16 @@ exports.evaluateRound = async (req, res) => {
 
         if (!requisition.clientId && req.clientId) {
             HiringRequest.updateOne({ _id: requisition._id }, { $set: { clientId: req.clientId } }).catch(() => {});
+        }
+
+        // Enforce candidate visibility in client portal
+        if (!isCandidateVisibleToClient(candidate, requisition, req.clientUser)) {
+            return res.status(403).json({ message: 'Candidate is not accessible in client portal' });
+        }
+
+        // Enforce client feedback permission toggle
+        if (requisition.clientVisibility?.allowClientFeedback === false) {
+            return res.status(403).json({ message: 'Client interview feedback is disabled for this requisition' });
         }
 
         const round = candidate.interviewRounds.id(roundId);
@@ -453,6 +480,37 @@ exports.submitClientDecision = async (req, res) => {
 
         if (!requisition.clientId && req.clientId) {
             HiringRequest.updateOne({ _id: requisition._id }, { $set: { clientId: req.clientId } }).catch(() => {});
+        }
+
+        // Enforce candidate visibility in client portal
+        if (!isCandidateVisibleToClient(candidate, requisition, req.clientUser)) {
+            return res.status(403).json({ message: 'Candidate is not accessible in client portal' });
+        }
+
+        // Enforce client decision permission toggle
+        if (requisition.clientVisibility?.allowClientDecision === false) {
+            return res.status(403).json({ message: 'Client decisions are disabled for this requisition' });
+        }
+
+        // Enforce allowedDecisionActions on requisition
+        const allowedActions = Array.isArray(requisition.clientVisibility?.allowedDecisionActions) && requisition.clientVisibility.allowedDecisionActions.length > 0
+            ? requisition.clientVisibility.allowedDecisionActions
+            : ['Shortlist', 'Reject', 'Hold'];
+
+        const actionNorm = (val) => {
+            const v = String(val || '').toLowerCase().trim();
+            if (v.startsWith('shortlist')) return 'shortlist';
+            if (v.startsWith('select')) return 'select';
+            if (v.startsWith('reject')) return 'reject';
+            if (v.includes('hold')) return 'hold';
+            return v;
+        };
+
+        const isAllowed = allowedActions.some(a => actionNorm(a) === actionNorm(decision));
+        if (!isAllowed) {
+            return res.status(400).json({
+                message: `Decision '${decision}' is not permitted for this requisition. Allowed actions: ${allowedActions.join(', ')}`
+            });
         }
 
         candidate.phase2Decision = decision;
@@ -561,17 +619,27 @@ exports.scheduleRound = async (req, res) => {
             HiringRequest.updateOne({ _id: requisition._id }, { $set: { clientId: req.clientId } }).catch(() => {});
         }
 
-        // Check if scheduling is allowed
-        const allowScheduling = requisition.clientVisibility?.allowClientScheduling === true ||
-            req.clientUser.role === 'ClientAdmin';
+        // Enforce candidate visibility in client portal
+        if (!isCandidateVisibleToClient(candidate, requisition, req.clientUser)) {
+            return res.status(403).json({ message: 'Candidate is not accessible in client portal' });
+        }
 
-        if (!allowScheduling) {
+        // Check if scheduling is allowed on this requisition
+        if (requisition.clientVisibility?.allowClientScheduling !== true) {
             return res.status(403).json({ message: 'Client interview scheduling is not enabled for this requisition' });
         }
 
         const round = (candidate.interviewRounds || []).id(roundId);
         if (!round) {
             return res.status(404).json({ message: 'Interview round not found' });
+        }
+
+        const isClientAdmin = req.clientUser.role === 'ClientAdmin';
+        const isAssigned = Array.isArray(round.assignedClientUsers) &&
+            round.assignedClientUsers.some(uid => String(uid?._id || uid) === String(req.clientUser._id));
+
+        if (!isClientAdmin && !isAssigned) {
+            return res.status(403).json({ message: 'You are not assigned to schedule this interview round' });
         }
 
         round.scheduledDate = new Date(scheduledDate);

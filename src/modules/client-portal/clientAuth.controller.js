@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const ClientUser = require('./clientUser.model');
 const Client = require('../client/client.model');
+const Company = require('../company/company.model');
+const { sendEmailForCompany } = require('../../services/companyEmailService');
 
 const generateClientToken = (user) => {
     return jwt.sign(
@@ -61,13 +63,23 @@ exports.login = async (req, res) => {
         const userObj = user.toObject();
         delete userObj.password;
 
+        const company = await Company.findById(user.companyId)
+            .select('name settings.logo settings.themeColor')
+            .lean();
+
         return res.json({
             token,
             user: userObj,
             client: {
                 _id: client._id,
                 name: client.name || client.companyName
-            }
+            },
+            agency: company ? {
+                _id: company._id,
+                name: company.name,
+                logo: company.settings?.logo || null,
+                themeColor: company.settings?.themeColor || '#4f46e5'
+            } : null
         });
     } catch (error) {
         console.error('Client login error:', error);
@@ -109,12 +121,19 @@ exports.acceptInvite = async (req, res) => {
         delete userObj.password;
 
         const client = await Client.findById(user.clientId).select('_id name companyName').lean();
+        const company = await Company.findById(user.companyId).select('name settings.logo settings.themeColor').lean();
 
         return res.json({
             message: 'Invitation accepted successfully',
             token: authToken,
             user: userObj,
-            client: client ? { _id: client._id, name: client.name || client.companyName } : null
+            client: client ? { _id: client._id, name: client.name || client.companyName } : null,
+            agency: company ? {
+                _id: company._id,
+                name: company.name,
+                logo: company.settings?.logo || null,
+                themeColor: company.settings?.themeColor || '#4f46e5'
+            } : null
         });
     } catch (error) {
         console.error('Accept invite error:', error);
@@ -123,12 +142,26 @@ exports.acceptInvite = async (req, res) => {
 };
 
 exports.getMe = async (req, res) => {
+    let agency = null;
+    if (req.companyId) {
+        const company = await Company.findById(req.companyId).select('name settings.logo settings.themeColor').lean();
+        if (company) {
+            agency = {
+                _id: company._id,
+                name: company.name,
+                logo: company.settings?.logo || null,
+                themeColor: company.settings?.themeColor || '#4f46e5'
+            };
+        }
+    }
+
     return res.json({
         user: req.clientUser,
         client: req.client ? {
             _id: req.client._id,
             name: req.client.name || req.client.companyName
-        } : null
+        } : null,
+        agency
     });
 };
 
@@ -158,11 +191,33 @@ exports.forgotPassword = async (req, res) => {
         user.resetPasswordExpires = new Date(Date.now() + 3600 * 1000); // 1 hour
         await user.save();
 
-        console.log(`[CLIENT_AUTH] Password reset token generated for ${user.email}: ${resetToken}`);
+        const origin = req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5174';
+        const resetLink = `${origin}/client-portal/reset-password?token=${resetToken}`;
+
+        try {
+            await sendEmailForCompany({
+                companyId: user.companyId,
+                to: user.email,
+                subject: 'Reset Your Client Portal Password',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                        <h2 style="color: #4f46e5; margin-bottom: 16px;">Password Reset Request</h2>
+                        <p style="color: #475569; font-size: 14px; line-height: 1.5;">Hello ${user.firstName || 'there'},</p>
+                        <p style="color: #475569; font-size: 14px; line-height: 1.5;">We received a request to reset the password for your Client Portal account. Click the button below to choose a new password:</p>
+                        <div style="margin: 24px 0; text-align: center;">
+                            <a href="${resetLink}" style="display: inline-block; background-color: #4f46e5; color: #ffffff; padding: 12px 24px; font-size: 14px; font-weight: bold; text-decoration: none; border-radius: 6px;">Reset Password</a>
+                        </div>
+                        <p style="color: #64748b; font-size: 12px; line-height: 1.5;">This link will expire in 1 hour. If you did not request a password reset, you can safely ignore this email.</p>
+                    </div>
+                `,
+                tags: ['CLIENT_PASSWORD_RESET']
+            });
+        } catch (mailErr) {
+            console.error('Failed to dispatch client password reset email:', mailErr);
+        }
 
         return res.json({
-            message: 'If an account exists with this email, password reset instructions have been generated.',
-            resetToken // Included for development/testing convenience
+            message: 'If an account exists with this email, password reset instructions have been generated.'
         });
     } catch (error) {
         console.error('Client forgot password error:', error);

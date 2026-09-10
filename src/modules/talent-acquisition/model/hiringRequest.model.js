@@ -65,8 +65,8 @@ const HiringRequestSchema = new mongoose.Schema({
     clientVisibility: {
         enabled: { type: Boolean, default: false },
         visibleFromPhaseId: { type: mongoose.Schema.Types.ObjectId, default: null },
-        visibleFromPhaseIndex: { type: Number, default: 0 },
-        visibleFromPhaseOrder: { type: Number, default: null },
+        visibleFromPhaseIndex: { type: Number, default: 1 }, // Default to Phase 2 (safe by default)
+        visibleFromPhaseOrder: { type: Number, default: 1 }, // Default to Phase 2
         visibleFromCondition: {
             type: String,
             enum: ['phaseOrder', 'profileShared', 'custom'],
@@ -85,7 +85,6 @@ const HiringRequestSchema = new mongoose.Schema({
         maskCompensation: { type: Boolean, default: true },
         showInternalNotes: { type: Boolean, default: false },
         allowClientFeedback: { type: Boolean, default: true },
-        allowClientScheduling: { type: Boolean, default: false },
         candidateFilter: {
             type: String,
             enum: ['all', 'shortlistedOnly', 'interviewScheduled', 'explicitOnly'],

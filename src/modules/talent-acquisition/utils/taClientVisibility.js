@@ -2,6 +2,23 @@ const { maskEmail, maskPhone, omitFields } = require('./taVisibility');
 
 /**
  * Checks if a candidate is visible to the client based on requisition clientVisibility settings.
+ *
+ * EVALUATION PRECEDENCE:
+ * 1. Hard Overrides:
+ *    a. candidate.hiddenFromClient === true -> ALWAYS HIDDEN (recruiter manual suppress)
+ *    b. visibility.enabled === false -> ALWAYS HIDDEN (portal disabled on requisition)
+ * 2. Exclusion Guardrails:
+ *    a. visibility.hideRejected -> Drop if candidate status/decision is Rejected
+ *    b. visibility.hideOnHold -> Drop if candidate status/decision is Hold
+ * 3. Candidate Qualification Filters:
+ *    - 'explicitOnly' / visibleFromCondition: 'profileShared': Must have profileShared === true
+ *    - 'shortlistedOnly' / onlyShortlisted: Must be Shortlisted or Selected
+ *    - 'interviewScheduled' / requireClientInterview: Must have client interview scheduled
+ * 4. Direct Assignment Bypass:
+ *    - If logged-in client user is in candidate.interviewRounds.assignedClientUsers -> VISIBLE
+ * 5. Phase-Gating Threshold:
+ *    - Gated by minPhaseOrder (defaults to 1 = Phase 2 if unspecified).
+ *    - Candidate must meet or exceed minPhaseOrder (or have progressed past Phase 1).
  */
 const isCandidateVisibleToClient = (candidate, hiringRequest, clientUser) => {
     if (!candidate || !hiringRequest) return false;
@@ -9,8 +26,17 @@ const isCandidateVisibleToClient = (candidate, hiringRequest, clientUser) => {
     // 1. Explicitly hidden from client override (recruiter manually unshared this candidate)
     if (candidate.hiddenFromClient === true) return false;
 
+    // 2. Direct client assignment check: If client interviewer is directly assigned to any round on this candidate
+    if (clientUser && Array.isArray(candidate.interviewRounds)) {
+        const isAssigned = candidate.interviewRounds.some(round =>
+            Array.isArray(round.assignedClientUsers) &&
+            round.assignedClientUsers.some(uid => String(uid?._id || uid) === String(clientUser._id))
+        );
+        if (isAssigned) return true;
+    }
+
     const visibility = hiringRequest.clientVisibility || {};
-    // 2. If client portal visibility is explicitly disabled on the requisition, hide completely
+    // 3. If client portal visibility is explicitly disabled on the requisition, hide completely
     if (visibility.enabled === false) return false;
 
     // Status / decision normalization
@@ -25,12 +51,12 @@ const isCandidateVisibleToClient = (candidate, hiringRequest, clientUser) => {
     const isOnHold = status === 'Hold' || status === 'On Hold' ||
                      decision === 'Hold' || p2Decision === 'Hold' || p3Decision === 'Hold';
 
-    // 3. Drop/Rejected guardrail: If hideRejected is true, drop immediately
+    // 4. Drop/Rejected guardrail: If hideRejected is true, drop immediately
     if (visibility.hideRejected && isRejected) {
         return false;
     }
 
-    // 4. On-Hold guardrail: If hideOnHold is true, drop immediately
+    // 5. On-Hold guardrail: If hideOnHold is true, drop immediately
     if (visibility.hideOnHold && isOnHold) {
         return false;
     }
@@ -45,7 +71,7 @@ const isCandidateVisibleToClient = (candidate, hiringRequest, clientUser) => {
 
     const isExplicitlyShared = candidate.profileShared === true;
 
-    // 5. Candidate Qualification Filter (e.g. Phase 2 Shortlisted Only)
+    // 6. Candidate Qualification Filter (e.g. Phase 2 Shortlisted Only)
     const filter = visibility.candidateFilter || (visibility.onlyShortlisted ? 'shortlistedOnly' : 'all');
 
     if (filter === 'explicitOnly' || visibility.visibleFromCondition === 'profileShared') {
@@ -64,19 +90,17 @@ const isCandidateVisibleToClient = (candidate, hiringRequest, clientUser) => {
         if (!hasInterview && !hasClientRound) return false;
     }
 
-    // 6. Direct client assignment check: If client interviewer is directly assigned to any round on this candidate
-    if (clientUser && Array.isArray(candidate.interviewRounds)) {
-        const isAssigned = candidate.interviewRounds.some(round =>
-            Array.isArray(round.assignedClientUsers) &&
-            round.assignedClientUsers.some(uid => String(uid?._id || uid) === String(clientUser._id))
-        );
-        if (isAssigned) return true;
+    // 7. Explicit profile share override: Recruiter manually marked this profile as shared with the client
+    if (isExplicitlyShared) {
+        return true;
     }
 
-    // 7. Phase-Gated Access Check
-    const minPhaseOrder = Number(visibility.visibleFromPhaseOrder ?? visibility.visibleFromPhaseIndex ?? 0);
+    // 8. Phase-Gated Access Check
+    // Secure by default: If not explicitly specified, default to 1 (Phase 2), preventing raw Phase 1 leads from leaking.
+    const rawOrder = visibility.visibleFromPhaseOrder ?? visibility.visibleFromPhaseIndex;
+    const minPhaseOrder = (rawOrder !== undefined && rawOrder !== null) ? Number(rawOrder) : 1;
 
-    // If Phase 1 (index 0) or no phase gating required
+    // If Phase 1 (index 0) was explicitly configured
     if (minPhaseOrder <= 0) {
         return true;
     }

@@ -92,6 +92,8 @@ const APPLICANT_REVIEW_SELECT = [
 
 const taAccessSettingsViewPermissions = ['ta.manage', 'ta.config.view', 'ta.config.edit'];
 const taAccessSettingsEditPermissions = ['ta.manage', 'ta.config.edit'];
+const taClientManagePermissions = ['ta.client.manage', 'ta.manage', 'ta.config.edit'];
+const taClientViewPermissions = ['ta.client.manage', 'ta.client.view', 'ta.view', 'ta.manage', 'ta.config.view', 'ta.config.edit'];
 const requireTAAnalyticsAccess = async (req, res, next) => {
     try {
         if (hasAssignedTAAnalyticsAccess(req.user)) {
@@ -153,14 +155,14 @@ router.get('/clients', protect, taController.getTAClients);
 router.put('/clients/status', protect, taController.updateClientStatus);
 
 // Client portal user management for TA clients
-router.get('/clients/:clientId/users', protect, agencyClientController.getClientUsers);
-router.get('/clients/:clientId/shared-summary', protect, agencyClientController.getClientSharedAccessSummary);
-router.post('/clients/:clientId/users/invite', protect, agencyClientController.inviteClientUser);
-router.post('/clients/:clientId/invite-user', protect, agencyClientController.inviteClientUser);
-router.put('/clients/:clientId/users/:userId', protect, agencyClientController.updateClientUser);
-router.patch('/clients/:clientId/users/:userId', protect, agencyClientController.updateClientUser);
-router.delete('/clients/:clientId/users/:userId', protect, agencyClientController.deleteClientUser);
-router.post('/clients/:clientId/users/:userId/resend-invite', protect, agencyClientController.resendInvite);
+router.get('/clients/:clientId/users', protect, authorizeAny(taClientViewPermissions), agencyClientController.getClientUsers);
+router.get('/clients/:clientId/shared-summary', protect, authorizeAny(taClientViewPermissions), agencyClientController.getClientSharedAccessSummary);
+router.post('/clients/:clientId/users/invite', protect, authorizeAny(taClientManagePermissions), agencyClientController.inviteClientUser);
+router.post('/clients/:clientId/invite-user', protect, authorizeAny(taClientManagePermissions), agencyClientController.inviteClientUser);
+router.put('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.updateClientUser);
+router.patch('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.updateClientUser);
+router.delete('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.deleteClientUser);
+router.post('/clients/:clientId/users/:userId/resend-invite', protect, authorizeAny(taClientManagePermissions), agencyClientController.resendInvite);
 
 // TA access settings
 router.get('/settings/access/overview', protect, authorizeAny(taAccessSettingsViewPermissions), taAccessSettingsController.getOverview);
