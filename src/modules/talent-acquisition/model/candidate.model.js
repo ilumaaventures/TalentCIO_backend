@@ -275,12 +275,40 @@ const candidateSchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User'
         }],
+        assignedClientUsers: [{ // Client portal users assigned to evaluate this round
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'ClientUser'
+        }],
+        isClientInterview: {
+            type: Boolean,
+            default: false
+        },
+        clientFeedback: String,
+        clientRating: {
+            type: Number,
+            min: 1,
+            max: 10
+        },
+        clientEvaluatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'ClientUser'
+        },
+        clientEvaluatedAt: Date,
         status: { // State of this specific round
             type: String,
             enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between', 'Shortlisted', 'Rejected', 'Did not Turn up'],
             default: 'Pending'
         },
         scheduledDate: Date,
+        meetingLink: {
+            type: String,
+            default: ''
+        },
+        meetingProvider: {
+            type: String,
+            enum: ['Manual', 'GoogleMeet', 'Zoom', 'Teams'],
+            default: 'Manual'
+        },
         feedback: String,
         rating: { // Numeric rating out of 10 when evaluators provide one
             type: Number,
@@ -401,6 +429,15 @@ const candidateSchema = new mongoose.Schema({
     currentPhaseName: {
         type: String,
         default: ''
+    },
+    hiddenFromClient: {
+        type: Boolean,
+        default: false
+    },
+    decidedByClientUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ClientUser',
+        default: null
     }
 }, {
     timestamps: true
@@ -437,6 +474,7 @@ candidateSchema.index({ hiringRequestId: 1, phase3Decision: 1 });
 candidateSchema.index({ companyId: 1, createdAt: -1 });
 candidateSchema.index({ companyId: 1, uploadedBy: 1, createdAt: -1 });
 candidateSchema.index({ companyId: 1, 'interviewRounds.assignedTo': 1 });
+candidateSchema.index({ companyId: 1, 'interviewRounds.assignedClientUsers': 1 });
 candidateSchema.index({ currentPhaseId: 1, hiringRequestId: 1 });
 candidateSchema.index({ currentPhaseOrder: 1, hiringRequestId: 1 });
 candidateSchema.index({ companyId: 1, currentPhaseId: 1 });

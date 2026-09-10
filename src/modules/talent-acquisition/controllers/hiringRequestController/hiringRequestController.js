@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const { HiringRequest } = require('../../model/hiringRequest.model');
+const Client = require('../../../client/client.model');
 const ApprovalWorkflow = require('../../../workflow/approvalWorkflow.model');
 const User = require('../../../user/user.model');
 const Candidate = require('../../model/candidate.model');
@@ -133,12 +134,25 @@ exports.createHiringRequest = async (req, res) => {
             });
         }
 
+        let resolvedClientId = req.body.clientId;
+        if (!resolvedClientId && normalizedClientName) {
+            const matchedClient = await Client.findOne({
+                companyId: req.companyId,
+                $or: [
+                    { name: { $regex: new RegExp(`^${normalizedClientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                    { companyName: { $regex: new RegExp(`^${normalizedClientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+                ]
+            }).select('_id').lean();
+            if (matchedClient) resolvedClientId = matchedClient._id;
+        }
+
         let hiringRequestData = {
             ...req.body,
             companyId: req.companyId,
             requestor: requestingUserId,
             createdBy: requestingUserId,
             client: normalizedClientName,
+            clientId: resolvedClientId || undefined,
             workflowId: validWorkflowId || (workflow ? workflow._id : null),
             interviewWorkflowId: validInterviewWorkflowId,
             previousRequestId: previousReq ? previousReq._id : undefined,
@@ -538,6 +552,27 @@ exports.updateHiringRequest = async (req, res) => {
 
         if (client !== undefined) {
             hiringRequest.client = client ? client.trim() : null;
+        }
+
+        if (req.body.clientId !== undefined) {
+            hiringRequest.clientId = req.body.clientId || null;
+        } else if (client !== undefined && client) {
+            const trimmed = client.trim();
+            const matched = await Client.findOne({
+                companyId: req.companyId,
+                $or: [
+                    { name: { $regex: new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                    { companyName: { $regex: new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+                ]
+            }).select('_id').lean();
+            if (matched) hiringRequest.clientId = matched._id;
+        }
+
+        if (req.body.clientVisibility) {
+            hiringRequest.clientVisibility = {
+                ...(hiringRequest.clientVisibility?.toObject?.() || hiringRequest.clientVisibility || {}),
+                ...req.body.clientVisibility
+            };
         }
 
         if (recruitmentTeam) {

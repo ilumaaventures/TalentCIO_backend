@@ -428,6 +428,10 @@ const addInterviewRound = async (req, res) => {
             levelName: roundLevelName,
             assignAfterStage: normalizedAssignAfter || 'Shortlisted',
             assignedTo: assignedTo || [],
+            assignedClientUsers: Array.isArray(req.body.assignedClientUsers)
+                ? req.body.assignedClientUsers.filter(uid => mongoose.Types.ObjectId.isValid(uid))
+                : [],
+            isClientInterview: Boolean(req.body.isClientInterview),
             status: 'Pending',
             scheduledDate,
             phase: phase || 1,
@@ -449,7 +453,9 @@ const addInterviewRound = async (req, res) => {
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('hiringRequestId', 'requestId client roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
-            .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+            .populate('interviewRounds.assignedClientUsers', 'firstName lastName email')
+            .populate('interviewRounds.clientEvaluatedBy', 'firstName lastName email');
 
         const populatedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
 
@@ -593,6 +599,12 @@ const updateInterviewRound = async (req, res) => {
         if (rating !== undefined) round.rating = (rating !== null && rating !== '' && !isNaN(Number(rating))) ? Number(rating) : undefined;
         if (feedback !== undefined) round.feedback = feedback;
         if (evaluatedBy !== undefined) round.evaluatedBy = evaluatedBy || req.user._id;
+        if (req.body.isClientInterview !== undefined) round.isClientInterview = Boolean(req.body.isClientInterview);
+        if (req.body.assignedClientUsers !== undefined) {
+            round.assignedClientUsers = Array.isArray(req.body.assignedClientUsers)
+                ? req.body.assignedClientUsers.filter(uid => mongoose.Types.ObjectId.isValid(uid))
+                : [];
+        }
         if (feedback || rating !== undefined || ['Passed', 'Failed', 'Skipped', 'Shortlisted', 'Rejected', 'Did Not Turn Up', 'Did not turn up', 'Left in between', 'Left In Between'].includes(status)) {
             if (!round.evaluatedAt) round.evaluatedAt = new Date();
         }
@@ -602,7 +614,9 @@ const updateInterviewRound = async (req, res) => {
         const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
             .populate('hiringRequestId', 'requestId client roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
-            .populate('interviewRounds.evaluatedBy', 'firstName lastName');
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+            .populate('interviewRounds.assignedClientUsers', 'firstName lastName email')
+            .populate('interviewRounds.clientEvaluatedBy', 'firstName lastName email');
 
         const updatedRound = updatedCandidate.interviewRounds.id(roundId);
 
@@ -1306,10 +1320,16 @@ const bulkScheduleInterview = async (req, res) => {
                     const rawAnchor = String(roundConfig.assignAfterStage || defaultAnchor).trim() || defaultAnchor;
                     const normalizedAnchor = (rawAnchor === 'Interview Scheduled' || !rawAnchor) ? defaultAnchor : rawAnchor;
 
+                    const normalizedClientUsers = Array.isArray(roundConfig.assignedClientUsers)
+                        ? roundConfig.assignedClientUsers.filter((id) => mongoose.Types.ObjectId.isValid(id))
+                        : [];
+
                     const newRound = {
                         levelName: String(roundConfig.levelName || 'Round 1').trim() || 'Round 1',
                         assignAfterStage: normalizedAnchor,
                         assignedTo: normalizedAssignedTo,
+                        assignedClientUsers: normalizedClientUsers,
+                        isClientInterview: Boolean(roundConfig.isClientInterview),
                         status: 'Pending',
                         scheduledDate: roundConfig.scheduledDate || undefined,
                         phase: roundPhase,
@@ -1327,7 +1347,8 @@ const bulkScheduleInterview = async (req, res) => {
 
                     const updatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
                         .populate('hiringRequestId', 'requestId client roleDetails')
-                        .populate('interviewRounds.assignedTo', 'firstName lastName email');
+                        .populate('interviewRounds.assignedTo', 'firstName lastName email')
+                        .populate('interviewRounds.assignedClientUsers', 'firstName lastName email');
 
                     const savedRound = updatedCandidate.interviewRounds[updatedCandidate.interviewRounds.length - 1];
 

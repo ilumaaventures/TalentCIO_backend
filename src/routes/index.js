@@ -7,6 +7,8 @@ const { globalLimiter } = require('../common/middleware/rateLimitMiddleware');
 
 // Import routes
 const authRoutes = require('../modules/auth/auth.routes');
+const clientAuthRoutes = require('../modules/client-portal/clientAuth.routes');
+const clientPortalRoutes = require('../modules/client-portal/clientPortal.routes');
 const attendanceRoutes = require('../modules/attendance/attendance.routes');
 const rgAttendanceRoutes = require('../modules/rg-attendance/routes/rgAttendanceRoutes');
 const timesheetRoutes = require('../modules/timesheet/timesheet.routes');
@@ -76,6 +78,8 @@ router.use((req, res, next) => {
 
 // Auth & Core tenant routes
 router.use('/auth', authRoutes);
+router.use('/client-portal/auth', clientAuthRoutes);
+router.use('/client-portal', clientPortalRoutes);
 router.use('/v1', payrollIntegrationRoutes);
 router.use('/payroll', payrollRoutes);
 

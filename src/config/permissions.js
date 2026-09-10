@@ -449,6 +449,21 @@ module.exports = [
         module: "TA",
         description: "Manage all TA requisitions with workspace-wide access"
     },
+    {
+        key: "ta.client.manage",
+        module: "TA",
+        description: "Invite, manage, and configure client portal user accounts"
+    },
+    {
+        key: "ta.client.visibility.configure",
+        module: "TA",
+        description: "Configure per-requisition client portal visibility and candidate access gating"
+    },
+    {
+        key: "ta.client.portal.view_as",
+        module: "TA",
+        description: "Preview and view requisitions and candidates as a client portal user"
+    },
     // DISCUSSIONS
     {
         key: "discussion.read",

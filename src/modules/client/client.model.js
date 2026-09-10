@@ -47,6 +47,10 @@ const clientSchema = new mongoose.Schema({
         default: 'Active',
         index: true
     },
+    portalEnabled: {
+        type: Boolean,
+        default: true
+    },
 }, { timestamps: true });
 
 clientSchema.index({ companyId: 1, isDeleted: 1 });

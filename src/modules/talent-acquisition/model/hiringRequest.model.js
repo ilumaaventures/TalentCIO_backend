@@ -60,7 +60,42 @@ const HiringRequestSchema = new mongoose.Schema({
 
     // 0. Client Details
     client: { type: String, required: true },
+    clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', index: true },
     clientConfidential: { type: Boolean, default: false },
+    clientVisibility: {
+        enabled: { type: Boolean, default: false },
+        visibleFromPhaseId: { type: mongoose.Schema.Types.ObjectId, default: null },
+        visibleFromPhaseIndex: { type: Number, default: 0 },
+        visibleFromPhaseOrder: { type: Number, default: null },
+        visibleFromCondition: {
+            type: String,
+            enum: ['phaseOrder', 'profileShared', 'custom'],
+            default: 'phaseOrder'
+        },
+        visibleCardKeys: { type: [String], default: [] },
+        allowClientDecision: { type: Boolean, default: true },
+        allowClientScheduling: { type: Boolean, default: false },
+        allowClientPanel: { type: Boolean, default: false },
+        allowResumeDownload: { type: Boolean, default: false },
+        allowedDecisionActions: {
+            type: [String],
+            default: ['Shortlist', 'Reject', 'Hold']
+        },
+        maskCandidateContact: { type: Boolean, default: true },
+        maskCompensation: { type: Boolean, default: true },
+        showInternalNotes: { type: Boolean, default: false },
+        allowClientFeedback: { type: Boolean, default: true },
+        allowClientScheduling: { type: Boolean, default: false },
+        candidateFilter: {
+            type: String,
+            enum: ['all', 'shortlistedOnly', 'interviewScheduled', 'explicitOnly'],
+            default: 'all'
+        },
+        onlyShortlisted: { type: Boolean, default: false },
+        hideRejected: { type: Boolean, default: false },
+        hideOnHold: { type: Boolean, default: false },
+        requireClientInterview: { type: Boolean, default: false }
+    },
 
     // 1. Role Information
     roleDetails: {
@@ -130,7 +165,12 @@ const HiringRequestSchema = new mongoose.Schema({
     requestor: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ownership: {
         hiringManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-        interviewPanel: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Optional at this stage
+        interviewPanel: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Optional at this stage
+        clientInterviewPanel: [{
+            clientUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientUser' },
+            role: { type: String, enum: ['Interviewer', 'Approver'], default: 'Interviewer' },
+            addedAt: { type: Date, default: Date.now }
+        }]
     },
     recruitmentTeam: {
         hiringManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -232,6 +272,7 @@ HiringRequestSchema.index({ companyId: 1, assignedUsers: 1, createdAt: -1 });
 HiringRequestSchema.index({ companyId: 1, analyticsViewers: 1, createdAt: -1 });
 HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1 });
+HiringRequestSchema.index({ companyId: 1, clientId: 1, status: 1 });
 HiringRequestSchema.index({ companyId: 1, isDeleted: 1 });
 
 HiringRequestSchema.plugin(softDeletePlugin);
@@ -273,6 +314,8 @@ const HRRAuditLogSchema = new mongoose.Schema({
     scope: { type: String, default: 'tenant' },
     before: { type: mongoose.Schema.Types.Mixed, default: null },
     after: { type: mongoose.Schema.Types.Mixed, default: null },
+    actorType: { type: String, enum: ['internal', 'client'], default: 'internal' },
+    clientUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientUser', default: null },
     ipAddress: { type: String, default: '' },
     correlationId: { type: String, default: '' },
     delegation: { type: mongoose.Schema.Types.Mixed, default: null },
