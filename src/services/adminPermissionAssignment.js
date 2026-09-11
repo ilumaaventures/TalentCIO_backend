@@ -6,7 +6,8 @@ const ADMIN_ROLE_FILTER = {
         { name: 'System Admin' },
         { name: 'Super Admin' },
         { isSystem: true }
-    ]
+    ],
+    isDeleted: { $ne: true }
 };
 
 const normalizePermissionIds = (permissionIds = []) => (
@@ -47,7 +48,7 @@ const assignPermissionsToRolesByName = async (roleNames = [], permissionIds = []
     }
 
     return Role.updateMany(
-        { name: { $in: normalizedRoleNames } },
+        { name: { $in: normalizedRoleNames }, isDeleted: { $ne: true } },
         { $addToSet: { permissions: { $each: normalizedPermissionIds } } }
     );
 };

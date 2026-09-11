@@ -140,25 +140,24 @@ const syncPermissions = async () => {
             console.warn('No admin roles found. Skipping auto-assignment.');
         }
 
-        const hrAdminRole = await Role.findOne({ name: 'HR Admin' }).select('_id permissions');
-        if (hrAdminRole) {
-            const settingsPermissions = await Permission.find({
-                key: {
-                    $in: [
-                        'settings.email.view',
-                        'settings.email.manage',
-                        'settings.notification.view',
-                        'settings.notification.manage'
-                    ]
-                }
-            }).select('_id');
+        const settingsPermissions = await Permission.find({
+            key: {
+                $in: [
+                    'settings.email.view',
+                    'settings.email.manage',
+                    'settings.notification.view',
+                    'settings.notification.manage'
+                ]
+            }
+        }).select('_id');
 
-            if (settingsPermissions.length > 0) {
-                await Role.updateOne(
-                    { _id: hrAdminRole._id },
-                    { $addToSet: { permissions: { $each: settingsPermissions.map((permission) => permission._id) } } }
-                );
-                console.log('Updated HR Admin role with settings permissions.');
+        if (settingsPermissions.length > 0) {
+            const hrAdminAssignment = await assignPermissionsToRolesByName(
+                ['HR Admin'],
+                settingsPermissions.map((permission) => permission._id)
+            );
+            if (hrAdminAssignment.matchedCount > 0) {
+                console.log('Updated HR Admin roles with settings permissions.');
             }
         }
 
@@ -174,9 +173,9 @@ const syncPermissions = async () => {
         }).select('_id');
 
         if (announcementPermissions.length > 0) {
-            const announcementRoleAssignment = await Role.updateMany(
-                { name: { $in: ANNOUNCEMENT_MANAGER_ROLE_NAMES } },
-                { $addToSet: { permissions: { $each: announcementPermissions.map((permission) => permission._id) } } }
+            const announcementRoleAssignment = await assignPermissionsToRolesByName(
+                ANNOUNCEMENT_MANAGER_ROLE_NAMES,
+                announcementPermissions.map((permission) => permission._id)
             );
 
             if (announcementRoleAssignment.matchedCount > 0) {
