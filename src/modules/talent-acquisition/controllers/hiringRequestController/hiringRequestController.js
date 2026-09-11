@@ -173,7 +173,11 @@ exports.createHiringRequest = async (req, res) => {
             jdFileUrl,
             jdPublicId,
             jdText,
-            remarks
+            remarks,
+            jobDescription: req.body.jobDescription !== undefined ? req.body.jobDescription : (jdText || ''),
+            jobDescriptionFile: req.body.jobDescriptionFile !== undefined ? req.body.jobDescriptionFile : (jdFileUrl || ''),
+            publicJobDescription: req.body.publicJobDescription !== undefined ? req.body.publicJobDescription : (req.body.jobDescription || jdText || ''),
+            publicJobTitle: req.body.publicJobTitle || jobTitle
         };
 
         const isSubmit = parseBooleanQueryValue(req.query.submit) ?? true;
@@ -562,6 +566,66 @@ exports.updateHiringRequest = async (req, res) => {
                 ...(hiringRequest.recruitmentTeam || {}),
                 assignedRecruiters
             };
+        }
+
+        if (req.body.jobDescription !== undefined) {
+            hiringRequest.jobDescription = req.body.jobDescription;
+        } else if (jdText !== undefined) {
+            hiringRequest.jobDescription = jdText;
+        }
+
+        if (req.body.jobDescriptionFile !== undefined) {
+            hiringRequest.jobDescriptionFile = req.body.jobDescriptionFile;
+        } else if (jdFileUrl !== undefined) {
+            hiringRequest.jobDescriptionFile = jdFileUrl;
+        }
+
+        if (req.body.publicJobDescription !== undefined) {
+            hiringRequest.publicJobDescription = req.body.publicJobDescription;
+        } else if (req.body.jobDescription !== undefined) {
+            hiringRequest.publicJobDescription = req.body.jobDescription;
+        }
+
+        if (req.body.publicJobTitle !== undefined) {
+            hiringRequest.publicJobTitle = req.body.publicJobTitle;
+        } else if (roleDetails?.title) {
+            hiringRequest.publicJobTitle = roleDetails.title;
+        }
+
+        if (req.body.clientConfidential !== undefined) {
+            hiringRequest.clientConfidential = Boolean(req.body.clientConfidential);
+        }
+
+        if (req.body.purpose !== undefined) {
+            hiringRequest.purpose = req.body.purpose;
+        }
+
+        if (req.body.replacementDetails !== undefined) {
+            hiringRequest.replacementDetails = req.body.replacementDetails;
+        }
+
+        if (req.body.isPublic !== undefined) {
+            hiringRequest.isPublic = Boolean(req.body.isPublic);
+        }
+
+        if (req.body.isJobVisible !== undefined) {
+            hiringRequest.isJobVisible = Boolean(req.body.isJobVisible);
+        }
+
+        if (req.body.isResourceGatewayPublic !== undefined) {
+            hiringRequest.isResourceGatewayPublic = Boolean(req.body.isResourceGatewayPublic);
+        }
+
+        if (req.body.wasEverPublished !== undefined) {
+            hiringRequest.wasEverPublished = Boolean(req.body.wasEverPublished);
+        }
+
+        if (Array.isArray(req.body.assignedUsers)) {
+            hiringRequest.assignedUsers = req.body.assignedUsers;
+        }
+
+        if (Array.isArray(req.body.analyticsViewers)) {
+            hiringRequest.analyticsViewers = req.body.analyticsViewers;
         }
 
         if (jdFileUrl !== undefined) hiringRequest.jdFileUrl = jdFileUrl;
