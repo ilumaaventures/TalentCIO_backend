@@ -24,7 +24,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' },
     { id: 'organization', label: 'Organization Structure', icon: 'Network' },
     { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' },
-    { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' }
+    { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' },
+    { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {

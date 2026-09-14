@@ -704,6 +704,226 @@ module.exports = [
         key: "business_unit.delete",
         module: "ORGANIZATION",
         description: "Delete business units"
+    },
+
+    // SALES CRM
+    {
+        key: "crm.view",
+        module: "CRM",
+        description: "Access Sales CRM workspace and cockpit"
+    },
+    // --- Leads ---
+    {
+        key: "crm.leads.read",
+        module: "CRM",
+        description: "View CRM leads directory and profiles"
+    },
+    {
+        key: "crm.leads.create",
+        module: "CRM",
+        description: "Capture and create new leads"
+    },
+    {
+        key: "crm.leads.update",
+        module: "CRM",
+        description: "Update and qualify leads"
+    },
+    {
+        key: "crm.leads.delete",
+        module: "CRM",
+        description: "Delete or disqualify leads"
+    },
+    {
+        key: "crm.leads.convert",
+        module: "CRM",
+        description: "Convert qualified leads into deals, contacts, and accounts"
+    },
+    // --- Opportunities & Deals ---
+    {
+        key: "crm.deals.read",
+        module: "CRM",
+        description: "View sales opportunities and pipeline board"
+    },
+    {
+        key: "crm.deals.create",
+        module: "CRM",
+        description: "Create new opportunities and deals"
+    },
+    {
+        key: "crm.deals.update",
+        module: "CRM",
+        description: "Move stages and update deal terms"
+    },
+    {
+        key: "crm.deals.delete",
+        module: "CRM",
+        description: "Delete opportunities"
+    },
+    // --- Pipelines ---
+    {
+        key: "crm.pipelines.read",
+        module: "CRM",
+        description: "View sales pipelines and stage configurations"
+    },
+    {
+        key: "crm.pipelines.manage",
+        module: "CRM",
+        description: "Configure sales pipelines, stages, and probability rules"
+    },
+    // --- Contacts ---
+    {
+        key: "crm.contacts.read",
+        module: "CRM",
+        description: "View client and stakeholder contacts"
+    },
+    {
+        key: "crm.contacts.manage",
+        module: "CRM",
+        description: "Create, edit, and manage client contacts"
+    },
+    // --- Accounts & Companies ---
+    {
+        key: "crm.accounts.read",
+        module: "CRM",
+        description: "View B2B company accounts and profiles"
+    },
+    {
+        key: "crm.accounts.manage",
+        module: "CRM",
+        description: "Create, edit, and manage B2B company accounts"
+    },
+    // --- Activities & Timeline ---
+    {
+        key: "crm.activities.read",
+        module: "CRM",
+        description: "View sales activity timeline and interaction history"
+    },
+    {
+        key: "crm.activities.create",
+        module: "CRM",
+        description: "Log sales activities, notes, and interactions"
+    },
+    // --- Tasks & Calendar ---
+    {
+        key: "crm.tasks.read",
+        module: "CRM",
+        description: "View CRM tasks, reminders, and sales calendar"
+    },
+    {
+        key: "crm.tasks.manage",
+        module: "CRM",
+        description: "Create, update, and complete CRM tasks and schedule meetings"
+    },
+    // --- Follow-ups ---
+    {
+        key: "crm.followups.read",
+        module: "CRM",
+        description: "View scheduled follow-ups and overdue alerts"
+    },
+    {
+        key: "crm.followups.manage",
+        module: "CRM",
+        description: "Schedule, complete, and reschedule follow-up reminders"
+    },
+    // --- Communications (Email, WhatsApp, Calling) ---
+    {
+        key: "crm.communication.read",
+        module: "CRM",
+        description: "View sales communication history (Email, WhatsApp, Calls)"
+    },
+    {
+        key: "crm.communication.send",
+        module: "CRM",
+        description: "Send outbound emails, WhatsApp messages, and log sales calls"
+    },
+    // --- Growth, Sequences & Campaigns ---
+    {
+        key: "crm.growth.read",
+        module: "CRM",
+        description: "View sequences and marketing campaign performance"
+    },
+    {
+        key: "crm.growth.manage",
+        module: "CRM",
+        description: "Configure sales drip sequences, enroll leads, and launch campaigns"
+    },
+    // --- Workflows & Automation ---
+    {
+        key: "crm.workflows.read",
+        module: "CRM",
+        description: "View CRM automation workflows"
+    },
+    {
+        key: "crm.workflows.manage",
+        module: "CRM",
+        description: "Create, edit, and toggle CRM workflow automations"
+    },
+    // --- Forecasting & Quotas ---
+    {
+        key: "crm.forecast.read",
+        module: "CRM",
+        description: "View sales revenue forecasts and quota targets"
+    },
+    {
+        key: "crm.forecast.manage",
+        module: "CRM",
+        description: "Set sales quota targets and revenue projections"
+    },
+    // --- Commissions ---
+    {
+        key: "crm.commissions.read",
+        module: "CRM",
+        description: "View sales commission earnings and leaderboard"
+    },
+    {
+        key: "crm.commissions.manage",
+        module: "CRM",
+        description: "Manage sales commission rules, approvals, and payroll sync"
+    },
+    // --- Analytics & Reports ---
+    {
+        key: "crm.analytics.read",
+        module: "CRM",
+        description: "View CRM analytics dashboards, conversion funnels, and reports"
+    },
+    // --- Territories & Team ---
+    {
+        key: "crm.territories.read",
+        module: "CRM",
+        description: "View sales territories and rep assignments"
+    },
+    {
+        key: "crm.territories.manage",
+        module: "CRM",
+        description: "Create and manage sales territories and routing rules"
+    },
+    // --- AI Assistant ---
+    {
+        key: "crm.ai.use",
+        module: "CRM",
+        description: "Use AI Sales Copilot and generate opportunity risk insights"
+    },
+    // --- Data Tools ---
+    {
+        key: "crm.data.import",
+        module: "CRM",
+        description: "Import CRM leads, deals, contacts, and accounts"
+    },
+    {
+        key: "crm.data.export",
+        module: "CRM",
+        description: "Export CRM records and analytics reports"
+    },
+    {
+        key: "crm.data.merge",
+        module: "CRM",
+        description: "Deduplicate and merge CRM records"
+    },
+    // --- CRM Administration ---
+    {
+        key: "crm.admin",
+        module: "CRM",
+        description: "Full administration: CRM settings, custom fields, audit logs, and configurations"
     }
 ];
 

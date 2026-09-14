@@ -1,0 +1,572 @@
+const CrmLead = require('../models/crmLead.model');
+const CrmContact = require('../models/crmContact.model');
+const CrmAccount = require('../models/crmAccount.model');
+const CrmDeal = require('../models/crmDeal.model');
+const CrmPipeline = require('../models/crmPipeline.model');
+const CrmActivity = require('../models/crmActivity.model');
+const CrmTask = require('../models/crmTask.model');
+const CrmFollowUp = require('../models/crmFollowUp.model');
+const { logCrmAudit } = require('../utils/crmAudit');
+
+const getTenantId = (req) => req.companyId || req.user?.companyId;
+
+const getUserDisplayName = (user) => {
+  if (!user) return 'System';
+  if (user.firstName) return `${user.firstName} ${user.lastName || ''}`.trim();
+  return user.name || user.email || 'User';
+};
+
+// Multi-factor lead scoring
+const calculateLeadScore = (lead) => {
+  const hasContactInfo = Boolean(
+    lead.firstName?.trim() ||
+    lead.lastName?.trim() ||
+    lead.email?.trim() ||
+    lead.phone?.trim() ||
+    lead.companyName?.trim()
+  );
+
+  if (!hasContactInfo) return 0;
+
+  let score = 0;
+
+  // 1. Identity & Contact Information (up to 30 pts)
+  if (lead.firstName?.trim()) score += 10;
+  if (lead.lastName?.trim()) score += 2;
+  if (lead.phone?.trim()) score += 15;
+  if (lead.email?.trim()) {
+    score += 12;
+    if (!/@(gmail|yahoo|hotmail|outlook|icloud)\./i.test(lead.email)) {
+      score += 3;
+    }
+  }
+  if (lead.alternatePhone?.trim()) score += 3;
+
+  // 2. Organization & Role Authority (up to 25 pts)
+  if (lead.companyName?.trim()) score += 12;
+  if (lead.website?.trim()) score += 4;
+  if (lead.jobTitle?.trim()) {
+    const title = lead.jobTitle.toLowerCase();
+    if (/(cxo|ceo|cto|cfo|cmo|cro|founder|co-founder|director|vp|vice president|head|partner|owner|md|managing director)/i.test(title)) {
+      score += 15;
+    } else if (/(manager|lead|principal|supervisor|senior)/i.test(title)) {
+      score += 9;
+    } else {
+      score += 5;
+    }
+  }
+
+  // 3. Location / Address (up to 10 pts)
+  if (lead.address?.city || lead.city) score += 5;
+  if (lead.address?.street || lead.street) score += 3;
+  if (lead.address?.state || lead.state) score += 2;
+
+  // 4. Commercial Value & Intent (up to 30 pts)
+  const estVal = Number(lead.estimatedValue) || 0;
+  if (estVal >= 1000000) score += 15;
+  else if (estVal >= 500000) score += 10;
+  else if (estVal >= 100000) score += 6;
+  else if (estVal > 0) score += 3;
+
+  if (lead.budget || lead.qualification?.budget) score += 10;
+  if (lead.requirements || lead.qualification?.need) score += 8;
+
+  // 5. Source Quality & Channel
+  const sourceScores = {
+    'Existing Customer': 12,
+    'Referral': 12,
+    'Partner': 10,
+    'WhatsApp': 10,
+    'Website': 8,
+    'LinkedIn': 8,
+    'Google Ads': 7,
+    'Event': 7,
+    'Walk-in': 8,
+    'Cold Call': 4,
+    'Other': 4,
+  };
+  if (lead.source) {
+    score += (sourceScores[lead.source] || 6);
+  }
+
+  // 6. Urgency & Priority
+  if (lead.priority === 'Urgent') score += 10;
+  else if (lead.priority === 'High') score += 6;
+  else if (lead.priority === 'Medium') score += 3;
+  else if (lead.priority === 'Low') score += 1;
+
+  if (lead.status === 'Qualified') score += 10;
+  else if (lead.status === 'Contacted') score += 5;
+
+  return Math.min(100, Math.max(0, Math.round(score)));
+};
+
+const getLeadTemperature = (score, explicitTemp, isManual = false) => {
+  if (isManual && explicitTemp && ['Cold', 'Warm', 'Hot'].includes(explicitTemp)) return explicitTemp;
+  if (score >= 75) return 'Hot';
+  if (score >= 45) return 'Warm';
+  return 'Cold';
+};
+
+// @desc Get all leads with pagination, search & filters
+// @route GET /api/crm/leads
+const getLeads = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const {
+      search,
+      status,
+      source,
+      priority,
+      ownerId,
+      page = 1,
+      limit = 25,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
+
+    const query = { companyId };
+
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (source && source !== 'all') {
+      query.source = source;
+    }
+    if (priority && priority !== 'all') {
+      query.priority = priority;
+    }
+    if (ownerId && ownerId !== 'all') {
+      query.ownerId = ownerId;
+    }
+
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { companyName: searchRegex },
+        { jobTitle: searchRegex },
+        { 'address.city': searchRegex },
+        { 'address.state': searchRegex },
+      ];
+    }
+
+    const total = await CrmLead.countDocuments(query);
+    const leads = await CrmLead.find(query)
+      .populate('ownerId', 'firstName lastName email profilePicture')
+      .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
+      .skip((page - 1) * limit)
+      .limit(Number(limit));
+
+    res.json({
+      success: true,
+      data: leads,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Get lead by ID with complete profile, activities, tasks, follow-ups
+// @route GET /api/crm/leads/:id
+const getLeadById = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const lead = await CrmLead.findOne({ _id: req.params.id, companyId })
+      .populate('ownerId', 'firstName lastName email profilePicture roles')
+      .populate('convertedContactId', 'firstName lastName email phone jobTitle')
+      .populate('convertedAccountId', 'name industry website')
+      .populate('convertedDealId', 'title value stage probability');
+
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    const activities = await CrmActivity.find({ leadId: lead._id, companyId })
+      .sort({ performedAt: -1 })
+      .limit(50);
+    const tasks = await CrmTask.find({ leadId: lead._id, companyId })
+      .sort({ dueDate: 1 });
+    const followUps = await CrmFollowUp.find({ leadId: lead._id, companyId })
+      .sort({ scheduledDate: 1 });
+
+    res.json({
+      success: true,
+      data: {
+        lead,
+        activities,
+        tasks,
+        followUps,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Check for duplicate leads
+// @route POST /api/crm/leads/check-duplicates
+const checkDuplicates = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { email, phone, companyName, excludeId } = req.body;
+    const conditions = [];
+
+    if (email) conditions.push({ email: email.toLowerCase() });
+    if (phone) conditions.push({ phone });
+    if (companyName && companyName.trim().length > 2) {
+      conditions.push({ companyName: new RegExp(`^${companyName.trim()}$`, 'i') });
+    }
+
+    if (conditions.length === 0) {
+      return res.json({ success: true, duplicates: [] });
+    }
+
+    const query = {
+      companyId,
+      $or: conditions,
+    };
+
+    if (excludeId) {
+      query._id = { $ne: excludeId };
+    }
+
+    const duplicates = await CrmLead.find(query)
+      .select('firstName lastName email phone companyName status ownerId score priority lastActivityAt createdAt')
+      .populate('ownerId', 'firstName lastName email profilePicture');
+    res.json({ success: true, duplicates });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Create new lead
+// @route POST /api/crm/leads
+const createLead = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const leadData = {
+      ...req.body,
+      companyId,
+      ownerId: req.body.ownerId || req.user?._id,
+    };
+
+    if (!leadData.address || typeof leadData.address !== 'object') {
+      leadData.address = {
+        street: req.body.street || '',
+        city: req.body.city || '',
+        state: req.body.state || '',
+        country: req.body.country || 'India',
+        postalCode: req.body.postalCode || '',
+      };
+    }
+
+    leadData.score = calculateLeadScore(leadData);
+    leadData.temperature = getLeadTemperature(leadData.score, req.body.temperature, req.body.isManualTemperature);
+
+    const lead = await CrmLead.create(leadData);
+
+    const actorName = getUserDisplayName(req.user);
+
+    await CrmActivity.create({
+      companyId,
+      type: 'note',
+      subject: `Lead created: ${lead.fullName || lead.firstName}`,
+      description: `Lead created from source: ${lead.source || 'Manual entry'}`,
+      performedBy: req.user?._id,
+      performedByName: actorName,
+      leadId: lead._id,
+    });
+
+    await logCrmAudit({
+      companyId,
+      userId: req.user?._id,
+      action: 'CREATE_LEAD',
+      entityType: 'Lead',
+      entityId: lead._id,
+      entityName: lead.fullName,
+      ipAddress: req.ip,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Lead created successfully',
+      data: lead,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Update lead
+// @route PUT /api/crm/leads/:id
+const updateLead = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    let lead = await CrmLead.findOne({ _id: req.params.id, companyId });
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    const oldStatus = lead.status;
+    const updates = { ...req.body };
+
+    const merged = { ...lead.toObject(), ...updates };
+    updates.score = calculateLeadScore(merged);
+    updates.lastActivityAt = new Date();
+
+    lead = await CrmLead.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true })
+      .populate('ownerId', 'firstName lastName email profilePicture');
+
+    if (updates.status && updates.status !== oldStatus) {
+      await CrmActivity.create({
+        companyId,
+        type: 'status_change',
+        subject: `Status changed to ${updates.status}`,
+        description: `Lead status updated from ${oldStatus} to ${updates.status}`,
+        performedBy: req.user?._id,
+        performedByName: getUserDisplayName(req.user),
+        leadId: lead._id,
+      });
+    }
+
+    await logCrmAudit({
+      companyId,
+      userId: req.user?._id,
+      action: 'UPDATE_LEAD',
+      entityType: 'Lead',
+      entityId: lead._id,
+      entityName: lead.fullName,
+      changes: updates,
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      success: true,
+      message: 'Lead updated successfully',
+      data: lead,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Delete lead
+// @route DELETE /api/crm/leads/:id
+const deleteLead = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const lead = await CrmLead.findOneAndDelete({ _id: req.params.id, companyId });
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    await logCrmAudit({
+      companyId,
+      userId: req.user?._id,
+      action: 'DELETE_LEAD',
+      entityType: 'Lead',
+      entityId: lead._id,
+      entityName: lead.fullName,
+      ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: 'Lead deleted successfully' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Bulk update leads
+// @route POST /api/crm/leads/bulk-update
+const bulkUpdateLeads = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { ids, action, payload } = req.body;
+    if (!ids || !ids.length) {
+      return res.status(400).json({ success: false, message: 'No lead IDs provided' });
+    }
+
+    if (action === 'delete') {
+      await CrmLead.deleteMany({ _id: { $in: ids }, companyId });
+      return res.json({ success: true, message: `${ids.length} leads deleted successfully` });
+    }
+
+    const updateFields = {};
+    if (action === 'status' && payload?.status) {
+      updateFields.status = payload.status;
+    } else if (action === 'assign' && payload?.ownerId) {
+      updateFields.ownerId = payload.ownerId;
+    } else if (action === 'tag' && payload?.tag) {
+      await CrmLead.updateMany(
+        { _id: { $in: ids }, companyId },
+        { $addToSet: { tags: payload.tag } }
+      );
+      return res.json({ success: true, message: `Tag added to ${ids.length} leads` });
+    }
+
+    if (Object.keys(updateFields).length > 0) {
+      await CrmLead.updateMany(
+        { _id: { $in: ids }, companyId },
+        { $set: updateFields }
+      );
+    }
+
+    res.json({ success: true, message: `Successfully updated ${ids.length} leads` });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Convert Lead to Contact + Account + Deal
+// @route POST /api/crm/leads/:id/convert
+const convertLead = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const lead = await CrmLead.findOne({ _id: req.params.id, companyId });
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    if (lead.isConverted) {
+      return res.status(400).json({ success: false, message: 'Lead has already been converted' });
+    }
+
+    const {
+      createContact = true,
+      createAccount = true,
+      createCompany = true, // for backwards compatibility
+      createDeal = true,
+      dealTitle,
+      dealValue,
+      pipelineId,
+      stage,
+      expectedCloseDate,
+    } = req.body;
+
+    let contact = null;
+    let account = null;
+    let deal = null;
+
+    // 1. Create or link Account
+    if (createAccount || createCompany) {
+      const accountName = req.body.accountName || req.body.companyName || lead.companyName || `${lead.firstName}'s Company`;
+      account = await CrmAccount.create({
+        companyId,
+        name: accountName,
+        website: lead.website || '',
+        phone: lead.phone || '',
+        email: lead.email || '',
+        address: lead.address || {},
+        ownerId: lead.ownerId || req.user?._id,
+        accountType: 'Prospect',
+      });
+    }
+
+    // 2. Create Contact
+    if (createContact) {
+      contact = await CrmContact.create({
+        companyId,
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        email: lead.email,
+        phone: lead.phone,
+        jobTitle: lead.jobTitle,
+        accountId: account ? account._id : null,
+        ownerId: lead.ownerId || req.user?._id,
+        lifecycleStage: 'Opportunity',
+        isPrimaryContact: true,
+      });
+    }
+
+    // 3. Create Deal
+    if (createDeal) {
+      let targetPipelineId = pipelineId;
+      let targetStage = stage;
+      let probability = 20;
+
+      if (!targetPipelineId) {
+        let defPipeline = await CrmPipeline.findOne({ companyId, isDefault: true });
+        if (!defPipeline) {
+          defPipeline = await CrmPipeline.findOne({ companyId });
+        }
+        if (defPipeline) {
+          targetPipelineId = defPipeline._id;
+          targetStage = defPipeline.stages?.[0]?.name || 'Qualified';
+          probability = defPipeline.stages?.[0]?.probability || 20;
+        }
+      }
+
+      deal = await CrmDeal.create({
+        companyId,
+        title: dealTitle || `${lead.companyName || lead.fullName} - Deal`,
+        value: Number(dealValue) || lead.estimatedValue || 0,
+        currency: lead.currency || 'INR',
+        pipelineId: targetPipelineId,
+        stage: targetStage || 'Qualified',
+        probability,
+        status: 'Open',
+        expectedCloseDate: expectedCloseDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        accountId: account ? account._id : null,
+        contactId: contact ? contact._id : null,
+        ownerId: lead.ownerId || req.user?._id,
+        leadSource: lead.source || 'Website',
+      });
+    }
+
+    // 4. Update Lead conversion metadata
+    lead.isConverted = true;
+    lead.status = 'Converted';
+    lead.convertedDate = new Date();
+    if (contact) lead.convertedContactId = contact._id;
+    if (account) lead.convertedAccountId = account._id;
+    if (deal) lead.convertedDealId = deal._id;
+    await lead.save();
+
+    await CrmActivity.create({
+      companyId,
+      type: 'status_change',
+      subject: `Lead Converted`,
+      description: `Lead converted into Contact, Account, and Deal`,
+      performedBy: req.user?._id,
+      performedByName: getUserDisplayName(req.user),
+      leadId: lead._id,
+      accountId: account?._id,
+      contactId: contact?._id,
+      dealId: deal?._id,
+    });
+
+    res.json({
+      success: true,
+      message: 'Lead converted successfully',
+      data: {
+        lead,
+        contact,
+        account,
+        deal,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  getLeads,
+  getLeadById,
+  checkDuplicates,
+  createLead,
+  updateLead,
+  deleteLead,
+  bulkUpdateLeads,
+  convertLead,
+};
