@@ -234,6 +234,7 @@ require('./src/modules/auth/superAdminUser.model');
 require('./src/modules/onboarding/model/onboardingEmployee.model');
 require('./src/modules/talent-acquisition/model/phaseTemplate.model');
 require('./src/modules/announcement/announcement.model');
+require('./src/modules/ess-document/essDocument.model');
 require('./src/modules/offboarding/offboardingRecord.model');
 require('./src/modules/email/model/hrEmailLog.model');
 require('./src/modules/system/impersonationSession.model');

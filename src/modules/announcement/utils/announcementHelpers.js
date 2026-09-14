@@ -432,6 +432,10 @@ const formatAnnouncementResponse = (announcementDoc, user = {}) => {
         isAcknowledged,
         acknowledgementsCount: (announcement.acknowledgements || []).length,
         attachment: announcement.attachment || null,
+        source: announcement.source || (announcement.category === 'Policy' ? 'company_policy' : ''),
+        link: (announcement.link === '/ess/documents' ? '/profile?tab=company-documents' : announcement.link)
+            || (announcement.source === 'company_policy' || announcement.category === 'Policy' ? '/profile?tab=company-documents' : ''),
+        documentId: announcement.documentId || null,
         createdBy: announcement.createdBy && typeof announcement.createdBy === 'object'
             ? sanitizeUser(announcement.createdBy)
             : { _id: announcement.createdBy },

@@ -20,7 +20,11 @@ const essDocumentFileSchema = new mongoose.Schema({
  */
 const acknowledgementSchema = new mongoose.Schema({
     userId:         { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    acknowledgedAt: { type: Date, default: Date.now }
+    acknowledgedAt: { type: Date, default: Date.now },
+    consentGiven:   { type: Boolean, default: true },
+    consentText:    { type: String, trim: true, default: '' },
+    ipAddress:      { type: String, trim: true, default: '' },
+    userAgent:      { type: String, trim: true, default: '' }
 }, { _id: false });
 
 /**
@@ -61,6 +65,12 @@ const essDocumentSchema = new mongoose.Schema({
     visibility: { type: visibilitySchema, default: () => ({ type: 'All' }) },
 
     requiresAcknowledgement: { type: Boolean, default: false },
+    notifyUsers:             { type: Boolean, default: true },
+    consentDeclaration:      {
+        type:    String,
+        trim:    true,
+        default: 'I have read, understood, and accept all the details and terms outlined in this document.'
+    },
     acknowledgements: {
         type:    [acknowledgementSchema],
         default: []

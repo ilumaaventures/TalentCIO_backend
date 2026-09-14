@@ -109,6 +109,13 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         defaultChannel: 'system'
     },
     {
+        key: 'ess_document.published',
+        label: 'Company policy or document published',
+        description: 'Notify employees when a new company policy or document is published.',
+        module: 'Documents',
+        defaultChannel: 'system'
+    },
+    {
         key: 'interview_assigned',
         label: 'Interview assigned',
         description: 'Notify interviewers when they are assigned to an interview round.',
