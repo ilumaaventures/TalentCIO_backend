@@ -239,22 +239,11 @@ const syncPermissions = async () => {
             }
         }
 
-        const payrollSalaryViewSelfPerm = await Permission.findOne({ key: 'payroll.salary.view.self' }).select('_id');
-        if (payrollSalaryViewSelfPerm) {
-            const assignment = await assignPermissionsToRolesByName(
-                ['Employee', 'Manager', 'HR Manager', 'HR Admin'],
-                [payrollSalaryViewSelfPerm._id]
-            );
-            if (assignment.matchedCount > 0) {
-                console.log('Updated Employee/Manager/HR roles with payroll.salary.view.self permission.');
-            }
-        }
-
         // Clean up deprecated employee.revision.view permission
         await Permission.deleteMany({ key: 'employee.revision.view' });
 
         const revisionManagePerms = await Permission.find({
-            key: { $in: ['employee.revision.manage', 'employee.revision.create', 'employee.revision.update', 'employee.revision.cancel', 'employee.revision.view.others'] }
+            key: { $in: ['employee.revision.manage', 'employee.revision.create', 'employee.revision.update', 'employee.revision.cancel'] }
         }).select('_id');
         if (revisionManagePerms.length > 0) {
             const assignment = await assignPermissionsToRolesByName(
@@ -263,17 +252,6 @@ const syncPermissions = async () => {
             );
             if (assignment.matchedCount > 0) {
                 console.log('Updated HR Admin/Manager roles with employee revision management permissions.');
-            }
-        }
-
-        const revisionSelfPerm = await Permission.findOne({ key: 'employee.revision.view.self' }).select('_id');
-        if (revisionSelfPerm) {
-            const assignment = await assignPermissionsToRolesByName(
-                ['Employee', 'Manager', 'HR Manager', 'HR Admin'],
-                [revisionSelfPerm._id]
-            );
-            if (assignment.matchedCount > 0) {
-                console.log('Updated Employee/Manager/HR roles with employee.revision.view.self permission.');
             }
         }
 
