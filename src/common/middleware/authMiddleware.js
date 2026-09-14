@@ -29,6 +29,11 @@ const invalidateAuthUserCache = (userId) => {
     userIdToCacheKeys.delete(String(userId || ''));
 };
 
+const clearAllAuthUserCache = () => {
+    authUserCache.clear();
+    userIdToCacheKeys.clear();
+};
+
 // MED-8: Periodic eviction to prevent unbounded Map growth
 setInterval(() => {
     const now = Date.now();
@@ -266,4 +271,4 @@ const blockDuringImpersonation = (req, res, next) => {
     next();
 };
 
-module.exports = { protect, admin, invalidateAuthUserCache, blockDuringImpersonation };
+module.exports = { protect, admin, invalidateAuthUserCache, clearAllAuthUserCache, blockDuringImpersonation };

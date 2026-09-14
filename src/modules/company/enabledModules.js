@@ -98,6 +98,8 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('reimbursement.')) return enabled.has('reimbursements');
         if (key.startsWith('ess_document.')) return enabled.has('essDocuments');
         if (key.startsWith('my_space.') || key.startsWith('ess.')) return enabled.has('mySpace');
+        if (key.startsWith('crm.')) return enabled.has('crm');
+        if (key.startsWith('client_portal.')) return enabled.has('clientPortal');
 
         return true;
     });

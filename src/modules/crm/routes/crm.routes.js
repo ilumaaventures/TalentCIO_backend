@@ -21,8 +21,11 @@ const aiController = require('../controllers/crmAi.controller');
 const adminController = require('../controllers/crmAdmin.controller');
 const dataController = require('../controllers/crmData.controller');
 
-// Require authentication for all CRM routes
+const { requireModule } = require('../../../common/middleware/moduleGuard');
+
+// Require authentication and company module access for all CRM routes
 router.use(protect);
+router.use(requireModule('crm'));
 
 // --- Leads ---
 router.get('/leads', authorize(['crm.leads.read', 'crm.admin']), leadController.getLeads);

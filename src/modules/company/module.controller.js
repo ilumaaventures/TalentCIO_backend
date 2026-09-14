@@ -39,6 +39,30 @@ const updateModules = async (req, res) => {
 
         invalidateTenantCache(company.subdomain);
 
+        // Invalidate auth user cache across all nodes so permission changes take effect immediately
+        const { clearAllAuthUserCache } = require('../../common/middleware/authMiddleware');
+        clearAllAuthUserCache();
+
+        // If modules were newly enabled, ensure company's Admin role has permissions for those modules
+        const newlyAdded = enabledModules.filter(m => !previous.includes(m));
+        if (newlyAdded.length > 0) {
+            try {
+                const Role = require('../user/role.model');
+                const Permission = require('../user/permission.model');
+                const allPerms = await Permission.find({ isDeprecated: false });
+                const relevantPerms = filterPermissionsByEnabledModules(allPerms, newlyAdded);
+                const permIds = relevantPerms.map(p => p._id);
+                if (permIds.length > 0) {
+                    await Role.updateMany(
+                        { companyId: company._id, $or: [{ isSystem: true }, { name: 'Admin' }, { name: 'Super Admin' }] },
+                        { $addToSet: { permissions: { $each: permIds } } }
+                    );
+                }
+            } catch (roleSyncErr) {
+                console.warn('[updateModules] Failed to sync admin permissions for newly added modules:', roleSyncErr.message);
+            }
+        }
+
         // Safety check for req.superAdmin
         const adminInfo = req.superAdmin ? {
             id: req.superAdmin._id,
