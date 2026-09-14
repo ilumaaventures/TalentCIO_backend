@@ -168,7 +168,12 @@ class NotificationService {
                     persistedNotificationsByIndex[originalIndex] = notification;
 
                     if (this.verifySocket(io)) {
-                        io.to(notification.user.toString()).emit('notification', notification.toObject());
+                        const originalItem = items[originalIndex] || {};
+                        const socketPayload = {
+                            ...notification.toObject(),
+                            preferenceKey: originalItem.preferenceKey || notification.metadata?.preferenceKey || ''
+                        };
+                        io.to(notification.user.toString()).emit('notification', socketPayload);
                     }
                 });
             }

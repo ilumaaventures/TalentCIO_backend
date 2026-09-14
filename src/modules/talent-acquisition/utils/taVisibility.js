@@ -252,6 +252,9 @@ const serializeCandidateForViewer = ({
 };
 
 module.exports = {
+    maskEmail,
+    maskPhone,
+    omitFields,
     canViewConfidentialClient,
     canViewCandidatePII,
     canViewBudget,

@@ -7,7 +7,7 @@ const { sendEmailForCompany } = require('../../services/companyEmailService');
 const NotificationService = require('../../services/notificationService');
 const crypto = require('crypto');
 const { normalizeEnabledModules } = require('../company/enabledModules');
-const { augmentPermissionKeysForRoles } = require('../../utils/permissionResolver');
+const { augmentPermissionKeysForRoles, resolveRolesWithInheritance } = require('../../utils/permissionResolver');
 const { invalidateAuthUserCache } = require('../../common/middleware/authMiddleware');
 const { clearSessionCookie, setSessionCookie } = require('../../common/utils/sessionCookies');
 const Company = require('../company/company.model');
@@ -218,9 +218,17 @@ const loginUser = async (req, res) => {
         if (req.companyId && user.companyId && user.companyId.toString() !== req.companyId.toString()) {
             return res.status(401).json({ message: `Your account does not belong to the '${req.company?.name || 'requested'}' workspace.` });
         }
-        let permissions = [...new Set(
-            user.roles.flatMap(role => (role.permissions || []).filter(p => p).map(p => p.key))
-        )];
+        const roleIds = (Array.isArray(user.roles) ? user.roles : []).map(r => r._id || r);
+        const resolvedRoleContext = await resolveRolesWithInheritance({
+            roleIds,
+            companyId: user.companyId
+        });
+
+        let permissions = resolvedRoleContext?.permissionKeys?.length
+            ? resolvedRoleContext.permissionKeys
+            : [...new Set(
+                user.roles.flatMap(role => (role.permissions || []).filter(p => p).map(p => p.key))
+            )];
         permissions = augmentPermissionKeysForRoles({ roles: user.roles, permissionKeys: permissions });
 
         // Wildcard Expansion: If user has '*', provide ALL permissions

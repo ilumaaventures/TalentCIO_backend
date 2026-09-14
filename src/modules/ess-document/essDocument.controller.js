@@ -1,5 +1,11 @@
 const EssDocument = require('./essDocument.model');
 const User = require('../user/user.model');
+const Announcement = require('../announcement/announcement.model');
+const {
+    notifyPublishedAnnouncement,
+    fetchPopulatedAnnouncementById,
+    normalizeAudienceUserObjectIds
+} = require('../announcement/utils/announcementHelpers');
 const NotificationService = require('../../services/notificationService');
 
 const getCompanyId = (req) => req.companyId || req.user?.companyId || req.user?.company;
@@ -38,6 +44,7 @@ exports.createDocument = async (req, res) => {
         const io        = req.app.get('io');
         const {
             title, description, category, requiresAcknowledgement,
+            notifyUsers, consentDeclaration,
             visibilityType, targetDepartments, targetUserIds
         } = req.body || {};
 
@@ -56,6 +63,10 @@ exports.createDocument = async (req, res) => {
         };
 
         const isAck = requiresAcknowledgement === true || requiresAcknowledgement === 'true';
+        const shouldNotify = notifyUsers !== undefined
+            ? (notifyUsers === true || notifyUsers === 'true' || notifyUsers === 1 || notifyUsers === '1')
+            : true;
+        const consentText = consentDeclaration?.trim() || 'I have read, understood, and accept all the details and terms outlined in this document.';
 
         // Prepare documents array
         const docsToCreate = rawFiles.map((f, idx) => {
@@ -85,6 +96,8 @@ exports.createDocument = async (req, res) => {
                 file,
                 visibility,
                 requiresAcknowledgement: isAck,
+                notifyUsers:  shouldNotify,
+                consentDeclaration: consentText,
                 uploadedBy:   req.user._id,
                 isActive:     true
             };
@@ -92,50 +105,128 @@ exports.createDocument = async (req, res) => {
 
         const createdDocs = await EssDocument.insertMany(docsToCreate);
 
-        // Notify targeted users about the new document(s)
-        try {
-            let recipientIds = [];
-            if (visibility.type === 'All') {
-                const users = await User.find({ companyId, isDeleted: { $ne: true }, isActive: true }).select('_id').lean();
-                recipientIds = users.map(u => u._id);
-            } else if (visibility.type === 'Custom') {
-                recipientIds = parsedUserIds;
-            } else if (visibility.type === 'Department') {
-                const users = await User.find({
+        // Notify targeted users and publish company announcement if notifyUsers is enabled
+        if (shouldNotify) {
+            try {
+                // 1. Publish Company Announcement
+                let announcementData = {};
+                if (req.body.announcementData) {
+                    try {
+                        announcementData = typeof req.body.announcementData === 'string'
+                            ? JSON.parse(req.body.announcementData)
+                            : req.body.announcementData;
+                    } catch (e) {
+                        announcementData = {};
+                    }
+                }
+
+                const primaryDoc = createdDocs[0];
+                let annAudienceType = announcementData.audienceType || 'all';
+                let annAudienceDepts = Array.isArray(announcementData.audienceDepartments) ? announcementData.audienceDepartments : [];
+                let annAudienceEmpTypes = Array.isArray(announcementData.audienceEmploymentTypes) ? announcementData.audienceEmploymentTypes : [];
+                let annAudienceUserIds = Array.isArray(announcementData.audienceUserIds) ? announcementData.audienceUserIds : [];
+
+                if (!announcementData.audienceType) {
+                    if (visibility.type === 'Department') {
+                        annAudienceType = 'departments';
+                        annAudienceDepts = parsedDepts;
+                    } else if (visibility.type === 'Custom') {
+                        annAudienceType = 'specificUsers';
+                        annAudienceUserIds = parsedUserIds;
+                    } else {
+                        annAudienceType = 'all';
+                    }
+                }
+
+                const annTitle = (announcementData.title || '').trim() || (createdDocs.length === 1
+                    ? `New ${category || 'Document'}: ${primaryDoc.title}`
+                    : `${createdDocs.length} New ${category || 'Company'} Documents`);
+
+                const annSummary = (announcementData.summary || '').trim() || (createdDocs.length === 1
+                    ? `A new ${category?.toLowerCase() || 'document'} "${primaryDoc.title}" has been published.`
+                    : `${createdDocs.length} new ${category?.toLowerCase() || 'company'} documents have been published.`);
+
+                const annContent = (announcementData.content || '').trim() || (primaryDoc.description?.trim()
+                    ? `${primaryDoc.description.trim()}\n\nPlease review and accept the document under Company Documents.`
+                    : `A new company ${category?.toLowerCase() || 'document'} "${primaryDoc.title}" has been published. Please review and confirm your consent in the Company Documents section.`);
+
+                const annCategory = announcementData.category || (category === 'Policy' ? 'Policy' : (category === 'Form' ? 'HR' : 'General'));
+                const isPinned = Boolean(announcementData.pinned);
+
+                const createdAnnouncement = await Announcement.create({
                     companyId,
-                    department: { $in: parsedDepts },
-                    isDeleted: { $ne: true },
-                    isActive:  true
-                }).select('_id').lean();
-                recipientIds = users.map(u => u._id);
+                    title: annTitle,
+                    summary: annSummary,
+                    content: annContent,
+                    category: annCategory,
+                    status: 'published',
+                    pinned: isPinned,
+                    isPinned: isPinned,
+                    pinnedAt: isPinned ? new Date() : null,
+                    expiresAt: announcementData.expiresAt ? new Date(announcementData.expiresAt) : null,
+                    audienceType: annAudienceType,
+                    audienceDepartments: annAudienceDepts,
+                    audienceEmploymentTypes: annAudienceEmpTypes,
+                    audienceUserIds: normalizeAudienceUserObjectIds(annAudienceUserIds),
+                    source: 'company_policy',
+                    link: '/profile?tab=company-documents',
+                    documentId: primaryDoc?._id || null,
+                    createdBy: req.user._id,
+                    updatedBy: req.user._id,
+                    publishedAt: new Date()
+                });
+
+                const populatedAnnouncement = await fetchPopulatedAnnouncementById(createdAnnouncement._id);
+                await notifyPublishedAnnouncement({ req, announcement: populatedAnnouncement });
+
+                // 2. Deliver document in-app notification (channel: system, zero email)
+                let recipientIds = [];
+                if (visibility.type === 'All') {
+                    const users = await User.find({ companyId, isDeleted: { $ne: true }, isActive: true }).select('_id').lean();
+                    recipientIds = users.map(u => u._id);
+                } else if (visibility.type === 'Custom') {
+                    recipientIds = parsedUserIds;
+                } else if (visibility.type === 'Department') {
+                    const users = await User.find({
+                        companyId,
+                        department: { $in: parsedDepts },
+                        isDeleted: { $ne: true },
+                        isActive:  true
+                    }).select('_id').lean();
+                    recipientIds = users.map(u => u._id);
+                }
+
+                const notifTitle = createdDocs.length === 1
+                    ? `New ${category || 'Document'}: ${createdDocs[0].title}`
+                    : `${createdDocs.length} New ${category || 'Company'} Documents`;
+
+                const notifMsg = createdDocs.length === 1
+                    ? `A new ${category?.toLowerCase() || 'document'} has been published for you.${isAck ? ' Your review and consent are required.' : ''}`
+                    : `${createdDocs.length} new ${category?.toLowerCase() || 'company'} documents have been published for you.${isAck ? ' Your review and consent are required.' : ''}`;
+
+                const notifications = recipientIds
+                    .filter(id => String(id) !== String(req.user._id))
+                    .map(userId => ({
+                        companyId,
+                        user:    userId,
+                        title:   notifTitle,
+                        message: notifMsg,
+                        type:    'Info',
+                        link:    '/profile?tab=company-documents',
+                        preferenceKey: 'ess_document.published',
+                        metadata: {
+                            preferenceKey: 'ess_document.published',
+                            documentId: createdDocs[0]?._id
+                        },
+                        origin:  req.headers?.origin || ''
+                    }));
+
+                if (notifications.length > 0) {
+                    await NotificationService.createManyNotifications(io, notifications);
+                }
+            } catch (notifErr) {
+                console.error('[EssDocument] Notification and announcement delivery failed:', notifErr.message);
             }
-
-            const notifTitle = createdDocs.length === 1
-                ? `New ${category || 'Document'}: ${createdDocs[0].title}`
-                : `${createdDocs.length} New ${category || 'Company'} Documents`;
-
-            const notifMsg = createdDocs.length === 1
-                ? `A new ${category?.toLowerCase() || 'document'} has been published for you.${isAck ? ' Your acknowledgement is required.' : ''}`
-                : `${createdDocs.length} new ${category?.toLowerCase() || 'company'} documents have been published for you.${isAck ? ' Your acknowledgement is required.' : ''}`;
-
-            const notifications = recipientIds
-                .filter(id => String(id) !== String(req.user._id))
-                .map(userId => ({
-                    companyId,
-                    user:    userId,
-                    title:   notifTitle,
-                    message: notifMsg,
-                    type:    'info',
-                    link:    '/ess/documents',
-                    preferenceKey: 'ess_document.published',
-                    origin:  req.headers?.origin || ''
-                }));
-
-            if (notifications.length > 0) {
-                await NotificationService.createManyNotifications(io, notifications);
-            }
-        } catch (notifErr) {
-            console.error('[EssDocument] Notification delivery failed:', notifErr.message);
         }
 
         return res.status(201).json({
@@ -231,6 +322,7 @@ exports.acknowledgeDocument = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
         const userId    = req.user._id;
+        const { consentGiven, consentText } = req.body || {};
 
         const document = await EssDocument.findOne({
             _id:       req.params.id,
@@ -250,11 +342,24 @@ exports.acknowledgeDocument = async (req, res) => {
             .some(a => String(a.userId) === String(userId));
 
         if (!alreadyAcknowledged) {
-            document.acknowledgements.push({ userId, acknowledgedAt: new Date() });
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '';
+            const userAgent = req.headers['user-agent'] || '';
+
+            document.acknowledgements.push({
+                userId,
+                acknowledgedAt: new Date(),
+                consentGiven:   consentGiven !== false,
+                consentText:    consentText?.trim() || document.consentDeclaration || 'I have read, understood, and accept all the details and terms outlined in this document.',
+                ipAddress:      String(ipAddress).slice(0, 100),
+                userAgent:      String(userAgent).slice(0, 250)
+            });
             await document.save();
         }
 
-        return res.json({ message: 'Document acknowledged successfully.' });
+        return res.json({
+            message: 'Document acknowledged successfully.',
+            acknowledgedAt: new Date()
+        });
     } catch (err) {
         console.error('[EssDocument] acknowledgeDocument error:', err);
         return res.status(500).json({ message: 'Failed to acknowledge document.' });
@@ -301,18 +406,40 @@ exports.getDocumentAcknowledgements = async (req, res) => {
         }
 
         const ackMap = Object.fromEntries(
-            (document.acknowledgements || []).map(a => [String(a.userId?._id || a.userId), a.acknowledgedAt])
+            (document.acknowledgements || []).map(a => [
+                String(a.userId?._id || a.userId),
+                {
+                    acknowledgedAt: a.acknowledgedAt,
+                    consentGiven:   a.consentGiven !== false,
+                    consentText:    a.consentText || document.consentDeclaration || ''
+                }
+            ])
         );
 
         const read = targetUsers
             .filter(u => acknowledgedUserIds.has(String(u._id)))
-            .map(u => ({ user: u, acknowledgedAt: ackMap[String(u._id)] }));
+            .map(u => {
+                const ackInfo = ackMap[String(u._id)] || {};
+                return {
+                    user:           u,
+                    acknowledgedAt: ackInfo.acknowledgedAt,
+                    consentGiven:   ackInfo.consentGiven,
+                    consentText:    ackInfo.consentText
+                };
+            });
 
         const unread = targetUsers
             .filter(u => !acknowledgedUserIds.has(String(u._id)))
             .map(u => ({ user: u }));
 
-        return res.json({ read, unread, total: targetUsers.length });
+        return res.json({
+            read,
+            unread,
+            total:              targetUsers.length,
+            title:              document.title,
+            category:           document.category,
+            consentDeclaration: document.consentDeclaration
+        });
     } catch (err) {
         console.error('[EssDocument] getDocumentAcknowledgements error:', err);
         return res.status(500).json({ message: 'Failed to retrieve acknowledgement report.' });

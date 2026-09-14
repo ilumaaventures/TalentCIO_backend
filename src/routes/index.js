@@ -7,6 +7,8 @@ const { globalLimiter } = require('../common/middleware/rateLimitMiddleware');
 
 // Import routes
 const authRoutes = require('../modules/auth/auth.routes');
+const clientAuthRoutes = require('../modules/client-portal/clientAuth.routes');
+const clientPortalRoutes = require('../modules/client-portal/clientPortal.routes');
 const attendanceRoutes = require('../modules/attendance/attendance.routes');
 const rgAttendanceRoutes = require('../modules/rg-attendance/routes/rgAttendanceRoutes');
 const timesheetRoutes = require('../modules/timesheet/timesheet.routes');
@@ -48,6 +50,7 @@ const essDocumentRoutes = require('../modules/ess-document/essDocument.routes');
 const impersonationRoutes = require('../modules/user/impersonation.routes');
 const organizationRoutes = require('../modules/organization/organization.routes');
 const employeeRevisionRoutes = require('../modules/dossier/employeeRevision.routes');
+const crmRoutes = require('../modules/crm/routes/crm.routes');
 
 const superAdminAuthRoutes = require('../modules/auth/superAdminAuth.routes');
 const companyRoutes = require('../modules/company/company.routes');
@@ -76,6 +79,8 @@ router.use((req, res, next) => {
 
 // Auth & Core tenant routes
 router.use('/auth', authRoutes);
+router.use('/client-portal/auth', clientAuthRoutes);
+router.use('/client-portal', clientPortalRoutes);
 router.use('/v1', payrollIntegrationRoutes);
 router.use('/payroll', payrollRoutes);
 
@@ -117,6 +122,7 @@ router.use('/ess-documents', essDocumentRoutes);
 router.use('/users', impersonationRoutes);
 router.use('/organization', organizationRoutes);
 router.use('/employees', employeeRevisionRoutes);
+router.use('/crm', crmRoutes);
 
 // Superadmin routes
 router.use('/superadmin/auth', superAdminAuthRoutes);

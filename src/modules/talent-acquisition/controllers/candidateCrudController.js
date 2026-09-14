@@ -941,6 +941,7 @@ const updateCandidate = async (req, res) => {
             status,
             decision,
             profileShared,
+            hiddenFromClient,
             phase2Decision,
             remark,
             phase2InterviewerFeedback,
@@ -1010,6 +1011,7 @@ const updateCandidate = async (req, res) => {
         if (lastWorkingDay !== undefined) candidate.lastWorkingDay = lastWorkingDay;
         if (decision !== undefined) candidate.decision = decision;
         if (profileShared !== undefined) candidate.profileShared = profileShared;
+        if (hiddenFromClient !== undefined) candidate.hiddenFromClient = Boolean(hiddenFromClient);
         if (phase2Decision !== undefined) candidate.phase2Decision = phase2Decision;
         if (remark !== undefined) candidate.remark = remark;
         if (phase2InterviewerFeedback !== undefined) candidate.phase2InterviewerFeedback = phase2InterviewerFeedback;

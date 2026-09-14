@@ -23,7 +23,9 @@ const ALL_COMPANY_MODULES = [
     { id: 'reimbursements', label: 'Reimbursements', icon: 'Receipt' },
     { id: 'essDocuments', label: 'Company Documents', icon: 'FileStack' },
     { id: 'organization', label: 'Organization Structure', icon: 'Network' },
-    { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' }
+    { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' },
+    { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' },
+    { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -96,6 +98,8 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('reimbursement.')) return enabled.has('reimbursements');
         if (key.startsWith('ess_document.')) return enabled.has('essDocuments');
         if (key.startsWith('my_space.') || key.startsWith('ess.')) return enabled.has('mySpace');
+        if (key.startsWith('crm.')) return enabled.has('crm');
+        if (key.startsWith('client_portal.')) return enabled.has('clientPortal');
 
         return true;
     });

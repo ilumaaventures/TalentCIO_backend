@@ -149,6 +149,7 @@ const getPermissions = async (req, res) => {
             else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
             else if (curr.key.startsWith('dossier.') || curr.key.startsWith('employee.revision.') || groupName === 'DOSSIER') groupName = 'EMPLOYEE DOSSIER';
             else if (curr.key.startsWith('leave.')) groupName = 'LEAVES';
+            else if (curr.key.startsWith('crm.')) groupName = 'SALES CRM';
 
             if (!acc[groupName]) acc[groupName] = [];
             acc[groupName].push(curr);

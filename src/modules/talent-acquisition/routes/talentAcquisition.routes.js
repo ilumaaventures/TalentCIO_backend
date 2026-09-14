@@ -6,6 +6,7 @@ const candidateController = require('../controllers/candidateController/candidat
 const analyticsController = require('../controllers/analyticsController/analyticsController');
 const taMailController = require('../controllers/taMailController/taMailController');
 const clientController = require('../controllers/clientController/clientController');
+const agencyClientController = require('../../client-portal/agencyClient.controller');
 const taAccessSettingsController = require('../controllers/taAccessSettingsController/taAccessSettings.controller');
 
 const taController = {
@@ -91,6 +92,8 @@ const APPLICANT_REVIEW_SELECT = [
 
 const taAccessSettingsViewPermissions = ['ta.manage', 'ta.config.view', 'ta.config.edit'];
 const taAccessSettingsEditPermissions = ['ta.manage', 'ta.config.edit'];
+const taClientManagePermissions = ['ta.client.manage', 'ta.manage', 'ta.config.edit'];
+const taClientViewPermissions = ['ta.client.manage', 'ta.client.view', 'ta.view', 'ta.manage', 'ta.config.view', 'ta.config.edit'];
 const requireTAAnalyticsAccess = async (req, res, next) => {
     try {
         if (hasAssignedTAAnalyticsAccess(req.user)) {
@@ -125,6 +128,7 @@ router.get('/hiring-request', protect, taController.getHiringRequests);
 router.get('/hiring-requests/:id/phases', protect, taController.getHiringRequestPhases);
 router.get('/hiring-request/:id', protect, taController.getHiringRequestById);
 router.put('/hiring-request/:id', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit']), taController.updateHiringRequest);
+router.patch('/hiring-request/:id/client-visibility', protect, authorizeAny(['ta.manage', 'ta.client.visibility.configure', 'ta.requisition.update', 'ta.requisition.manage.all']), taController.updateHiringRequest);
 router.delete('/hiring-request/:id', protect, authorizeAny(['ta.requisition.delete', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.delete']), taController.deleteHiringRequest);
 router.patch('/hiring-request/:id/approve', protect, authorizeHiringRequestApproval, taController.approveHiringRequest);
 router.patch('/hiring-request/:id/reject', protect, authorizeHiringRequestApproval, taController.rejectHiringRequest);
@@ -149,6 +153,16 @@ router.get('/analytics/interviews', protect, taController.getInterviewAnalytics)
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);
 router.put('/clients/status', protect, taController.updateClientStatus);
+
+// Client portal user management for TA clients
+router.get('/clients/:clientId/users', protect, authorizeAny(taClientViewPermissions), agencyClientController.getClientUsers);
+router.get('/clients/:clientId/shared-summary', protect, authorizeAny(taClientViewPermissions), agencyClientController.getClientSharedAccessSummary);
+router.post('/clients/:clientId/users/invite', protect, authorizeAny(taClientManagePermissions), agencyClientController.inviteClientUser);
+router.post('/clients/:clientId/invite-user', protect, authorizeAny(taClientManagePermissions), agencyClientController.inviteClientUser);
+router.put('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.updateClientUser);
+router.patch('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.updateClientUser);
+router.delete('/clients/:clientId/users/:userId', protect, authorizeAny(taClientManagePermissions), agencyClientController.deleteClientUser);
+router.post('/clients/:clientId/users/:userId/resend-invite', protect, authorizeAny(taClientManagePermissions), agencyClientController.resendInvite);
 
 // TA access settings
 router.get('/settings/access/overview', protect, authorizeAny(taAccessSettingsViewPermissions), taAccessSettingsController.getOverview);

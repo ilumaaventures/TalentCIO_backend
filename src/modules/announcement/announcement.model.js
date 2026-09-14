@@ -169,6 +169,21 @@ const announcementSchema = new mongoose.Schema({
         type: announcementAttachmentSchema,
         default: null
     },
+    source: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    link: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    documentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'EssDocument',
+        default: null
+    },
     reactions: {
         type: [announcementReactionSchema],
         default: []
