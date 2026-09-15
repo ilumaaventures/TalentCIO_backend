@@ -277,7 +277,13 @@ exports.getMyClaims = async (req, res) => {
             employee:  req.user._id,
             isDeleted: { $ne: true }
         };
-        if (status)   filter.status   = status;
+        if (status) {
+            if (status === 'Pending') {
+                filter.status = { $in: ['Pending', 'L1 Approved', 'L2 Approved'] };
+            } else {
+                filter.status = status;
+            }
+        }
         if (category) filter.category = category;
         if (from || to) {
             filter.expenseDate = {};
@@ -371,6 +377,155 @@ exports.cancelClaim = async (req, res) => {
     }
 };
 
+// ─── Employee: Update Pending Claim (Before Approval) ───────────────────────────
+
+exports.updateClaim = async (req, res) => {
+    try {
+        const companyId = getCompanyId(req);
+
+        const claim = await Reimbursement.findOne({
+            _id: req.params.id,
+            companyId,
+            isDeleted: { $ne: true }
+        });
+
+        if (!claim) return res.status(404).json({ message: 'Claim not found.' });
+
+        const isOwner = String(claim.employee) === String(req.user._id);
+        const isAdmin = (req.user.roles || []).some(r =>
+            ['Admin', 'System Admin', 'HR Admin'].includes(typeof r === 'string' ? r : r?.name)
+        ) || (req.user.permissions || []).includes('reimbursement.manage') || (req.user.permissions || []).includes('*');
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ message: 'You are not authorised to edit this claim.' });
+        }
+
+        // Editing is only permitted before any approval action has taken place
+        if (claim.status !== 'Pending') {
+            return res.status(400).json({
+                message: `Claim cannot be edited once approval has been processed. Current status: "${claim.status}".`
+            });
+        }
+
+        const { category, amount, expenseDate, description, currency, department, employeeCode } = req.body || {};
+
+        let parsedItems = [];
+        if (req.body.items) {
+            try {
+                parsedItems = typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items;
+            } catch (e) {
+                parsedItems = [];
+            }
+        }
+
+        const calculatedAmount = parsedItems.length > 0
+            ? parsedItems.reduce((acc, it) => acc + (Number(it.amount) || 0), 0)
+            : Number(amount);
+
+        const primaryCategory = category?.trim() || parsedItems[0]?.category?.trim() || claim.category;
+        const primaryDate = expenseDate ? new Date(expenseDate) : (parsedItems[0]?.expenseDate ? new Date(parsedItems[0].expenseDate) : claim.expenseDate);
+        const primaryDesc = description?.trim() || (parsedItems.length > 0 ? parsedItems.map(i => i.description).filter(Boolean).join('; ') : claim.description);
+
+        if (!primaryCategory) return res.status(400).json({ message: 'Expense category is required.' });
+        if (!calculatedAmount || isNaN(calculatedAmount) || calculatedAmount <= 0) {
+            return res.status(400).json({ message: 'A valid positive amount is required.' });
+        }
+        if (!primaryDate) return res.status(400).json({ message: 'Expense date is required.' });
+        if (!primaryDesc) return res.status(400).json({ message: 'Description is required.' });
+
+        // Validate category exists for this company
+        const validCategory = await ReimbursementCategory.findOne({
+            companyId, name: primaryCategory, isDeleted: { $ne: true }
+        });
+
+        if (validCategory?.maxAmountPerClaim && calculatedAmount > validCategory.maxAmountPerClaim) {
+            return res.status(400).json({
+                message: `Amount exceeds maximum allowed (₹${validCategory.maxAmountPerClaim}) for category "${primaryCategory}".`
+            });
+        }
+
+        // Process retained existing receipts
+        let retainedReceipts = [];
+        if (req.body.existingReceipts !== undefined) {
+            try {
+                const parsedExisting = typeof req.body.existingReceipts === 'string'
+                    ? JSON.parse(req.body.existingReceipts)
+                    : req.body.existingReceipts;
+                if (Array.isArray(parsedExisting)) {
+                    const existingUrls = new Set(parsedExisting.map(r => r.url || r));
+                    retainedReceipts = (claim.receipts || []).filter(r => existingUrls.has(r.url));
+                }
+            } catch (e) {
+                retainedReceipts = claim.receipts || [];
+            }
+        } else {
+            retainedReceipts = claim.receipts || [];
+        }
+
+        // Process new uploaded files
+        const newReceipts = (req.files || []).map(file => ({
+            url:          file.path || file.secure_url || '',
+            name:         file.originalname || file.filename || '',
+            publicId:     file.filename || '',
+            resourceType: (file.mimetype || '').startsWith('image/') ? 'image' : 'raw',
+            mimeType:     file.mimetype || '',
+            size:         file.size || 0,
+            uploadedAt:   new Date()
+        }));
+
+        const totalReceipts = [...retainedReceipts, ...newReceipts];
+        if (totalReceipts.length === 0) {
+            return res.status(400).json({
+                message: 'Receipt attachment is mandatory. Please keep or upload at least one receipt or invoice.'
+            });
+        }
+
+        const otherCategoryName = (req.body?.otherCategoryName || parsedItems[0]?.otherCategoryName || '').trim();
+
+        claim.category          = primaryCategory;
+        claim.otherCategoryName = otherCategoryName;
+        claim.amount            = calculatedAmount;
+        if (currency) claim.currency = currency;
+        claim.expenseDate       = primaryDate;
+        claim.description       = primaryDesc;
+        if (department) claim.department = department;
+        if (employeeCode) claim.employeeCode = employeeCode;
+
+        if (parsedItems.length > 0) {
+            claim.items = parsedItems.map(it => ({
+                expenseDate:       new Date(it.expenseDate || primaryDate),
+                description:       it.description?.trim() || '',
+                category:          it.category?.trim() || primaryCategory,
+                otherCategoryName: it.otherCategoryName?.trim() || '',
+                amount:            Number(it.amount) || 0,
+                hasReceipt:        Boolean(it.hasReceipt || totalReceipts.length > 0)
+            }));
+        }
+
+        claim.receipts = totalReceipts;
+        claim.auditLog.push({
+            action:  'Edited',
+            by:      req.user._id,
+            at:      new Date(),
+            comment: 'Claim details updated before approval.'
+        });
+
+        await claim.save();
+
+        const populated = await Reimbursement.findById(claim._id)
+            .populate('employee', 'firstName lastName email department designation profilePicture employeeCode')
+            .populate('approvalWorkflow', 'name levels')
+            .populate('approvalTrail.approver', 'firstName lastName profilePicture')
+            .populate('auditLog.by', 'firstName lastName')
+            .lean();
+
+        return res.json({ claim: populated, message: 'Reimbursement claim updated successfully.' });
+    } catch (err) {
+        console.error('[Reimbursement] updateClaim error:', err);
+        return res.status(500).json({ message: 'Failed to update reimbursement claim.' });
+    }
+};
+
 // ─── Admin / Approver: All Claims (Company Scope) ────────────────────────────
 
 exports.getAllClaims = async (req, res) => {
@@ -384,7 +539,13 @@ exports.getAllClaims = async (req, res) => {
             isDeleted: { $ne: true }
         };
 
-        if (status)   filter.status   = status;
+        if (status) {
+            if (status === 'Pending') {
+                filter.status = { $in: ['Pending', 'L1 Approved', 'L2 Approved'] };
+            } else {
+                filter.status = status;
+            }
+        }
         if (category) filter.category = category;
         if (employeeId) filter.employee = employeeId;
         if (from || to) {
@@ -667,12 +828,14 @@ exports.getReimbursementStats = async (req, res) => {
         const [
             pending,
             approved,
+            pendingReimbursement,
             reimbursed,
             rejected,
             totalAgg
         ] = await Promise.all([
             Reimbursement.countDocuments({ ...filter, status: { $in: ['Pending', 'L1 Approved', 'L2 Approved'] } }),
-            Reimbursement.countDocuments({ ...filter, status: { $in: ['Approved', 'Reimbursed'] } }),
+            Reimbursement.countDocuments({ ...filter, status: 'Approved' }),
+            Reimbursement.countDocuments({ ...filter, status: 'Approved' }),
             Reimbursement.countDocuments({ ...filter, status: 'Reimbursed' }),
             Reimbursement.countDocuments({ ...filter, status: 'Rejected' }),
             Reimbursement.aggregate([
@@ -685,6 +848,7 @@ exports.getReimbursementStats = async (req, res) => {
             stats: {
                 pending,
                 approved,
+                pendingReimbursement,
                 reimbursed,
                 rejected,
                 totalClaimed: totalAgg[0]?.total || 0
