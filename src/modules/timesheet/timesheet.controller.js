@@ -69,13 +69,14 @@ const getCurrentTimesheet = async (req, res) => {
 
         if (!timesheet) {
             // Create a draft if it doesn't exist
-            timesheet = await Timesheet.create({
+            const created = await Timesheet.create({
                 user: req.user._id,
                 month: currentMonth,
                 companyId: req.companyId,
                 status: 'DRAFT',
                 rejectionReason: ''
             });
+            timesheet = created.toObject();
         }
 
         let fullUser;
