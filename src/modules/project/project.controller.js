@@ -15,7 +15,13 @@ const {
 
 const hasPermission = (req, permission) => (req.user.permissions || []).includes(permission);
 const hasAnyPermission = (req, permissions) => permissions.some(permission => hasPermission(req, permission));
-const isAdminUser = (req) => (req.user.roles || []).some(r => r.name === 'Admin');
+const isAdminUser = (req) =>
+    (req.user?.roles || []).some(r => {
+        const roleName = typeof r === 'string' ? r : r?.name;
+        return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
+    }) ||
+    req.user?.permissions?.includes('*') ||
+    req.user?.permissions?.includes('admin');
 
 // --- Employees (Helper for Dropdowns) ---
 const getEmployees = async (req, res) => {
@@ -468,10 +474,10 @@ const getModules = async (req, res) => {
         const query = { project: projectId, companyId: req.companyId };
 
         // Target user for restriction check: queryUserId (from Timesheet.jsx) or current user (if not Admin)
-        // If queryUserId is provided (which it will be from Timesheet.jsx), apply strict restriction.
         const targetUserId = queryUserId;
+        const isViewingOther = targetUserId && String(targetUserId) !== String(req.user._id);
 
-        if (targetUserId) {
+        if (isViewingOther || (targetUserId && !canViewAll)) {
             // Check if user is Project Manager or Member
             const isProjectAssigned = project.manager?.toString() === targetUserId.toString() ||
                 project.members?.some(m => m.toString() === targetUserId.toString());
@@ -536,34 +542,27 @@ const getTasks = async (req, res) => {
 
         // Restriction target
         const targetUserId = queryUserId;
+        const canViewAll = isAdminUser(req) || hasPermission(req, 'project.read');
+        const isViewingOther = targetUserId && String(targetUserId) !== String(req.user._id);
 
-        if (targetUserId) {
-            // Check if user has Project-level access
-            let isProjectAssigned = false;
-            
+        if (isViewingOther || !canViewAll) {
+            const effectiveTarget = targetUserId || req.user._id;
+
+            // Check if user has Project-level access as manager
+            let isProjectManager = false;
+
             // If moduleId is provided, check its project
             if (req.query.moduleId) {
                 const module = await Module.findById(req.query.moduleId).populate('project');
                 if (module && module.project) {
                     const project = module.project;
-                    isProjectAssigned = project.manager?.toString() === targetUserId.toString() ||
-                        project.members?.some(m => m.toString() === targetUserId.toString());
+                    isProjectManager = project.manager?.toString() === effectiveTarget.toString();
                 }
             }
 
-            if (!isProjectAssigned) {
+            if (!isProjectManager) {
                 // Explicitly filter by assignee for timesheet/other views
-                query.assignees = targetUserId;
-            }
-        } else {
-            // If no userId passed, and user is NOT admin, restrict to self
-            const isAdmin = req.user.roles?.some(r => 
-                (typeof r === 'string' && r === 'Admin') || 
-                (typeof r === 'object' && r.name === 'Admin')
-            ) || req.user.permissions?.includes('*');
-
-            if (!isAdmin) {
-                query.assignees = req.user._id;
+                query.assignees = effectiveTarget;
             }
         }
 

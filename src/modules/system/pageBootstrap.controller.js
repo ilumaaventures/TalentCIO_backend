@@ -64,10 +64,10 @@ const hasPermission = (user, permission) => (user?.permissions || []).includes(p
 const hasAnyPermission = (user, permissions) => permissions.some((permission) => hasPermission(user, permission));
 
 const isAdminUser = (user) =>
-    (user?.roles || []).some(r =>
-        (typeof r === 'string' && r === 'Admin') ||
-        (typeof r === 'object' && r?.name === 'Admin')
-    ) ||
+    (user?.roles || []).some(r => {
+        const roleName = typeof r === 'string' ? r : r?.name;
+        return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
+    }) ||
     user?.permissions?.includes('*') ||
     user?.permissions?.includes('admin');
 
@@ -179,9 +179,10 @@ const getMonthRange = (year, month) => {
 };
 
 const getTimesheetProjectsForUser = async ({ requestUser, companyId, targetUserId }) => {
+    const isViewingOther = targetUserId && String(targetUserId) !== String(requestUser._id);
     const isAdmin = isAdminUser(requestUser) || requestUser?.permissions?.includes('timesheet.view');
 
-    if (isAdmin && !targetUserId) {
+    if (isAdmin && !isViewingOther) {
         return Project.find({ companyId, isActive: true }).lean();
     }
 
@@ -551,8 +552,8 @@ exports.getTimesheetBootstrap = async (req, res) => {
         const { start, end } = buildTimesheetPeriodRange(periodId, cycle);
         const usersListPromise = canLoadUserList(req.user)
             ? isAdminUser(req.user) || req.user?.permissions?.includes('timesheet.view') || req.user?.permissions?.includes('*')
-                ? User.find({ companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
-                : User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('firstName lastName email employeeCode').lean()
+                ? User.find({ companyId: req.companyId, isActive: { $ne: false } }).select('firstName lastName email employeeCode isActive').sort({ firstName: 1, lastName: 1 }).lean()
+                : User.find({ reportingManagers: req.user._id, companyId: req.companyId, isActive: { $ne: false } }).select('firstName lastName email employeeCode isActive').sort({ firstName: 1, lastName: 1 }).lean()
             : Promise.resolve([]);
 
         const [timesheet, projects, holidays, approvedLeaves, usersList] = await Promise.all([

@@ -308,18 +308,19 @@ const getProjects = async (req, res) => {
         let targetUserId = req.user._id;
 
         // Check Permissions for viewing other's projects
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('timesheet.view');
+        const isAdmin = req.user.roles?.some(r => {
+            const roleName = typeof r === 'string' ? r : r?.name;
+            return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
+        }) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin') || req.user.permissions?.includes('timesheet.view');
 
         if (userId && (isAdmin || userId === req.user._id.toString())) {
             targetUserId = userId;
         }
 
-        // If Admin AND NO userId query, show all active projects (for Project Management / General view)
-        // BUT if userId query exists, we stick to the restriction logic below.
-        if (isAdmin && !userId) {
+        const isViewingOther = targetUserId && targetUserId.toString() !== req.user._id.toString();
+
+        // If Admin viewing self, show all active projects
+        if (isAdmin && !isViewingOther) {
             const projects = await Project.find({ companyId: req.companyId, isActive: true }).lean();
             return res.json(projects);
         }
