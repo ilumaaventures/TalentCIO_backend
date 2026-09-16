@@ -459,7 +459,7 @@ const filterProfileFields = (profile, viewer, isSelf) => {
         delete profileObj.pendingUpdates;
     } else {
         if (isSelf) {
-            const canViewSelfSalary = isAdmin || viewerHasPermission('payroll.salary.view.self') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+            const canViewSelfSalary = isAdmin || viewerHasPermission('payroll.salary.view.self') || viewerHasPermission('payroll.payslip.view') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
             if (!canViewSelfSalary) {
                 delete profileObj.compensation;
             }
