@@ -408,8 +408,15 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
             companyId: req.companyId
         })
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
             .sort({ createdAt: -1 })
             .lean();
+
+        apps.forEach(a => {
+            if (!a.hiringRequestId || typeof a.hiringRequestId !== 'object' || !a.hiringRequestId.roleDetails) {
+                a.hiringRequestId = hiringRequest;
+            }
+        });
 
         const appsWithHistory = await attachLastApplicationData(apps);
         res.json(appsWithHistory);
