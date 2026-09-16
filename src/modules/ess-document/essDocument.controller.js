@@ -213,9 +213,9 @@ exports.createDocument = async (req, res) => {
                         message: notifMsg,
                         type:    'Info',
                         link:    '/profile?tab=company-documents',
-                        preferenceKey: 'ess_document.published',
+                        preferenceKey: 'ess_document_published',
                         metadata: {
-                            preferenceKey: 'ess_document.published',
+                            preferenceKey: 'ess_document_published',
                             documentId: createdDocs[0]?._id
                         },
                         origin:  req.headers?.origin || ''

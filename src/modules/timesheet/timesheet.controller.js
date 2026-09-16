@@ -19,6 +19,24 @@ const canUpdateFutureRecords = (user) => (
     user?.permissions?.includes('attendance.update_future')
 );
 
+const isProjectAssignedToUser = async (projectId, userId, companyId) => {
+    const project = await Project.findOne({ _id: projectId, companyId, isActive: true });
+    if (!project) return false;
+
+    const uId = userId.toString();
+    if (project.manager?.toString() === uId) return true;
+    if (project.members?.some(m => m.toString() === uId)) return true;
+
+    const modules = await Module.find({ project: projectId, companyId }).select('_id').lean();
+    const moduleIds = (modules || []).map(m => m._id);
+    const hasAssignedTask = await Task.exists({
+        module: { $in: moduleIds },
+        assignees: userId,
+        companyId
+    });
+    return Boolean(hasAssignedTask);
+};
+
 const populateWorkLogHierarchy = (query) => (
     query
         .populate({
@@ -138,15 +156,24 @@ const addEntry = async (req, res) => {
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
         ) || req.user.permissions?.includes('*') || 
-          req.user.permissions?.includes('timesheet.update_others');
+          req.user.permissions?.includes('admin');
+        const canUpdateOthers = isAdmin || req.user.permissions?.includes('timesheet.update_others');
 
-        if (userId && isAdmin) {
+        if (userId && canUpdateOthers) {
             targetUserId = userId;
         }
 
         // Validate Date and other required fields
         if (!entryDate || !hours || !projectId) {
             return res.status(400).json({ message: 'Date, Project, and Hours are required' });
+        }
+
+        const isSelfAdmin = isAdmin && String(targetUserId) === String(req.user._id);
+        if (!isSelfAdmin) {
+            const isAssigned = await isProjectAssignedToUser(projectId, targetUserId, req.companyId);
+            if (!isAssigned) {
+                return res.status(403).json({ message: 'Selected project is not assigned to this employee' });
+            }
         }
 
         // Check for Existing Timesheet Logic
@@ -309,12 +336,14 @@ const getProjects = async (req, res) => {
         let targetUserId = req.user._id;
 
         // Check Permissions for viewing other's projects
-        const isAdmin = req.user.roles?.some(r => {
+        const isAdmin = (req.user.roles?.some(r => {
             const roleName = typeof r === 'string' ? r : r?.name;
             return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
-        }) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin') || req.user.permissions?.includes('timesheet.view');
+        }) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin'));
 
-        if (userId && (isAdmin || userId === req.user._id.toString())) {
+        const canViewOthers = isAdmin || req.user.permissions?.includes('timesheet.view') || (req.user.directReports && req.user.directReports.length > 0);
+
+        if (userId && (canViewOthers || userId === req.user._id.toString())) {
             targetUserId = userId;
         }
 
@@ -337,7 +366,7 @@ const getProjects = async (req, res) => {
         const moduleIds = [...new Set(assignedTasks.map(t => t.module))];
 
         // Get Project IDs for those modules
-        const modules = await Module.find({ _id: { $in: moduleIds } }).select('project');
+        const modules = await Module.find({ _id: { $in: moduleIds }, companyId: req.companyId }).select('project');
         const taskProjectIds = [...new Set(modules.map(m => m.project))];
 
         const projects = await Project.find({
@@ -708,13 +737,14 @@ const updateEntry = async (req, res) => {
 
         const isOwner = owner._id.toString() === requestor._id.toString();
         const isManager = owner.reportingManagers?.some(m => m.toString() === requestor._id.toString());
-        const isAdmin = requestor.roles?.some(r => 
+        const isTrueAdmin = requestor.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
         ) || requestor.permissions?.includes('*') || 
-          requestor.permissions?.includes('timesheet.update_others');
+          requestor.permissions?.includes('admin');
+        const canUpdateOthers = isTrueAdmin || requestor.permissions?.includes('timesheet.update_others');
 
-        if (!isOwner && !isManager && !isAdmin) {
+        if (!isOwner && !isManager && !canUpdateOthers) {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
@@ -731,7 +761,7 @@ const updateEntry = async (req, res) => {
         }
 
         // Check Joining Date
-        if (owner.joiningDate && !isAdmin) {
+        if (owner.joiningDate && !isTrueAdmin) {
             // For updateEntry, we check the workLog date
             const joiningDateIST = parseDateAsIST(owner.joiningDate);
             const logDateIST = parseDateAsIST(workLog.date);
@@ -745,7 +775,20 @@ const updateEntry = async (req, res) => {
         if (description !== undefined) workLog.description = description;
 
         // Support for changing hierarchy (Task/Project/Module/Discussion)
-        if (req.body.projectId !== undefined) workLog.project = req.body.projectId || null;
+        if (req.body.projectId !== undefined) {
+            if (req.body.projectId) {
+                const isSelfAdmin = isTrueAdmin && String(owner._id) === String(requestor._id);
+                if (!isSelfAdmin) {
+                    const isAssigned = await isProjectAssignedToUser(req.body.projectId, owner._id, req.companyId);
+                    if (!isAssigned) {
+                        return res.status(403).json({ message: 'Selected project is not assigned to this employee' });
+                    }
+                }
+                workLog.project = req.body.projectId;
+            } else {
+                workLog.project = null;
+            }
+        }
         if (req.body.moduleId !== undefined) workLog.module = req.body.moduleId || null;
         if (req.body.taskId !== undefined) workLog.task = req.body.taskId || null;
         if (req.body.discussionId !== undefined) workLog.discussion = req.body.discussionId || null;

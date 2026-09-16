@@ -109,7 +109,7 @@ const NOTIFICATION_EVENT_DEFINITIONS = [
         defaultChannel: 'system'
     },
     {
-        key: 'ess_document.published',
+        key: 'ess_document_published',
         label: 'Company policy or document published',
         description: 'Notify employees when a new company policy or document is published.',
         module: 'Documents',
@@ -232,6 +232,23 @@ const normalizeNotificationSettings = (settings = {}) => {
     const inputEventEmailSenderAccountIds = settings?.eventEmailSenderAccountIds instanceof Map
         ? Object.fromEntries(settings.eventEmailSenderAccountIds.entries())
         : (settings?.eventEmailSenderAccountIds || {});
+
+    // Backward compatibility: alias legacy dot-separated key to underscore key
+    if (inputEvents['ess_document.published'] !== undefined && inputEvents['ess_document_published'] === undefined) {
+        inputEvents['ess_document_published'] = inputEvents['ess_document.published'];
+    }
+    delete inputEvents['ess_document.published'];
+
+    if (inputEventEmailSenderSources['ess_document.published'] !== undefined && inputEventEmailSenderSources['ess_document_published'] === undefined) {
+        inputEventEmailSenderSources['ess_document_published'] = inputEventEmailSenderSources['ess_document.published'];
+    }
+    delete inputEventEmailSenderSources['ess_document.published'];
+
+    if (inputEventEmailSenderAccountIds['ess_document.published'] !== undefined && inputEventEmailSenderAccountIds['ess_document_published'] === undefined) {
+        inputEventEmailSenderAccountIds['ess_document_published'] = inputEventEmailSenderAccountIds['ess_document.published'];
+    }
+    delete inputEventEmailSenderAccountIds['ess_document.published'];
+
     const defaultEvents = buildDefaultNotificationEvents();
     const defaultEventEmailSenderSources = buildDefaultNotificationEmailSenderSources();
     const defaultEventEmailSenderAccountIds = buildDefaultNotificationEventEmailSenderAccountIds();

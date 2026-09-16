@@ -98,9 +98,9 @@ const canManageProjectDirectory = (user) =>
 // MED-9: Parallelized into two tiers instead of 5 sequential awaits
 const buildProjectVisibilityFilter = async ({ requestUser, companyId }) => {
     const filter = { companyId };
-    const canViewAll      = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
     const canViewAssigned = hasPermission(requestUser, 'project.view_assigned');
     const canViewTeam     = hasPermission(requestUser, 'project.view_team');
+    const canViewAll      = (isAdminUser(requestUser) || hasPermission(requestUser, 'project.read')) && !canViewAssigned;
 
     if (canViewAll) return filter;
     if (!canViewAssigned && !canViewTeam) return { ...filter, _id: null };
@@ -180,7 +180,7 @@ const getMonthRange = (year, month) => {
 
 const getTimesheetProjectsForUser = async ({ requestUser, companyId, targetUserId }) => {
     const isViewingOther = targetUserId && String(targetUserId) !== String(requestUser._id);
-    const isAdmin = isAdminUser(requestUser) || requestUser?.permissions?.includes('timesheet.view');
+    const isAdmin = isAdminUser(requestUser);
 
     if (isAdmin && !isViewingOther) {
         return Project.find({ companyId, isActive: true }).lean();
@@ -189,7 +189,7 @@ const getTimesheetProjectsForUser = async ({ requestUser, companyId, targetUserI
     const assignedTasks = await Task.find({ assignees: targetUserId, companyId }).select('module').lean();
     const moduleIds = [...new Set(assignedTasks.map(task => String(task.module)).filter(Boolean))];
     const modules = moduleIds.length > 0
-        ? await Module.find({ _id: { $in: moduleIds } }).select('project').lean()
+        ? await Module.find({ _id: { $in: moduleIds }, companyId }).select('project').lean()
         : [];
     const taskProjectIds = [...new Set(modules.map(module => module.project).filter(Boolean))];
 

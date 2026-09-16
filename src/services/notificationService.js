@@ -214,8 +214,14 @@ class NotificationService {
         return normalized;
     }
 
+    static normalizePreferenceKey(preferenceKey) {
+        const raw = String(preferenceKey || '').trim();
+        if (raw === 'ess_document.published') return 'ess_document_published';
+        return raw;
+    }
+
     static resolveNotificationChannel(settings, preferenceKey) {
-        const normalizedKey = String(preferenceKey || '').trim();
+        const normalizedKey = this.normalizePreferenceKey(preferenceKey);
         if (!normalizedKey) {
             return 'system';
         }
@@ -224,7 +230,7 @@ class NotificationService {
     }
 
     static resolveNotificationEmailSenderSource(settings, preferenceKey) {
-        const normalizedKey = String(preferenceKey || '').trim();
+        const normalizedKey = this.normalizePreferenceKey(preferenceKey);
         if (!normalizedKey) {
             return 'notification';
         }
@@ -238,7 +244,7 @@ class NotificationService {
             return explicitEmailAccountId;
         }
 
-        const normalizedKey = String(preferenceKey || '').trim();
+        const normalizedKey = this.normalizePreferenceKey(preferenceKey);
         const eventEmailAccountId = normalizedKey
             ? String(settings?.eventEmailSenderAccountIds?.[normalizedKey] || '').trim()
             : '';
