@@ -63,13 +63,17 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
 const hasPermission = (user, permission) => (user?.permissions || []).includes(permission);
 const hasAnyPermission = (user, permissions) => permissions.some((permission) => hasPermission(user, permission));
 
-const isAdminUser = (user) =>
-    (user?.roles || []).some(r => {
+const isAdminUser = (user) => {
+    const uObj = user?.user || user;
+    return (uObj?.roles || []).some(r => {
         const roleName = typeof r === 'string' ? r : r?.name;
-        return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
+        const lower = String(roleName || '').toLowerCase().trim();
+        return lower === 'admin' || lower === 'system admin' || lower === 'super admin' || r?.isSystem === true;
     }) ||
-    user?.permissions?.includes('*') ||
-    user?.permissions?.includes('admin');
+    uObj?.permissions?.includes('*') ||
+    uObj?.permissions?.includes('admin') ||
+    uObj?.hasAllPermissions === true;
+};
 
 const canViewOtherAttendance = (user) =>
     isAdminUser(user) ||
@@ -96,14 +100,14 @@ const canManageProjectDirectory = (user) =>
     hasAnyPermission(user, ['project.create', 'project.update', 'task.create', 'task.update']);
 
 // MED-9: Parallelized into two tiers instead of 5 sequential awaits
-const buildProjectVisibilityFilter = async ({ requestUser, companyId }) => {
+const buildProjectVisibilityFilter = async ({ requestUser, companyId, assignedOnly = false }) => {
     const filter = { companyId };
     const canViewAssigned = hasPermission(requestUser, 'project.view_assigned');
     const canViewTeam     = hasPermission(requestUser, 'project.view_team');
-    const canViewAll      = (isAdminUser(requestUser) || hasPermission(requestUser, 'project.read')) && !canViewAssigned;
+    const canViewAll      = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
 
-    if (canViewAll) return filter;
-    if (!canViewAssigned && !canViewTeam) return { ...filter, _id: null };
+    if (canViewAll && !assignedOnly) return filter;
+    if (!canViewAssigned && !canViewTeam && !canViewAll) return { ...filter, _id: null };
 
     // ── Tier 1: Parallel — user's own assigned tasks + direct reports ────────
     const [assignedModuleIds, directReports] = await Promise.all([
@@ -130,13 +134,23 @@ const buildProjectVisibilityFilter = async ({ requestUser, companyId }) => {
         ? await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId })
         : [];
 
-    const orConditions = [
-        { manager: requestUser._id },
-        { members: requestUser._id },
-        ...(taskProjectIds.length > 0     ? [{ _id: { $in: taskProjectIds } }] : []),
-        ...(reportIds.length > 0          ? [{ manager: { $in: reportIds } }, { members: { $in: reportIds } }] : []),
-        ...(teamTaskProjectIds.length > 0 ? [{ _id: { $in: teamTaskProjectIds } }] : [])
-    ];
+    const orConditions = [];
+    if (canViewAssigned || assignedOnly) {
+        orConditions.push({ manager: requestUser._id });
+        orConditions.push({ members: requestUser._id });
+        if (taskProjectIds.length > 0) {
+            orConditions.push({ _id: { $in: taskProjectIds } });
+        }
+    }
+    if (canViewTeam) {
+        if (reportIds.length > 0) {
+            orConditions.push({ manager: { $in: reportIds } });
+            orConditions.push({ members: { $in: reportIds } });
+        }
+        if (teamTaskProjectIds.length > 0) {
+            orConditions.push({ _id: { $in: teamTaskProjectIds } });
+        }
+    }
 
     return orConditions.length > 0
         ? { ...filter, $or: orConditions }
@@ -887,7 +901,8 @@ exports.getProjectBootstrap = async (req, res) => {
         const canManageProjects = canManageProjectDirectory(req.user);
         const projectFilter = await buildProjectVisibilityFilter({
             requestUser: req.user,
-            companyId: req.companyId
+            companyId: req.companyId,
+            assignedOnly: req.query.assignedOnly === 'true'
         });
 
         const [projects, clients, businessUnits, employees] = await Promise.all([
