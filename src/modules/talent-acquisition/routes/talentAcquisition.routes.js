@@ -310,7 +310,7 @@ router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.c
         const targetRequest = await HiringRequestModel.findOne({
             _id: targetRequestId,
             companyId: req.companyId,
-            status: { $in: ['Approved'] }
+            status: { $in: ['Approved', 'Active'] }
         });
 
         if (!targetRequest) {
@@ -508,7 +508,7 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         const targetRequest = await HiringRequestModel.findOne({
             _id: targetRequestId,
             companyId: req.companyId,
-            status: { $in: ['Approved'] }
+            status: { $in: ['Approved', 'Active'] }
         });
 
         if (!targetRequest) {
