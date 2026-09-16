@@ -310,7 +310,7 @@ router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.c
         const targetRequest = await HiringRequestModel.findOne({
             _id: targetRequestId,
             companyId: req.companyId,
-            status: { $in: ['Approved'] }
+            status: { $in: ['Approved', 'Active'] }
         });
 
         if (!targetRequest) {
@@ -408,8 +408,15 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
             companyId: req.companyId
         })
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
             .sort({ createdAt: -1 })
             .lean();
+
+        apps.forEach(a => {
+            if (!a.hiringRequestId || typeof a.hiringRequestId !== 'object' || !a.hiringRequestId.roleDetails) {
+                a.hiringRequestId = hiringRequest;
+            }
+        });
 
         const appsWithHistory = await attachLastApplicationData(apps);
         res.json(appsWithHistory);
@@ -501,7 +508,7 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         const targetRequest = await HiringRequestModel.findOne({
             _id: targetRequestId,
             companyId: req.companyId,
-            status: { $in: ['Approved'] }
+            status: { $in: ['Approved', 'Active'] }
         });
 
         if (!targetRequest) {
