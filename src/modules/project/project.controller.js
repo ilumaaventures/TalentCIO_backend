@@ -15,7 +15,13 @@ const {
 
 const hasPermission = (req, permission) => (req.user.permissions || []).includes(permission);
 const hasAnyPermission = (req, permissions) => permissions.some(permission => hasPermission(req, permission));
-const isAdminUser = (req) => (req.user.roles || []).some(r => r.name === 'Admin');
+const isAdminUser = (req) =>
+    (req.user?.roles || []).some(r => {
+        const roleName = typeof r === 'string' ? r : r?.name;
+        return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
+    }) ||
+    req.user?.permissions?.includes('*') ||
+    req.user?.permissions?.includes('admin');
 
 // --- Employees (Helper for Dropdowns) ---
 const getEmployees = async (req, res) => {
@@ -164,25 +170,12 @@ const getProjects = async (req, res) => {
 
         // Check if user is Admin
         // Check if user is Admin or has global read permission
-        const canViewAll = isAdminUser(req) || hasPermission(req, 'project.read');
+        // Check if user is Admin or has global read permission
         const canViewAssigned = hasPermission(req, 'project.view_assigned');
         const canViewTeam = hasPermission(req, 'project.view_team');
+        const canViewAll = (isAdminUser(req) || hasPermission(req, 'project.read')) && !canViewAssigned;
 
-        if (req.query.assignedOnly === 'true') {
-            const orConditions = [];
-
-            // 1. Assigned Projects (Manager, Member, or Task Assigned)
-            const assignedModuleIds = await Task.distinct('module', { assignees: req.user._id, companyId: req.companyId });
-            const taskProjectIds = await Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId: req.companyId });
-
-            orConditions.push({ manager: req.user._id });
-            orConditions.push({ members: req.user._id });
-            orConditions.push({ _id: { $in: taskProjectIds } });
-
-            query.$or = orConditions;
-        } else if (canViewAll) {
-            // Fetch all projects
-        } else if (canViewAssigned || canViewTeam) {
+        if (req.query.assignedOnly === 'true' || canViewAssigned) {
             const orConditions = [];
 
             // 1. Assigned Projects (Manager, Member, or Task Assigned)
@@ -209,6 +202,22 @@ const getProjects = async (req, res) => {
             }
 
             query.$or = orConditions;
+        } else if (canViewAll) {
+            // Fetch all projects
+        } else if (canViewTeam) {
+            const orConditions = [];
+            const directReports = await User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('_id').lean();
+            const reportIds = directReports.map(u => u._id);
+
+            if (reportIds.length > 0) {
+                orConditions.push({ manager: { $in: reportIds } });
+                orConditions.push({ members: { $in: reportIds } });
+
+                const teamAssignedModuleIds = await Task.distinct('module', { assignees: { $in: reportIds }, companyId: req.companyId });
+                const teamTaskProjectIds = await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId: req.companyId });
+                orConditions.push({ _id: { $in: teamTaskProjectIds } });
+            }
+            query.$or = orConditions.length > 0 ? orConditions : [{ _id: null }];
         } else {
             // Neither Admin, nor Read All, nor View Assigned -> See Nothing
             // Setting a query that returns nothing
@@ -240,9 +249,9 @@ const getProjectHierarchy = async (req, res) => {
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
         // Security Check
-        const canViewAll = isAdminUser(req) || hasPermission(req, 'project.read');
         const canViewAssigned = hasPermission(req, 'project.view_assigned');
         const canViewTeam = hasPermission(req, 'project.view_team');
+        const canViewAll = (isAdminUser(req) || hasPermission(req, 'project.read')) && !canViewAssigned;
         const canLogTime = hasAnyPermission(req, ['timesheet.submit', 'timesheet.create']);
         
         // Strict Check: If not Admin/Read, MUST have view_assigned, view_team, OR be able to log time
@@ -260,7 +269,7 @@ const getProjectHierarchy = async (req, res) => {
         const isMember = project.members.some(m => m._id.toString() === req.user._id.toString());
 
         // Determine Access
-        let hasAccess = canViewAll || isManager || isMember || canLogTime;
+        let hasAccess = canViewAll || isManager || isMember;
 
         if (!hasAccess) {
             // Already fetched above
@@ -418,9 +427,9 @@ const getModules = async (req, res) => {
         const project = await Project.findOne({ _id: projectId, companyId: req.companyId });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        const canViewAll = isAdminUser(req) || hasPermission(req, 'project.read');
         const canViewAssigned = hasPermission(req, 'project.view_assigned');
         const canViewTeam = hasPermission(req, 'project.view_team');
+        const canViewAll = (isAdminUser(req) || hasPermission(req, 'project.read')) && !canViewAssigned;
         const canLogTime = hasAnyPermission(req, ['timesheet.submit', 'timesheet.create']);
         
         // Strict Check: If not Admin/Read, MUST have view_assigned, view_team, OR be able to log time
@@ -431,7 +440,7 @@ const getModules = async (req, res) => {
         const isManager = project.manager?.toString() === req.user._id.toString();
         const isMember = project.members?.some(m => m.toString() === req.user._id.toString());
 
-        let hasAccess = canViewAll || isManager || isMember || canLogTime;
+        let hasAccess = canViewAll || isManager || isMember;
 
         if (!hasAccess) {
             const modules = await Module.find({ project: projectId, companyId: req.companyId }).select('_id');
@@ -468,17 +477,20 @@ const getModules = async (req, res) => {
         const query = { project: projectId, companyId: req.companyId };
 
         // Target user for restriction check: queryUserId (from Timesheet.jsx) or current user (if not Admin)
-        // If queryUserId is provided (which it will be from Timesheet.jsx), apply strict restriction.
         const targetUserId = queryUserId;
+        const isViewingOther = targetUserId && String(targetUserId) !== String(req.user._id);
 
-        if (targetUserId) {
+        const isRestricted = canViewAssigned || !canViewAll;
+
+        if (isViewingOther || isRestricted) {
+            const effectiveTarget = targetUserId || req.user._id;
             // Check if user is Project Manager or Member
-            const isProjectAssigned = project.manager?.toString() === targetUserId.toString() ||
-                project.members?.some(m => m.toString() === targetUserId.toString());
+            const isProjectAssigned = project.manager?.toString() === effectiveTarget.toString() ||
+                project.members?.some(m => m.toString() === effectiveTarget.toString());
 
             if (!isProjectAssigned) {
                 // Filter modules where the user has assigned tasks
-                const tasksOfUser = await Task.find({ assignees: targetUserId, companyId: req.companyId }).select('module');
+                const tasksOfUser = await Task.find({ assignees: effectiveTarget, companyId: req.companyId }).select('module');
                 const userModuleIds = tasksOfUser.map(t => t.module);
                 query._id = { $in: userModuleIds };
             }
@@ -536,34 +548,28 @@ const getTasks = async (req, res) => {
 
         // Restriction target
         const targetUserId = queryUserId;
+        const canViewAssigned = hasPermission(req, 'project.view_assigned');
+        const canViewAll = (isAdminUser(req) || hasPermission(req, 'project.read')) && !canViewAssigned;
+        const isViewingOther = targetUserId && String(targetUserId) !== String(req.user._id);
 
-        if (targetUserId) {
-            // Check if user has Project-level access
-            let isProjectAssigned = false;
-            
+        if (isViewingOther || !canViewAll || canViewAssigned) {
+            const effectiveTarget = targetUserId || req.user._id;
+
+            // Check if user has Project-level access as manager
+            let isProjectManager = false;
+
             // If moduleId is provided, check its project
             if (req.query.moduleId) {
                 const module = await Module.findById(req.query.moduleId).populate('project');
                 if (module && module.project) {
                     const project = module.project;
-                    isProjectAssigned = project.manager?.toString() === targetUserId.toString() ||
-                        project.members?.some(m => m.toString() === targetUserId.toString());
+                    isProjectManager = project.manager?.toString() === effectiveTarget.toString();
                 }
             }
 
-            if (!isProjectAssigned) {
+            if (!isProjectManager) {
                 // Explicitly filter by assignee for timesheet/other views
-                query.assignees = targetUserId;
-            }
-        } else {
-            // If no userId passed, and user is NOT admin, restrict to self
-            const isAdmin = req.user.roles?.some(r => 
-                (typeof r === 'string' && r === 'Admin') || 
-                (typeof r === 'object' && r.name === 'Admin')
-            ) || req.user.permissions?.includes('*');
-
-            if (!isAdmin) {
-                query.assignees = req.user._id;
+                query.assignees = effectiveTarget;
             }
         }
 

@@ -8,12 +8,14 @@ const hasMatchingRole = (user, roleNames = []) => {
 };
 
 const isSuperAdmin = (user) => (
-    (user?.roles || []).some((role) =>
-        role?.isSystem ||
-        role?.name === 'System Admin' ||
-        role?.name === 'Super Admin' ||
-        (role?.permissions || []).some((permission) => permission && permission.key === '*')
-    ) || (user?.permissions || []).includes('*')
+    (user?.roles || []).some((role) => {
+        const roleName = typeof role === 'string' ? role : role?.name;
+        return role?.isSystem ||
+            roleName === 'Admin' ||
+            roleName === 'System Admin' ||
+            roleName === 'Super Admin' ||
+            (role?.permissions || []).some((permission) => permission && permission.key === '*');
+    }) || (user?.permissions || []).includes('*') || (user?.permissions || []).includes('admin')
 );
 
 const authorizeAny = (permissionKeys = []) => {

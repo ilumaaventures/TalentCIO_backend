@@ -122,9 +122,36 @@ exports.getDiscussions = async (req, res) => {
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
         if (req.query.status) {
             accessMatch.status = req.query.status;
+        } else if (req.query.excludeCompleted === 'true' || req.query.excludeCompleted === true) {
+            accessMatch.status = { $nin: ['mark as complete', 'completed', 'complete'] };
         }
         if (req.query.project) {
             accessMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+        }
+
+        const queryUserId = req.query.userId;
+        if (queryUserId) {
+            const isViewingOther = String(queryUserId) !== String(req.user._id);
+            if (isViewingOther) {
+                const targetUserId = mongoose.isValidObjectId(queryUserId)
+                    ? new mongoose.Types.ObjectId(String(queryUserId))
+                    : null;
+                if (targetUserId) {
+                    const targetConditions = [
+                        { createdBy: targetUserId },
+                        { supervisor: targetUserId },
+                        { visibleToUsers: targetUserId },
+                        { participants: targetUserId }
+                    ];
+                    if (accessMatch.$or) {
+                        accessMatch.$and = accessMatch.$and || [];
+                        accessMatch.$and.push({ $or: accessMatch.$or }, { $or: targetConditions });
+                        delete accessMatch.$or;
+                    } else {
+                        accessMatch.$or = targetConditions;
+                    }
+                }
+            }
         }
         if (req.query.priority) {
             if (req.query.priority === 'Medium') {

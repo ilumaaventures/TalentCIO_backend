@@ -56,6 +56,7 @@ router.get('/all',                controller.getAllClaims);
 // ─── Parameterized routes (/:id) ──────────────────────────────────────────────
 
 router.get('/:id',                controller.getClaimById);
+router.put('/:id',                handleReceiptUpload, controller.updateClaim);
 router.patch('/:id/cancel',       controller.cancelClaim);
 router.post('/:id/action',        controller.actionClaim);
 router.patch('/:id/mark-reimbursed', markAsPaid, controller.markReimbursed);

@@ -636,6 +636,11 @@ module.exports = [
         module: "PAYROLL",
         description: "Access and view own salary details and payslips in the dossier"
     },
+    {
+        key: "payroll.payslip.view",
+        module: "PAYROLL",
+        description: "Access and view own Payroll & Payslip on My Space and download payslips"
+    },
 
     // LEAVE
     {
