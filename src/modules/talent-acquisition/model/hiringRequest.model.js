@@ -224,7 +224,9 @@ const HiringRequestSchema = new mongoose.Schema({
         specificApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         actionBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         date: Date,
-        comments: String
+        actionDate: Date,
+        comments: String,
+        remarks: String
     }],
     currentApprovalLevel: { type: Number, default: 1 },
 

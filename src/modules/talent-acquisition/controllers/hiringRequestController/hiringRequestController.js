@@ -506,6 +506,18 @@ exports.getHiringRequestById = async (req, res) => {
         const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
         hrObj.isResourceGatewayEnabledForCompany = Boolean(company?.settings?.careers?.enableResourceGatewayPublishing);
 
+        if (Array.isArray(hrObj.approvalChain)) {
+            hrObj.approvalChain = hrObj.approvalChain.map(step => ({
+                ...step,
+                approvedBy: step.approvedBy || step.actionBy,
+                actionBy: step.actionBy || step.approvedBy,
+                date: step.date || step.actionDate,
+                actionDate: step.actionDate || step.date,
+                comments: step.comments || step.remarks,
+                remarks: step.remarks || step.comments
+            }));
+        }
+
         res.json(hrObj);
     } catch (error) {
         console.error('Error fetching hiring request:', error);
@@ -841,8 +853,11 @@ exports.approveHiringRequest = async (req, res) => {
 
         currentLevelObj.status = 'Approved';
         currentLevelObj.actionBy = userId;
+        currentLevelObj.approvedBy = userId;
         currentLevelObj.actionDate = new Date();
+        currentLevelObj.date = new Date();
         currentLevelObj.remarks = remarks || '';
+        currentLevelObj.comments = remarks || '';
 
         const hasNextLevel = hiringRequest.approvalChain.some(item => item.level === currentLevel + 1);
 
@@ -959,8 +974,11 @@ exports.rejectHiringRequest = async (req, res) => {
         if (targetLevelObj) {
             targetLevelObj.status = 'Rejected';
             targetLevelObj.actionBy = userId;
+            targetLevelObj.approvedBy = userId;
             targetLevelObj.actionDate = new Date();
+            targetLevelObj.date = new Date();
             targetLevelObj.remarks = remarks || '';
+            targetLevelObj.comments = remarks || '';
         }
 
         hiringRequest.status = 'Rejected';
