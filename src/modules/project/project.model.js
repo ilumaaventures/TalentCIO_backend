@@ -20,6 +20,14 @@ const projectSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'BusinessUnit'
     },
+    category: {
+        type: String,
+        trim: true
+    },
+    estimatedHours: {
+        type: Number,
+        default: 0
+    },
     manager: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

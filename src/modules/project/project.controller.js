@@ -274,7 +274,7 @@ const getProjectHierarchy = async (req, res) => {
             .populate('client', 'name')
             .populate('businessUnit', 'name')
             .populate('manager', 'firstName lastName')
-            .populate('members', '_id') // Need IDs to check membership
+            .populate('members', '_id firstName lastName email profilePhoto')
             .lean();
 
         if (!project) return res.status(404).json({ message: 'Project not found' });
@@ -377,8 +377,14 @@ const getProjectHierarchy = async (req, res) => {
         // I will hide ALL logs if not authorized.
 
         if (canViewWorkLogs || isManager || isMember) {
-            workLogs = await WorkLog.find({ task: { $in: taskIds }, companyId: req.companyId })
-                .populate('user', 'firstName lastName')
+            workLogs = await WorkLog.find({
+                companyId: req.companyId,
+                $or: [
+                    { project: id },
+                    ...(taskIds.length > 0 ? [{ task: { $in: taskIds } }] : [])
+                ]
+            })
+                .populate('user', 'firstName lastName email profilePhoto')
                 .sort({ date: -1 })
                 .lean();
         } else {
@@ -387,16 +393,23 @@ const getProjectHierarchy = async (req, res) => {
             workLogs = [];
         }
 
+        const directWorkLogs = workLogs.filter(log => !log.task);
+        const totalLoggedHours = workLogs.reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
+
         // Structure the response
         const hierarchy = {
             ...project,
+            hasModules: project.hasModules !== false,
+            directWorkLogs,
+            workLogs,
+            totalLoggedHours,
             modules: modules.map(module => ({
                 ...module,
                 tasks: tasks
                     .filter(task => task.module.toString() === module._id.toString())
                     .map(task => {
-                        const taskLogs = workLogs.filter(log => log.task.toString() === task._id.toString());
-                        const totalLogged = taskLogs.reduce((sum, log) => sum + log.hours, 0);
+                        const taskLogs = workLogs.filter(log => log.task && log.task.toString() === task._id.toString());
+                        const totalLogged = taskLogs.reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
                         return {
                             ...task,
                             workLogs: taskLogs,

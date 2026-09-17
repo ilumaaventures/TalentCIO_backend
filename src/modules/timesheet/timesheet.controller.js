@@ -49,7 +49,11 @@ const populateWorkLogHierarchy = (query) => (
             }
         })
         .populate('module', 'name')
-        .populate('project', 'name')
+        .populate({
+            path: 'project',
+            select: 'name client hasModules',
+            populate: { path: 'client', select: 'name' }
+        })
         .populate('discussion', 'discussion title')
 );
 

@@ -502,7 +502,11 @@ exports.getHiringRequestById = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this hiring request' });
         }
 
-        res.json(hiringRequest);
+        const hrObj = hiringRequest.toObject ? hiringRequest.toObject() : { ...hiringRequest };
+        const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
+        hrObj.isResourceGatewayEnabledForCompany = Boolean(company?.settings?.careers?.enableResourceGatewayPublishing);
+
+        res.json(hrObj);
     } catch (error) {
         console.error('Error fetching hiring request:', error);
         res.status(500).json({ message: 'Failed to fetch hiring request', error: error.message });
@@ -1100,6 +1104,14 @@ exports.toggleJobVisibility = async (req, res) => {
 
         if (req.body.isResourceGatewayPublic !== undefined) {
             const isRgPublic = parseBooleanQueryValue(req.body.isResourceGatewayPublic) ?? Boolean(req.body.isResourceGatewayPublic);
+            if (isRgPublic) {
+                const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
+                if (!company?.settings?.careers?.enableResourceGatewayPublishing) {
+                    return res.status(403).json({
+                        message: 'Resource Gateway publishing is not enabled for this company. Please contact Super Admin.'
+                    });
+                }
+            }
             hiringRequest.isResourceGatewayPublic = isRgPublic;
             if (isRgPublic) {
                 hiringRequest.wasEverPublished = true;
@@ -1125,10 +1137,19 @@ exports.toggleJobVisibility = async (req, res) => {
             HiringRequest.findOne({ _id: hiringRequest._id, companyId: req.companyId })
         );
 
+        const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
+        const isRgEnabled = Boolean(company?.settings?.careers?.enableResourceGatewayPublishing);
+        const resDoc = populatedRequest?.toObject ? populatedRequest.toObject() : (populatedRequest || hiringRequest);
+        resDoc.isResourceGatewayEnabledForCompany = isRgEnabled;
+
+        const actionMsg = req.body.isResourceGatewayPublic !== undefined
+            ? `Job ${hiringRequest.isResourceGatewayPublic ? 'published to' : 'removed from'} Resource Gateway successfully`
+            : `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`;
+
         res.json({
-            message: `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`,
-            hiringRequest: populatedRequest || hiringRequest,
-            job: populatedRequest || hiringRequest
+            message: actionMsg,
+            hiringRequest: resDoc,
+            job: resDoc
         });
     } catch (error) {
         console.error('Error toggling job visibility:', error);
