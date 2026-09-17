@@ -30,7 +30,9 @@ router.use(requireModule('crm'));
 // --- Leads ---
 router.get('/leads', authorize(['crm.leads.read', 'crm.admin']), leadController.getLeads);
 router.post('/leads/check-duplicates', authorize(['crm.leads.read', 'crm.leads.create', 'crm.leads.update', 'crm.admin']), leadController.checkDuplicates);
+router.post('/leads/check-duplicates-batch', authorize(['crm.leads.read', 'crm.leads.create', 'crm.data.import', 'crm.admin']), leadController.checkDuplicatesBatch);
 router.post('/leads/bulk-update', authorize(['crm.leads.update', 'crm.admin']), leadController.bulkUpdateLeads);
+router.post('/leads/move-to-bin', authorize(['crm.leads.delete', 'crm.leads.update', 'crm.leads.create', 'crm.admin']), leadController.moveToRecycleBin);
 router.get('/leads/:id', authorize(['crm.leads.read', 'crm.admin']), leadController.getLeadById);
 router.post('/leads', authorize(['crm.leads.create', 'crm.admin']), leadController.createLead);
 router.put('/leads/:id', authorize(['crm.leads.update', 'crm.admin']), leadController.updateLead);
@@ -139,7 +141,7 @@ router.get('/admin/custom-fields', authorize(['crm.admin']), adminController.get
 router.post('/admin/custom-fields', authorize(['crm.admin']), adminController.createCustomField);
 
 // --- Data Management: Import, Export, Merge ---
-router.post('/data/import', authorize(['crm.data.import', 'crm.admin']), dataController.importData);
+router.post('/data/import', authorize(['crm.data.import', 'crm.leads.create', 'crm.admin']), dataController.importData);
 router.get('/data/export/:entityType', authorize(['crm.data.export', 'crm.admin']), dataController.exportData);
 router.post('/data/merge', authorize(['crm.data.merge', 'crm.admin']), dataController.mergeDuplicates);
 

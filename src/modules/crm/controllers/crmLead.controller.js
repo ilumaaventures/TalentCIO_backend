@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const CrmLead = require('../models/crmLead.model');
 const CrmContact = require('../models/crmContact.model');
 const CrmAccount = require('../models/crmAccount.model');
@@ -249,6 +250,126 @@ const checkDuplicates = async (req, res, next) => {
   }
 };
 
+// Helper to normalize phone numbers (last 10 digits or digits only)
+const normalizePhone = (p) => {
+  if (!p) return '';
+  const digits = String(p).replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+};
+
+// @desc Check for duplicate leads in batch (by companyName, phone, email)
+// @route POST /api/crm/leads/check-duplicates-batch
+const checkDuplicatesBatch = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { items = [] } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.json({ success: true, results: [] });
+    }
+
+    const emails = items.map(i => (i.email || i.emailId || '').trim().toLowerCase()).filter(Boolean);
+    const phones = items.map(i => (i.phone || i.mobileNo || '').trim()).filter(Boolean);
+    const phoneDigs = phones.map(p => normalizePhone(p)).filter(Boolean);
+    const companyNames = items.map(i => (i.companyName || '').trim()).filter(Boolean);
+
+    const conditions = [];
+    if (emails.length > 0) conditions.push({ email: { $in: emails } });
+    if (phones.length > 0) {
+      const phoneRegexes = phoneDigs.map(d => new RegExp(`${d}$`));
+      conditions.push({ phone: { $in: [...phones, ...phoneRegexes] } });
+    }
+    if (companyNames.length > 0) {
+      const escapedRegexes = companyNames.map(name => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+      conditions.push({ companyName: { $in: escapedRegexes } });
+    }
+
+    let existingLeads = [];
+    if (conditions.length > 0) {
+      existingLeads = await CrmLead.find({
+        companyId,
+        $or: conditions,
+      }).select('_id companyName email phone').lean();
+    }
+
+    const existingEmails = new Set(existingLeads.map(l => (l.email || '').toLowerCase()).filter(Boolean));
+    const existingPhones = new Set(existingLeads.map(l => (l.phone || '').trim()).filter(Boolean));
+    const existingPhoneDigs = new Set(existingLeads.map(l => normalizePhone(l.phone)).filter(Boolean));
+    const existingCompanyNames = new Set(existingLeads.map(l => (l.companyName || '').trim().toLowerCase()).filter(Boolean));
+
+    const batchEmails = new Set();
+    const batchPhones = new Set();
+    const batchPhoneDigs = new Set();
+    const batchCompanies = new Set();
+
+    const results = items.map((item, idx) => {
+      const email = (item.email || item.emailId || '').trim().toLowerCase();
+      const phone = (item.phone || item.mobileNo || '').trim();
+      const phoneDig = normalizePhone(phone);
+      const company = (item.companyName || '').trim().toLowerCase();
+
+      let isDuplicate = false;
+      let matchedLead = null;
+      const reasons = [];
+
+      if (email) {
+        if (existingEmails.has(email)) {
+          isDuplicate = true;
+          matchedLead = existingLeads.find(l => (l.email || '').toLowerCase() === email);
+          reasons.push('Email exists in CRM');
+        } else if (batchEmails.has(email)) {
+          isDuplicate = true;
+          reasons.push('Duplicate Email in sheet');
+        }
+      }
+
+      if (phone) {
+        if (existingPhones.has(phone) || (phoneDig && existingPhoneDigs.has(phoneDig))) {
+          isDuplicate = true;
+          if (!matchedLead) {
+            matchedLead = existingLeads.find(l => (l.phone || '').trim() === phone || (phoneDig && normalizePhone(l.phone) === phoneDig));
+          }
+          reasons.push('Mobile exists in CRM');
+        } else if (batchPhones.has(phone) || (phoneDig && batchPhoneDigs.has(phoneDig))) {
+          isDuplicate = true;
+          reasons.push('Duplicate Mobile in sheet');
+        }
+      }
+
+      if (company) {
+        if (existingCompanyNames.has(company)) {
+          isDuplicate = true;
+          if (!matchedLead) {
+            matchedLead = existingLeads.find(l => (l.companyName || '').trim().toLowerCase() === company);
+          }
+          reasons.push('Company exists in CRM');
+        } else if (batchCompanies.has(company)) {
+          isDuplicate = true;
+          reasons.push('Duplicate Company in sheet');
+        }
+      }
+
+      if (email) batchEmails.add(email);
+      if (phone) batchPhones.add(phone);
+      if (phoneDig) batchPhoneDigs.add(phoneDig);
+      if (company) batchCompanies.add(company);
+
+      const existsInCrm = Boolean(matchedLead);
+
+      return {
+        id: item.id || `item_${idx}`,
+        isDuplicate,
+        existsInCrm,
+        leadId: matchedLead ? matchedLead._id : null,
+        reason: reasons.join(', '),
+      };
+    });
+
+    res.json({ success: true, results });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc Create new lead
 // @route POST /api/crm/leads
 const createLead = async (req, res, next) => {
@@ -360,15 +481,17 @@ const updateLead = async (req, res, next) => {
   }
 };
 
-// @desc Delete lead
+// @desc Delete lead (moves to recycle bin)
 // @route DELETE /api/crm/leads/:id
 const deleteLead = async (req, res, next) => {
   try {
     const companyId = getTenantId(req);
-    const lead = await CrmLead.findOneAndDelete({ _id: req.params.id, companyId });
+    const lead = await CrmLead.findOne({ _id: req.params.id, companyId });
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
+
+    await lead.softDelete(req.user?._id);
 
     await logCrmAudit({
       companyId,
@@ -380,7 +503,7 @@ const deleteLead = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: 'Lead deleted successfully' });
+    res.json({ success: true, message: 'Lead moved to recycle bin successfully' });
   } catch (error) {
     next(error);
   }
@@ -397,8 +520,17 @@ const bulkUpdateLeads = async (req, res, next) => {
     }
 
     if (action === 'delete') {
-      await CrmLead.deleteMany({ _id: { $in: ids }, companyId });
-      return res.json({ success: true, message: `${ids.length} leads deleted successfully` });
+      await CrmLead.updateMany(
+        { _id: { $in: ids }, companyId },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id || null,
+          },
+        }
+      );
+      return res.json({ success: true, message: `${ids.length} leads moved to recycle bin successfully` });
     }
 
     const updateFields = {};
@@ -422,6 +554,105 @@ const bulkUpdateLeads = async (req, res, next) => {
     }
 
     res.json({ success: true, message: `Successfully updated ${ids.length} leads` });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Move leads / imported companies to recycle bin
+// @route POST /api/crm/leads/move-to-bin
+const moveToRecycleBin = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { items } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'No items provided' });
+    }
+
+    const existingIds = [];
+    const newItemsToCreateAsDeleted = [];
+
+    for (const item of items) {
+      const dbId = item.leadId || (item._id && mongoose.Types.ObjectId.isValid(item._id) ? item._id : null);
+      if (dbId) {
+        existingIds.push(dbId);
+      } else {
+        newItemsToCreateAsDeleted.push(item);
+      }
+    }
+
+    // 1. Soft delete existing DB leads
+    if (existingIds.length > 0) {
+      await CrmLead.updateMany(
+        { _id: { $in: existingIds }, companyId },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: req.user?._id || null,
+          },
+        }
+      );
+    }
+
+    // 2. For items not yet linked by ID, check if duplicate exists in DB or create soft-deleted
+    for (const item of newItemsToCreateAsDeleted) {
+      const compName = (item.companyName || '').trim();
+      const mobile = (item.mobileNo || item.phone || '').trim();
+      const email = (item.emailId || item.email || '').trim().toLowerCase();
+
+      const orConds = [];
+      if (email) orConds.push({ email });
+      if (mobile) orConds.push({ phone: mobile });
+      if (compName) orConds.push({ companyName: compName });
+
+      let matchedLead = null;
+      if (orConds.length > 0) {
+        matchedLead = await CrmLead.findOne({ companyId, $or: orConds });
+      }
+
+      if (matchedLead) {
+        await matchedLead.softDelete(req.user?._id);
+      } else {
+        const contactName = (item.contactPerson || '').trim();
+        const nameParts = contactName ? contactName.split(/\s+/) : [];
+        const firstName = nameParts[0] || compName || 'Lead';
+        const lastName = nameParts.slice(1).join(' ') || '';
+
+        await CrmLead.create({
+          companyId,
+          firstName,
+          lastName,
+          companyName: compName,
+          phone: mobile,
+          email,
+          jobTitle: item.designation || '',
+          address: {
+            street: item.address || '',
+            country: 'India',
+          },
+          notes: item.remarks || '',
+          source: 'Excel Import',
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: req.user?._id || null,
+        });
+      }
+    }
+
+    await logCrmAudit({
+      companyId,
+      userId: req.user?._id,
+      action: 'MOVE_LEAD_TO_BIN',
+      entityType: 'Lead',
+      entityName: `${items.length} records`,
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      success: true,
+      message: `${items.length} ${items.length === 1 ? 'company' : 'companies'} moved to recycle bin successfully`,
+    });
   } catch (error) {
     next(error);
   }
@@ -564,9 +795,11 @@ module.exports = {
   getLeads,
   getLeadById,
   checkDuplicates,
+  checkDuplicatesBatch,
   createLead,
   updateLead,
   deleteLead,
   bulkUpdateLeads,
+  moveToRecycleBin,
   convertLead,
 };
