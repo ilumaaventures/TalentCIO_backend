@@ -44,6 +44,7 @@ const getNextHiringRequestId = async (companyId, session = null) => {
 
 const populateFullHiringRequestDoc = (query) => {
     return query
+        .populate('companyId', 'name subdomain email settings.logo')
         .populate('requestor', 'firstName lastName email employeeCode profilePicture')
         .populate('createdBy', 'firstName lastName email employeeCode profilePicture')
         .populate('ownership.hiringManager', 'firstName lastName email employeeCode profilePicture')
@@ -56,7 +57,9 @@ const populateFullHiringRequestDoc = (query) => {
         .populate('assignedUsers', 'firstName lastName email employeeCode profilePicture')
         .populate('analyticsViewers', 'firstName lastName email employeeCode profilePicture')
         .populate('previousRequestId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt closedAt updatedAt')
-        .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt closedAt updatedAt');
+        .populate('reopenedToId', 'requestId roleDetails status isPublic isJobVisible isResourceGatewayPublic wasEverPublished createdAt closedAt updatedAt')
+        .populate('sharedTenants.companyId', 'name subdomain email settings.logo')
+        .populate('sharedTenants.sharedBy', 'firstName lastName email');
 };
 
 exports.createHiringRequest = async (req, res) => {
@@ -327,9 +330,19 @@ exports.getHiringRequests = async (req, res) => {
         res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=30');
         const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
 
-        const { search, status, client, page, limit } = req.query;
+        const { search, status, client, page, limit, type } = req.query;
 
-        const filterQuery = { ...accessibleQuery };
+        let filterQuery = { ...accessibleQuery };
+
+        if (type === 'shared') {
+            filterQuery['sharedTenants.companyId'] = req.companyId;
+            delete filterQuery.companyId;
+            delete filterQuery.$or;
+        } else if (type === 'internal') {
+            filterQuery.companyId = req.companyId;
+            delete filterQuery['sharedTenants.companyId'];
+            delete filterQuery.$or;
+        }
 
         if (status && status !== 'All') {
             if (['Pending', 'Pending_Approval', 'Pending Approval'].includes(status)) {
@@ -346,13 +359,23 @@ exports.getHiringRequests = async (req, res) => {
 
         if (search && search.trim()) {
             const searchRegex = new RegExp(search.trim(), 'i');
-            filterQuery.$or = [
+            const searchOr = [
                 { requestId: searchRegex },
                 { client: searchRegex },
                 { 'roleDetails.title': searchRegex },
                 { 'roleDetails.jobTitle': searchRegex },
                 { 'roleDetails.department': searchRegex }
             ];
+
+            if (filterQuery.$or) {
+                filterQuery.$and = (filterQuery.$and || []).concat([
+                    { $or: filterQuery.$or },
+                    { $or: searchOr }
+                ]);
+                delete filterQuery.$or;
+            } else {
+                filterQuery.$or = searchOr;
+            }
         }
 
         const totalRequests = await HiringRequest.countDocuments(filterQuery);
@@ -375,7 +398,6 @@ exports.getHiringRequests = async (req, res) => {
             const candidateCounts = await Candidate.aggregate([
                 {
                     $match: {
-                        companyId: req.companyId,
                         isDeleted: { $ne: true },
                         hiringRequestId: { $in: reqIds }
                     }
@@ -450,6 +472,27 @@ exports.getHiringRequests = async (req, res) => {
                 r.totalSourcedCandidates = stats.totalSourced || 0;
                 r.totalInterestedCandidates = stats.totalInterested || 0;
                 r.totalInterviewScheduledCandidates = stats.totalInterviewScheduled || 0;
+
+                const ownerCompanyId = r.companyId?._id ? String(r.companyId._id) : String(r.companyId || '');
+                const isOwner = ownerCompanyId === String(req.companyId);
+                r.isOwner = isOwner;
+
+                if (!isOwner) {
+                    const shareEntry = Array.isArray(r.sharedTenants) && r.sharedTenants.find(
+                        st => String(st.companyId?._id || st.companyId) === String(req.companyId)
+                    );
+                    r.isShared = true;
+                    r.sharedWithCurrentTenant = true;
+                    r.shareType = shareEntry?.shareType || 'all';
+                    r.accessLevel = shareEntry?.accessLevel || 'full_access';
+                    r.isViewOnly = r.accessLevel === 'view_only';
+                    r.sharedAt = shareEntry?.sharedAt || r.updatedAt || r.createdAt;
+                    r.originCompanyName = r.companyId?.name || '';
+                    r.originCompanySubdomain = r.companyId?.subdomain || '';
+                } else {
+                    r.isShared = false;
+                    r.sharedWithCount = Array.isArray(r.sharedTenants) ? r.sharedTenants.length : 0;
+                }
             });
         }
 
@@ -489,7 +532,10 @@ exports.getHiringRequestById = async (req, res) => {
         const hiringRequest = await populateFullHiringRequestDoc(
             HiringRequest.findOne({
                 _id: req.params.id,
-                companyId: req.companyId
+                $or: [
+                    { companyId: req.companyId },
+                    { 'sharedTenants.companyId': req.companyId }
+                ]
             })
         );
 
@@ -505,6 +551,29 @@ exports.getHiringRequestById = async (req, res) => {
         const hrObj = hiringRequest.toObject ? hiringRequest.toObject() : { ...hiringRequest };
         const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
         hrObj.isResourceGatewayEnabledForCompany = Boolean(company?.settings?.careers?.enableResourceGatewayPublishing);
+        hrObj.isCrossTenantSharingEnabled = Boolean(company?.settings?.careers?.enableCrossTenantSharing);
+        hrObj.isClientPortalAccessEnabled = Boolean(company?.settings?.careers?.enableClientPortalAccess);
+
+        const ownerCompanyId = hrObj.companyId?._id ? String(hrObj.companyId._id) : String(hrObj.companyId || '');
+        const isOwner = ownerCompanyId === String(req.companyId);
+        hrObj.isOwner = isOwner;
+
+        if (!isOwner) {
+            const shareEntry = Array.isArray(hrObj.sharedTenants) && hrObj.sharedTenants.find(
+                st => String(st.companyId?._id || st.companyId) === String(req.companyId)
+            );
+            hrObj.isShared = true;
+            hrObj.sharedWithCurrentTenant = true;
+            hrObj.shareType = shareEntry?.shareType || 'all';
+            hrObj.accessLevel = shareEntry?.accessLevel || 'full_access';
+            hrObj.isViewOnly = hrObj.accessLevel === 'view_only';
+            hrObj.sharedAt = shareEntry?.sharedAt || hrObj.updatedAt || hrObj.createdAt;
+            hrObj.originCompanyName = hrObj.companyId?.name || '';
+            hrObj.originCompanySubdomain = hrObj.companyId?.subdomain || '';
+        } else {
+            hrObj.isShared = false;
+            hrObj.sharedWithCount = Array.isArray(hrObj.sharedTenants) ? hrObj.sharedTenants.length : 0;
+        }
 
         if (Array.isArray(hrObj.approvalChain)) {
             hrObj.approvalChain = hrObj.approvalChain.map(step => ({
@@ -589,6 +658,14 @@ exports.updateHiringRequest = async (req, res) => {
         }
 
         if (req.body.clientVisibility) {
+            if (req.body.clientVisibility.enabled) {
+                const company = req.company || await Company.findById(req.companyId).select('settings.careers').lean();
+                if (!company?.settings?.careers?.enableClientPortalAccess) {
+                    return res.status(403).json({
+                        message: 'Client portal access is disabled for your workspace. Please contact Super Admin to enable this feature.'
+                    });
+                }
+            }
             hiringRequest.clientVisibility = {
                 ...(hiringRequest.clientVisibility?.toObject?.() || hiringRequest.clientVisibility || {}),
                 ...req.body.clientVisibility
@@ -1189,5 +1266,295 @@ exports.uploadJDFile = async (req, res) => {
     } catch (error) {
         console.error('Error uploading JD file:', error);
         res.status(500).json({ message: 'Failed to upload JD file', error: error.message });
+    }
+};
+
+// ── Cross-Tenant Sharing Helper & Handlers ──────────────────────────────────
+const resolveTargetTenant = async (inputUrl) => {
+    if (!inputUrl || typeof inputUrl !== 'string' || !inputUrl.trim()) {
+        throw new Error('Please provide a valid workspace URL or subdomain (e.g. rg.talentcio.in or rg)');
+    }
+
+    let cleaned = inputUrl.trim().toLowerCase();
+    cleaned = cleaned.replace(/^https?:\/\//, ''); // strip protocol
+    cleaned = cleaned.split('/')[0];               // strip path
+    cleaned = cleaned.split(':')[0];               // strip port
+
+    let targetSubdomain = '';
+    const parts = cleaned.split('.');
+
+    if (parts.length === 1) {
+        // e.g. "rg"
+        targetSubdomain = parts[0];
+    } else if (cleaned.endsWith('localhost')) {
+        // e.g. "rg.localhost"
+        targetSubdomain = parts[0] !== 'localhost' ? parts[0] : '';
+    } else if (cleaned.endsWith('vercel.app')) {
+        // e.g. "telentcio.vercel.app"
+        targetSubdomain = cleaned.replace(/\.vercel\.app$/, '');
+    } else {
+        // e.g. "rg.talentcio.in" or "rg.talentcio.com"
+        targetSubdomain = parts[0];
+    }
+
+    if (!targetSubdomain) {
+        throw new Error(`Unable to extract workspace subdomain from '${inputUrl}'`);
+    }
+
+    // Lookup target company in DB
+    const targetCompany = await Company.findOne({
+        $or: [
+            { subdomain: targetSubdomain },
+            { subdomain: cleaned },
+            { allowedDomains: cleaned }
+        ]
+    }).select('_id name subdomain email status settings.logo').lean();
+
+    if (!targetCompany) {
+        // Fallback: search by company name
+        const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const nameMatch = await Company.findOne({
+            name: new RegExp(`^${escapeRegex(targetSubdomain)}$`, 'i')
+        }).select('_id name subdomain email status settings.logo').lean();
+
+        if (nameMatch) {
+            return {
+                company: nameMatch,
+                subdomain: nameMatch.subdomain,
+                tenantUrl: cleaned
+            };
+        }
+
+        throw new Error(`No workspace found for '${inputUrl}'. Please verify the tenant URL.`);
+    }
+
+    return {
+        company: targetCompany,
+        subdomain: targetCompany.subdomain,
+        tenantUrl: cleaned
+    };
+};
+
+/**
+ * Share Requisition with another workspace tenant
+ * POST /ta/hiring-request/:id/share
+ * Body: { targetUrl: 'rg.talentcio.in', shareType: 'phase1' | 'phase2' | 'public_applications' | 'all' }
+ */
+exports.shareHiringRequest = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { targetUrl, shareType = 'all', accessLevel = 'full_access' } = req.body;
+
+        const allowedShareTypes = ['phase1', 'phase2', 'public_applications', 'all'];
+        if (!allowedShareTypes.includes(shareType)) {
+            return res.status(400).json({
+                message: `Invalid share option. Allowed options are: ${allowedShareTypes.join(', ')}`
+            });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({
+            _id: id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({
+                message: 'Hiring request not found or you are not the owning workspace of this requisition'
+            });
+        }
+
+        const sourceCompany = req.company || await Company.findById(req.companyId).select('settings.careers name').lean();
+        if (!sourceCompany?.settings?.careers?.enableCrossTenantSharing) {
+            return res.status(403).json({
+                message: 'Cross-tenant sharing is disabled for your workspace. Please contact Super Admin to enable this feature.'
+            });
+        }
+
+        const { company: targetCompany, subdomain: targetSubdomain, tenantUrl } = await resolveTargetTenant(targetUrl);
+
+        if (String(targetCompany._id) === String(req.companyId)) {
+            return res.status(400).json({
+                message: 'Cannot share requisition with your own workspace'
+            });
+        }
+
+        if (targetCompany.status === 'Suspended') {
+            return res.status(400).json({
+                message: `Workspace '${targetCompany.name}' is currently suspended`
+            });
+        }
+
+        if (!Array.isArray(hiringRequest.sharedTenants)) {
+            hiringRequest.sharedTenants = [];
+        }
+
+        const existingIndex = hiringRequest.sharedTenants.findIndex(
+            st => String(st.companyId) === String(targetCompany._id)
+        );
+
+        const selectedAccessLevel = accessLevel === 'view_only' ? 'view_only' : 'full_access';
+
+        if (existingIndex >= 0) {
+            hiringRequest.sharedTenants[existingIndex].shareType = shareType;
+            hiringRequest.sharedTenants[existingIndex].accessLevel = selectedAccessLevel;
+            hiringRequest.sharedTenants[existingIndex].tenantUrl = tenantUrl;
+            hiringRequest.sharedTenants[existingIndex].tenantName = targetCompany.name;
+            hiringRequest.sharedTenants[existingIndex].tenantSubdomain = targetSubdomain;
+            hiringRequest.sharedTenants[existingIndex].sharedAt = new Date();
+            hiringRequest.sharedTenants[existingIndex].sharedBy = req.user._id;
+        } else {
+            hiringRequest.sharedTenants.push({
+                companyId: targetCompany._id,
+                tenantSubdomain: targetSubdomain,
+                tenantName: targetCompany.name,
+                tenantUrl,
+                shareType,
+                accessLevel: selectedAccessLevel,
+                sharedBy: req.user._id,
+                sharedAt: new Date()
+            });
+        }
+
+        await hiringRequest.save();
+
+        const updatedShares = await HiringRequest.findById(id)
+            .select('sharedTenants')
+            .populate('sharedTenants.companyId', 'name subdomain email settings.logo')
+            .populate('sharedTenants.sharedBy', 'firstName lastName email')
+            .lean();
+
+        res.json({
+            message: `Requisition successfully shared with ${targetCompany.name} (${targetSubdomain})`,
+            sharedTenants: updatedShares?.sharedTenants || hiringRequest.sharedTenants
+        });
+    } catch (error) {
+        console.error('Error sharing hiring request:', error);
+        res.status(400).json({ message: error.message || 'Failed to share hiring request' });
+    }
+};
+
+/**
+ * Get current shared workspaces for a requisition
+ * GET /ta/hiring-request/:id/shares
+ */
+exports.getHiringRequestShares = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const hiringRequest = await HiringRequest.findOne({
+            _id: id,
+            companyId: req.companyId
+        })
+            .select('sharedTenants requestId roleDetails')
+            .populate('sharedTenants.companyId', 'name subdomain email settings.logo')
+            .populate('sharedTenants.sharedBy', 'firstName lastName email')
+            .lean();
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        res.json({
+            sharedTenants: hiringRequest.sharedTenants || []
+        });
+    } catch (error) {
+        console.error('Error fetching requisition shares:', error);
+        res.status(500).json({ message: 'Failed to fetch shares', error: error.message });
+    }
+};
+
+/**
+ * Revoke workspace access to a requisition
+ * DELETE /ta/hiring-request/:id/share/:targetCompanyId
+ */
+exports.removeHiringRequestShare = async (req, res) => {
+    try {
+        const { id, targetCompanyId } = req.params;
+
+        const hiringRequest = await HiringRequest.findOne({
+            _id: id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found or not owned by your workspace' });
+        }
+
+        hiringRequest.sharedTenants = (hiringRequest.sharedTenants || []).filter(
+            st => String(st.companyId) !== String(targetCompanyId)
+        );
+
+        await hiringRequest.save();
+
+        res.json({
+            message: 'Sharing access revoked successfully',
+            sharedTenants: hiringRequest.sharedTenants
+        });
+    } catch (error) {
+        console.error('Error removing requisition share:', error);
+        res.status(500).json({ message: 'Failed to revoke share access', error: error.message });
+    }
+};
+
+/**
+ * Update share scope for a tenant
+ * PUT /ta/hiring-request/:id/share/:targetCompanyId
+ * Body: { shareType: 'phase1' | 'phase2' | 'public_applications' | 'all' }
+ */
+exports.updateHiringRequestShare = async (req, res) => {
+    try {
+        const { id, targetCompanyId } = req.params;
+        const { shareType, accessLevel } = req.body;
+
+        const allowedShareTypes = ['phase1', 'phase2', 'public_applications', 'all'];
+        if (shareType && !allowedShareTypes.includes(shareType)) {
+            return res.status(400).json({
+                message: `Invalid share option. Allowed options are: ${allowedShareTypes.join(', ')}`
+            });
+        }
+
+        const allowedAccessLevels = ['view_only', 'full_access'];
+        if (accessLevel && !allowedAccessLevels.includes(accessLevel)) {
+            return res.status(400).json({
+                message: `Invalid access level. Allowed options are: ${allowedAccessLevels.join(', ')}`
+            });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({
+            _id: id,
+            companyId: req.companyId
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Hiring request not found' });
+        }
+
+        const shareItem = (hiringRequest.sharedTenants || []).find(
+            st => String(st.companyId) === String(targetCompanyId)
+        );
+
+        if (!shareItem) {
+            return res.status(404).json({ message: 'This workspace does not currently have shared access' });
+        }
+
+        if (shareType) shareItem.shareType = shareType;
+        if (accessLevel) shareItem.accessLevel = accessLevel;
+        shareItem.sharedAt = new Date();
+        shareItem.sharedBy = req.user._id;
+
+        await hiringRequest.save();
+
+        const updatedShares = await HiringRequest.findById(id)
+            .select('sharedTenants')
+            .populate('sharedTenants.companyId', 'name subdomain email settings.logo')
+            .populate('sharedTenants.sharedBy', 'firstName lastName email')
+            .lean();
+
+        res.json({
+            message: 'Share settings updated successfully',
+            sharedTenants: updatedShares?.sharedTenants || hiringRequest.sharedTenants
+        });
+    } catch (error) {
+        console.error('Error updating requisition share:', error);
+        res.status(500).json({ message: 'Failed to update share scope', error: error.message });
     }
 };

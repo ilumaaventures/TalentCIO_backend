@@ -55,6 +55,25 @@ const candidateDropdownVisibilitySchema = new mongoose.Schema({
     rowDecision: { type: Boolean, default: true }
 }, { _id: false });
 
+const sharedTenantSchema = new mongoose.Schema({
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
+    tenantSubdomain: { type: String, required: true, trim: true, lowercase: true },
+    tenantName: { type: String, default: '', trim: true },
+    tenantUrl: { type: String, default: '', trim: true },
+    shareType: {
+        type: String,
+        enum: ['phase1', 'phase2', 'public_applications', 'all'],
+        default: 'all'
+    },
+    accessLevel: {
+        type: String,
+        enum: ['view_only', 'full_access'],
+        default: 'full_access'
+    },
+    sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    sharedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const HiringRequestSchema = new mongoose.Schema({
     requestId: { type: String, required: true },
 
@@ -258,6 +277,10 @@ const HiringRequestSchema = new mongoose.Schema({
         type: candidateDropdownVisibilitySchema,
         default: () => ({})
     },
+    sharedTenants: {
+        type: [sharedTenantSchema],
+        default: []
+    },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',
@@ -275,6 +298,7 @@ HiringRequestSchema.index({ isPublic: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ isResourceGatewayPublic: 1, status: 1, createdAt: -1 });
 HiringRequestSchema.index({ companyId: 1, clientId: 1, status: 1 });
 HiringRequestSchema.index({ companyId: 1, isDeleted: 1 });
+HiringRequestSchema.index({ 'sharedTenants.companyId': 1 });
 
 HiringRequestSchema.plugin(softDeletePlugin);
 

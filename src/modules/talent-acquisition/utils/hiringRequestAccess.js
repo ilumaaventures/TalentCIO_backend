@@ -100,7 +100,12 @@ const hasAssignedRequisitionPermission = (user, action = 'view') => {
 };
 
 const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) => {
-    const query = { companyId };
+    const query = {
+        $or: [
+            { companyId },
+            { 'sharedTenants.companyId': companyId }
+        ]
+    };
     const action = normalizeRequisitionAction(options.action || 'view');
 
     if (isHiringRequestAdmin(user) || hasGlobalRequisitionPermission(user, action)) {
@@ -134,7 +139,13 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
         };
     }
 
-    const baseAccessQuery = { companyId, $or: [] };
+    const baseAccessQuery = {
+        $or: [
+            { 'sharedTenants.companyId': companyId },
+            { companyId }
+        ]
+    };
+    const userRoleOrs = [];
     if (action === 'view') {
         const mongoose = require('mongoose');
         const Candidate = mongoose.model('Candidate');
@@ -147,7 +158,7 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
             isDeleted: { $ne: true }
         }).distinct('hiringRequestId');
 
-        baseAccessQuery.$or.push(
+        userRoleOrs.push(
             { createdBy: user?._id },
             { 'ownership.hiringManager': user?._id },
             { assignedUsers: user?._id },
@@ -156,7 +167,7 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
             { _id: { $in: interviewerRequestIds } }
         );
     } else {
-        baseAccessQuery.$or.push(
+        userRoleOrs.push(
             { createdBy: user?._id },
             { 'ownership.hiringManager': user?._id },
             { assignedUsers: user?._id }
@@ -164,7 +175,7 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
     }
     const assignedClientNames = getAssignedClientNames(user);
     if (assignedClientNames.length > 0) {
-        baseAccessQuery.$or.push({ client: { $in: assignedClientNames } });
+        userRoleOrs.push({ client: { $in: assignedClientNames } });
     }
 
     const abacConstraint = await buildTABacHiringRequestConstraint({
@@ -173,13 +184,20 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
         action
     });
 
+    const combinedQuery = {
+        $and: [
+            baseAccessQuery,
+            { $or: userRoleOrs }
+        ]
+    };
+
     if (!abacConstraint) {
-        return baseAccessQuery;
+        return combinedQuery;
     }
 
     return {
         $and: [
-            baseAccessQuery,
+            combinedQuery,
             abacConstraint
         ]
     };
@@ -191,6 +209,16 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user, options = 
     }
 
     const action = normalizeRequisitionAction(options.action || 'view');
+
+    // Check if requisition is shared with this tenant
+    const isSharedWithTenant = Array.isArray(hiringRequest.sharedTenants) && hiringRequest.sharedTenants.some(
+        st => String(st.companyId?._id || st.companyId) === String(companyId)
+    );
+
+    // If viewing and shared with tenant, allow access for users with TA access in that tenant
+    if (isSharedWithTenant && action === 'view') {
+        return true;
+    }
 
     if (isHiringRequestAdmin(user) || hasGlobalRequisitionPermission(user, action)) {
         return matchesTABacHiringRequest({

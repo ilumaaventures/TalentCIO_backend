@@ -512,8 +512,8 @@ const getCandidateHiringRequestForAccess = async (candidate, companyId) => {
     if (!candidate) return null;
     const reqId = candidate.hiringRequestId?._id || candidate.hiringRequestId;
     if (!reqId) return null;
-    return HiringRequest.findOne({ _id: reqId, companyId })
-        .select('createdBy ownership assignedUsers analyticsViewers client clientConfidential hiringDetails')
+    return HiringRequest.findOne({ _id: reqId, $or: [{ companyId }, { 'sharedTenants.companyId': companyId }] })
+        .select('createdBy ownership assignedUsers analyticsViewers client clientConfidential hiringDetails sharedTenants companyId')
         .lean();
 };
 
