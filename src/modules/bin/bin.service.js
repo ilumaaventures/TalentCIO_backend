@@ -21,6 +21,7 @@ const OnboardingTemplateBin = require('../onboarding/model/onboardingTemplateBin
 const OnboardingPolicyBin = require('../onboarding/model/onboardingPolicyBin.model');
 const Department = require('../organization/models/department.model');
 const Designation = require('../organization/models/designation.model');
+const CrmLead = require('../crm/models/crmLead.model');
 
 const ENTITY_MAP = {
     project: Project,
@@ -44,7 +45,8 @@ const ENTITY_MAP = {
     querytype: QueryType,
     emailtemplate: EmailTemplate,
     onboardingtemplate: OnboardingTemplateBin,
-    onboardingpolicy: OnboardingPolicyBin
+    onboardingpolicy: OnboardingPolicyBin,
+    crmlead: CrmLead
 };
 
 const buildSoftDeleteUpdate = (userId, deletedAt = new Date()) => ({
@@ -59,7 +61,11 @@ const buildRestoreUpdate = () => ({
     deletedBy: null
 });
 
-const getEntityModel = (entity) => ENTITY_MAP[String(entity || '').trim().toLowerCase()] || null;
+const getEntityModel = (entity) => {
+    const key = String(entity || '').trim().toLowerCase();
+    if (key === 'lead') return CrmLead;
+    return ENTITY_MAP[key] || null;
+};
 
 const getDeletedEntityKeys = () => Object.keys(ENTITY_MAP);
 
@@ -199,6 +205,15 @@ const getEntityConflictQuery = (entity, item) => {
         };
     }
 
+    if (entityKey === 'crmlead' || entityKey === 'lead') {
+        const conds = [];
+        if (item.email) conds.push({ email: item.email.toLowerCase() });
+        if (item.phone) conds.push({ phone: item.phone });
+        if (item.companyName) conds.push({ companyName: item.companyName });
+        if (!conds.length) return null;
+        return { ...baseQuery, $or: conds };
+    }
+
     return null;
 };
 
@@ -207,6 +222,10 @@ const getEntityConflictLabel = (entity, item) => {
 
     if (['project', 'module', 'task', 'role', 'client', 'businessunit', 'holiday', 'approvalworkflow', 'interviewworkflow', 'querytype', 'emailtemplate'].includes(entityKey)) {
         return item.name || entityKey;
+    }
+
+    if (entityKey === 'crmlead' || entityKey === 'lead') {
+        return item.companyName || [item.firstName, item.lastName].filter(Boolean).join(' ').trim() || 'Lead';
     }
 
     if (entityKey === 'leaveconfig') {

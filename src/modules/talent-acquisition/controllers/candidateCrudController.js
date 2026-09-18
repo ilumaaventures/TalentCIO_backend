@@ -103,18 +103,38 @@ const createCandidate = async (req, res) => {
             return res.status(400).json({ message: 'Phase 2 Interview Status must be one of: Scheduled, Rejected, Shortlisted, Did not Turn up, Left in between, None' });
         }
 
-        // Verify hiring request exists
-        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
+        // Verify hiring request exists (either directly owned or shared with this tenant)
+        const hiringRequest = await HiringRequest.findOne({
+            _id: hiringRequestId,
+            $or: [
+                { companyId: req.companyId },
+                { 'sharedTenants.companyId': req.companyId }
+            ]
+        });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
+
+        const isOwner = String(hiringRequest.companyId) === String(req.companyId);
+        if (!isOwner) {
+            const shareEntry = (hiringRequest.sharedTenants || []).find(
+                st => String(st.companyId) === String(req.companyId)
+            );
+            if (shareEntry?.accessLevel === 'view_only') {
+                return res.status(403).json({
+                    message: 'This shared requisition is configured as View Only. Adding candidates is disabled.'
+                });
+            }
+        }
+
+        const targetCompanyId = hiringRequest.companyId;
 
         let candidate = null;
         if (req.body._id && mongoose.Types.ObjectId.isValid(req.body._id)) {
             candidate = await Candidate.findOne({
                 _id: req.body._id,
                 hiringRequestId,
-                companyId: req.companyId
+                companyId: targetCompanyId
             }).populate('uploadedBy', 'firstName lastName email');
         }
 
@@ -131,7 +151,7 @@ const createCandidate = async (req, res) => {
                 candidate = await Candidate.findOne({
                     hiringRequestId,
                     $or: orConditions,
-                    companyId: req.companyId
+                    companyId: targetCompanyId
                 }).populate('uploadedBy', 'firstName lastName email');
             }
         }
@@ -303,7 +323,7 @@ const createCandidate = async (req, res) => {
                 await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
             }
 
-            const updatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
+            const updatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: targetCompanyId })
                 .populate('uploadedBy', 'firstName lastName email')
                 .populate('hiringRequestId', 'requestId roleDetails')
                 .populate('interviewRounds.assignedTo', 'firstName lastName email')
@@ -323,7 +343,7 @@ const createCandidate = async (req, res) => {
             : toLegacySafeStatus(hasMeaningfulStatus(status) ? status : DEFAULT_LEGACY_CANDIDATE_STATUS);
 
         candidate = new Candidate({
-            companyId: req.companyId,
+            companyId: targetCompanyId,
             hiringRequestId,
             uploadedBy: req.user._id,
             resumeUrl,
@@ -392,7 +412,7 @@ const createCandidate = async (req, res) => {
             await sendAutoScheduleNotifications(candidate, shortlistResult.roundsToAdd, req);
         }
 
-        const populatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: req.companyId })
+        const populatedCandidate = await Candidate.findOne({ _id: candidate._id, companyId: targetCompanyId })
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('interviewRounds.assignedTo', 'firstName lastName email')
@@ -432,7 +452,13 @@ const getCandidatesByHiringRequest = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Hiring Request ID format' });
         }
 
-        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
+        const hiringRequest = await HiringRequest.findOne({
+            _id: hiringRequestId,
+            $or: [
+                { companyId: req.companyId },
+                { 'sharedTenants.companyId': req.companyId }
+            ]
+        });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
@@ -443,12 +469,29 @@ const getCandidatesByHiringRequest = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        const candidateQuery = await buildAccessibleCandidateQuery(
-            req.companyId,
-            req.user,
-            { hiringRequestId },
-            { capability: TA_CAPABILITIES.VIEW }
-        );
+        const isOwner = String(hiringRequest.companyId) === String(req.companyId);
+        let shareType = 'all';
+        if (!isOwner) {
+            const shareItem = (hiringRequest.sharedTenants || []).find(
+                st => String(st.companyId) === String(req.companyId)
+            );
+            shareType = shareItem?.shareType || 'all';
+        }
+
+        let candidateQuery;
+        if (!isOwner) {
+            candidateQuery = {
+                hiringRequestId,
+                isDeleted: { $ne: true }
+            };
+        } else {
+            candidateQuery = await buildAccessibleCandidateQuery(
+                req.companyId,
+                req.user,
+                { hiringRequestId },
+                { capability: TA_CAPABILITIES.VIEW }
+            );
+        }
 
         const effectiveStartDate = startDate || dateFrom;
         const effectiveEndDate = endDate || dateTo;
@@ -471,10 +514,37 @@ const getCandidatesByHiringRequest = async (req, res) => {
         }));
 
         const targetPhase = Number(req.query.activePhase) || 1;
-        if (targetPhase === 2) {
-            serializedCandidates = serializedCandidates.filter(isProfileSharedCandidate);
-        } else if (targetPhase === 3) {
-            serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Selected');
+
+        // Apply cross-tenant data scope restrictions if shared
+        if (!isOwner) {
+            if (shareType === 'phase1') {
+                if (targetPhase !== 1) {
+                    serializedCandidates = [];
+                } else {
+                    serializedCandidates = serializedCandidates.filter(c => !isProfileSharedCandidate(c));
+                }
+            } else if (shareType === 'phase2') {
+                if (targetPhase !== 2) {
+                    serializedCandidates = [];
+                } else {
+                    serializedCandidates = serializedCandidates.filter(isProfileSharedCandidate);
+                }
+            } else if (shareType === 'public_applications') {
+                serializedCandidates = serializedCandidates.filter(c => Boolean(c.publicApplicationId || c.isPublicApplication || c.source === 'Public Application'));
+            } else {
+                // shareType === 'all'
+                if (targetPhase === 2) {
+                    serializedCandidates = serializedCandidates.filter(isProfileSharedCandidate);
+                } else if (targetPhase === 3) {
+                    serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Selected');
+                }
+            }
+        } else {
+            if (targetPhase === 2) {
+                serializedCandidates = serializedCandidates.filter(isProfileSharedCandidate);
+            } else if (targetPhase === 3) {
+                serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Selected');
+            }
         }
 
         const filterStatus = String(req.query.filterStatus || 'All').trim();
@@ -676,7 +746,13 @@ const getShortlistedCandidates = async (req, res) => {
         const limit = parseInt(req.query.limit, 10) || 10;
         const skip = (page - 1) * limit;
 
-        const hiringRequest = await HiringRequest.findOne({ _id: hiringRequestId, companyId: req.companyId });
+        const hiringRequest = await HiringRequest.findOne({
+            _id: hiringRequestId,
+            $or: [
+                { companyId: req.companyId },
+                { 'sharedTenants.companyId': req.companyId }
+            ]
+        });
         if (!hiringRequest) {
             return res.status(404).json({ message: 'Hiring request not found' });
         }
@@ -687,13 +763,26 @@ const getShortlistedCandidates = async (req, res) => {
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
-        const query = await buildAccessibleCandidateQuery(req.companyId, req.user, {
-            hiringRequestId,
-            $or: [
-                { profileShared: true },
-                { profileShared: { $exists: false }, decision: 'Shortlisted' }
-            ]
-        }, { capability: TA_CAPABILITIES.VIEW });
+        const isOwner = String(hiringRequest.companyId) === String(req.companyId);
+        let query;
+        if (!isOwner) {
+            query = {
+                hiringRequestId,
+                isDeleted: { $ne: true },
+                $or: [
+                    { profileShared: true },
+                    { profileShared: { $exists: false }, decision: 'Shortlisted' }
+                ]
+            };
+        } else {
+            query = await buildAccessibleCandidateQuery(req.companyId, req.user, {
+                hiringRequestId,
+                $or: [
+                    { profileShared: true },
+                    { profileShared: { $exists: false }, decision: 'Shortlisted' }
+                ]
+            }, { capability: TA_CAPABILITIES.VIEW });
+        }
 
         const totalOptions = await Candidate.countDocuments(query);
         const candidates = await Candidate.find(query)
@@ -738,6 +827,28 @@ const getCandidateByIdPayload = async (req) => {
         .populate('interviewRounds.assignedTo', 'firstName lastName email')
         .populate('interviewRounds.evaluatedBy', 'firstName lastName')
         .lean();
+
+    if (!candidateData) {
+        const candidateAny = await Candidate.findOne({ _id: id })
+            .populate('uploadedBy', 'firstName lastName email')
+            .populate('hiringRequestId', 'requestId roleDetails requirements client clientConfidential sharedTenants companyId')
+            .populate('transferredFrom', 'requestId roleDetails client')
+            .populate('applicantId', APPLICANT_REVIEW_SELECT)
+            .populate('statusHistory.changedBy', 'firstName lastName')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .populate('interviewRounds.evaluatedBy', 'firstName lastName')
+            .lean();
+
+        if (candidateAny && candidateAny.hiringRequestId) {
+            const hr = candidateAny.hiringRequestId;
+            const isShared = Array.isArray(hr.sharedTenants) && hr.sharedTenants.some(
+                st => String(st.companyId?._id || st.companyId) === String(req.companyId)
+            );
+            if (isShared) {
+                candidateData = candidateAny;
+            }
+        }
+    }
 
     if (!candidateData) {
         return { status: 404, body: { message: 'Candidate not found' } };
@@ -866,30 +977,11 @@ const getCandidateById = async (req, res) => {
 
 const getCandidateDetailsById = async (req, res) => {
     try {
-        const { id } = req.params;
-        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
-        if (!candidate) {
-            return res.status(404).json({ message: 'Candidate not found' });
-        }
-
-        const { isCandidateRoundAssignee } = require('../utils/taAccess');
-        const isInterviewer = isCandidateRoundAssignee(candidate, req.user);
-
-        if (!canViewCandidateDetailsPage(req.user) && !isInterviewer) {
-            return res.status(403).json({
-                message: 'Forbidden: Candidate details page requires ta.candidate.manage.all or ta.candidate.manage.assigned'
-            });
-        }
-
-        const { hasAccess } = await ensureCandidateCapability(candidate, req.companyId, req.user, TA_CAPABILITIES.EDIT);
-        if (!hasAccess) {
-            return res.status(403).json({
-                message: 'Forbidden: You do not have permission to open this candidate details page'
-            });
-        }
-
         const response = await getCandidateByIdPayload(req);
-        res.status(response.status).json(response.body);
+        if (response.status !== 200) {
+            return res.status(response.status).json(response.body);
+        }
+        res.status(200).json(response.body);
     } catch (error) {
         console.error('Error fetching candidate details:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -901,7 +993,24 @@ const updateCandidate = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        let candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            const candidateAny = await Candidate.findOne({ _id: id }).populate('hiringRequestId');
+            if (candidateAny && candidateAny.hiringRequestId) {
+                const hr = candidateAny.hiringRequestId;
+                const shareEntry = Array.isArray(hr.sharedTenants) && hr.sharedTenants.find(
+                    st => String(st.companyId) === String(req.companyId)
+                );
+                if (shareEntry) {
+                    if (shareEntry.accessLevel === 'view_only') {
+                        return res.status(403).json({
+                            message: 'This shared requisition is configured as View Only. Editing candidates is disabled.'
+                        });
+                    }
+                    candidate = candidateAny;
+                }
+            }
+        }
         if (!candidate) {
             return res.status(404).json({ message: 'Candidate not found' });
         }
@@ -954,7 +1063,13 @@ const updateCandidate = async (req, res) => {
 
         // Handle status updates for dynamic vs legacy hiring requests
         if (hasMeaningfulStatus(status)) {
-            const hiringRequest = await HiringRequest.findOne({ _id: candidate.hiringRequestId, companyId: req.companyId });
+            const hiringRequest = await HiringRequest.findOne({
+                _id: candidate.hiringRequestId,
+                $or: [
+                    { companyId: req.companyId },
+                    { 'sharedTenants.companyId': req.companyId }
+                ]
+            });
             if (isDynamicHiringRequest(hiringRequest)) {
                 const dynamicStatusApplied = applyDynamicImportedStatus(candidate, hiringRequest, status);
                 if (!dynamicStatusApplied) {
@@ -1025,7 +1140,7 @@ const updateCandidate = async (req, res) => {
 
         await candidate.save();
 
-        const updatedCandidate = await Candidate.findOne({ _id: id, companyId: req.companyId })
+        const updatedCandidate = await Candidate.findOne({ _id: id })
             .populate('uploadedBy', 'firstName lastName email')
             .populate('hiringRequestId', 'requestId roleDetails')
             .populate('statusHistory.changedBy', 'firstName lastName');
@@ -1046,7 +1161,24 @@ const deleteCandidate = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        let candidate = await Candidate.findOne({ _id: id, companyId: req.companyId });
+        if (!candidate) {
+            const candidateAny = await Candidate.findOne({ _id: id }).populate('hiringRequestId');
+            if (candidateAny && candidateAny.hiringRequestId) {
+                const hr = candidateAny.hiringRequestId;
+                const shareEntry = Array.isArray(hr.sharedTenants) && hr.sharedTenants.find(
+                    st => String(st.companyId) === String(req.companyId)
+                );
+                if (shareEntry) {
+                    if (shareEntry.accessLevel === 'view_only') {
+                        return res.status(403).json({
+                            message: 'This shared requisition is configured as View Only. Deleting candidates is disabled.'
+                        });
+                    }
+                    candidate = candidateAny;
+                }
+            }
+        }
         if (!candidate) {
             return res.status(404).json({ message: 'Candidate not found' });
         }

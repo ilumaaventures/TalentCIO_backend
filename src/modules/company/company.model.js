@@ -61,7 +61,9 @@ const companySchema = new mongoose.Schema({
 
         // Module Specific Configurations
         careers: {
-            enableResourceGatewayPublishing: { type: Boolean, default: false }
+            enableResourceGatewayPublishing: { type: Boolean, default: false },
+            enableCrossTenantSharing: { type: Boolean, default: false },
+            enableClientPortalAccess: { type: Boolean, default: false }
         },
         email: {
             defaultAccountId: { type: String, default: 'platform' },

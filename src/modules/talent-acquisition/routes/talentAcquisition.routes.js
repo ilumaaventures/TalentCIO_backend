@@ -21,6 +21,10 @@ const taController = {
     closeHiringRequest: hiringRequestController.closeHiringRequest,
     toggleJobVisibility: hiringRequestController.toggleJobVisibility,
     uploadJDFile: hiringRequestController.uploadJDFile,
+    shareHiringRequest: hiringRequestController.shareHiringRequest,
+    getHiringRequestShares: hiringRequestController.getHiringRequestShares,
+    removeHiringRequestShare: hiringRequestController.removeHiringRequestShare,
+    updateHiringRequestShare: hiringRequestController.updateHiringRequestShare,
 
     getPreviousCandidates: candidateController.getPreviousCandidates,
     transferCandidate: candidateController.transferCandidate,
@@ -133,6 +137,10 @@ router.delete('/hiring-request/:id', protect, authorizeAny(['ta.requisition.dele
 router.patch('/hiring-request/:id/approve', protect, authorizeHiringRequestApproval, taController.approveHiringRequest);
 router.patch('/hiring-request/:id/reject', protect, authorizeHiringRequestApproval, taController.rejectHiringRequest);
 router.patch('/hiring-request/:id/close', protect, authorizeAny(['ta.manage', 'ta.hiring_request.manage']), taController.closeHiringRequest);
+router.post('/hiring-request/:id/share', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage']), taController.shareHiringRequest);
+router.get('/hiring-request/:id/shares', protect, taController.getHiringRequestShares);
+router.delete('/hiring-request/:id/share/:targetCompanyId', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage']), taController.removeHiringRequestShare);
+router.put('/hiring-request/:id/share/:targetCompanyId', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage']), taController.updateHiringRequestShare);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);
@@ -391,7 +399,10 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
     try {
         const hiringRequest = await HiringRequestModel.findOne({
             _id: req.params.id,
-            companyId: req.companyId
+            $or: [
+                { companyId: req.companyId },
+                { 'sharedTenants.companyId': req.companyId }
+            ]
         });
 
         if (!hiringRequest) {
@@ -403,9 +414,16 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
             return res.status(403).json({ message: 'Forbidden: You do not have permission to view this request' });
         }
 
+        const isOwner = String(hiringRequest.companyId) === String(req.companyId);
+        if (!isOwner) {
+            const shareItem = (hiringRequest.sharedTenants || []).find(st => String(st.companyId) === String(req.companyId));
+            if (!shareItem || (shareItem.shareType !== 'all' && shareItem.shareType !== 'public_applications')) {
+                return res.json([]);
+            }
+        }
+
         const apps = await PublicApplication.find({
-            hiringRequestId: req.params.id,
-            companyId: req.companyId
+            hiringRequestId: req.params.id
         })
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
             .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')

@@ -6,6 +6,12 @@ const { logCrmAudit } = require('../utils/crmAudit');
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
+const normalizePhone = (p) => {
+  if (!p) return '';
+  const digits = String(p).replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+};
+
 // @desc Import data into specified CRM entity with validation
 // @route POST /api/crm/data/import
 const importData = async (req, res, next) => {
@@ -18,18 +24,127 @@ const importData = async (req, res, next) => {
 
     let successCount = 0;
     let failedCount = 0;
+    let duplicateCount = 0;
     const errors = [];
+    const duplicates = [];
+
+    const seenEmails = new Set();
+    const seenPhones = new Set();
+    const seenPhoneDigs = new Set();
+    const seenCompanies = new Set();
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         if (entityType === 'leads') {
-          if (!row.firstName) throw new Error('First Name is required');
-          await CrmLead.create({
+          const rawEmail = (row.email || row.emailId || '').trim().toLowerCase();
+          const rawPhone = (row.phone || row.mobileNo || '').trim();
+          const rawPhoneDig = normalizePhone(rawPhone);
+          const rawCompany = (row.companyName || '').trim();
+
+          // 1. Check intra-batch duplicate
+          let isDuplicate = false;
+          let dupReason = '';
+
+          if (rawEmail && seenEmails.has(rawEmail)) {
+            isDuplicate = true;
+            dupReason = `Duplicate Email in upload: ${rawEmail}`;
+          } else if (rawPhone && (seenPhones.has(rawPhone) || (rawPhoneDig && seenPhoneDigs.has(rawPhoneDig)))) {
+            isDuplicate = true;
+            dupReason = `Duplicate Mobile in upload: ${rawPhone}`;
+          } else if (rawCompany && seenCompanies.has(rawCompany.toLowerCase())) {
+            isDuplicate = true;
+            dupReason = `Duplicate Company in upload: ${rawCompany}`;
+          }
+
+          // 2. Check existing lead in database
+          if (!isDuplicate) {
+            const orConditions = [];
+            if (rawEmail) orConditions.push({ email: rawEmail });
+            if (rawPhone) {
+              orConditions.push({ phone: rawPhone });
+              if (rawPhoneDig) {
+                orConditions.push({ phone: new RegExp(`${rawPhoneDig}$`) });
+              }
+            }
+            if (rawCompany && rawCompany.length > 1) {
+              orConditions.push({
+                companyName: new RegExp(`^${rawCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+              });
+            }
+
+            if (orConditions.length > 0) {
+              const existingLead = await CrmLead.findOne({
+                companyId,
+                $or: orConditions,
+              }).select('companyName email phone').lean();
+
+              if (existingLead) {
+                isDuplicate = true;
+                const leadPhoneDig = normalizePhone(existingLead.phone);
+                if (rawEmail && existingLead.email?.toLowerCase() === rawEmail) {
+                  dupReason = `Email '${rawEmail}' already exists in CRM`;
+                } else if (rawPhone && (existingLead.phone === rawPhone || (rawPhoneDig && leadPhoneDig === rawPhoneDig))) {
+                  dupReason = `Mobile '${rawPhone}' already exists in CRM`;
+                } else {
+                  dupReason = `Company '${rawCompany}' already exists in CRM`;
+                }
+              }
+            }
+          }
+
+          if (isDuplicate) {
+            duplicateCount++;
+            duplicates.push({ row: i + 1, companyName: rawCompany, reason: dupReason });
+            continue; // Skip uploading duplicate!
+          }
+
+          // Mark as seen in batch
+          if (rawEmail) seenEmails.add(rawEmail);
+          if (rawPhone) seenPhones.add(rawPhone);
+          if (rawPhoneDig) seenPhoneDigs.add(rawPhoneDig);
+          if (rawCompany) seenCompanies.add(rawCompany.toLowerCase());
+
+          const contactName = (row.contactPerson || row.contact_person || row.name || '').trim();
+          const nameParts = contactName ? contactName.split(/\s+/) : [];
+          const firstName = row.firstName || nameParts[0] || row.companyName || 'Lead';
+          const lastName = row.lastName || nameParts.slice(1).join(' ') || '';
+
+          let address = row.address;
+          if (typeof address === 'string') {
+            address = { street: address, city: '', state: '', country: 'India', postalCode: '' };
+          } else if (!address || typeof address !== 'object') {
+            address = { street: '', city: '', state: '', country: 'India', postalCode: '' };
+          }
+
+          const tags = Array.isArray(row.tags) ? [...row.tags] : [];
+          if (row.industry && !tags.includes(row.industry)) tags.push(row.industry);
+          if (row.rating && !tags.some(t => t.startsWith('Rating:'))) tags.push(`Rating: ${row.rating}`);
+
+          const leadPayload = {
             ...row,
+            firstName,
+            lastName,
+            companyName: row.companyName || '',
+            jobTitle: row.jobTitle || row.designation || '',
+            phone: row.phone || row.mobileNo || '',
+            email: row.email || row.emailId || '',
+            address,
+            tags,
+            source: row.source || 'Excel Import',
+            notes: row.notes || row.remarks || '',
             companyId,
             ownerId: req.user?._id,
-          });
+          };
+
+          if (row.date) {
+            const parsedDate = new Date(row.date);
+            if (!isNaN(parsedDate.getTime())) {
+              leadPayload.createdAt = parsedDate;
+            }
+          }
+
+          await CrmLead.create(leadPayload);
         } else if (entityType === 'contacts') {
           if (!row.firstName) throw new Error('First Name is required');
           await CrmContact.create({
@@ -64,13 +179,17 @@ const importData = async (req, res, next) => {
       userId: req.user?._id,
       action: 'DATA_IMPORT',
       entityType,
-      changes: { total: rows.length, successCount, failedCount },
+      changes: { total: rows.length, successCount, failedCount, duplicateCount },
     });
+
+    const msg = duplicateCount > 0
+      ? `Import complete: ${successCount} imported successfully, ${duplicateCount} duplicate(s) skipped.`
+      : `Import complete: ${successCount} imported successfully, ${failedCount} failed.`;
 
     res.json({
       success: true,
-      message: `Import complete. ${successCount} imported successfully, ${failedCount} failed.`,
-      data: { successCount, failedCount, errors },
+      message: msg,
+      data: { successCount, failedCount, duplicateCount, duplicates, errors },
     });
   } catch (error) {
     next(error);

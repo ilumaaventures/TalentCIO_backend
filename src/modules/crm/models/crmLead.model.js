@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const softDeletePlugin = require('../../../common/utils/softDeletePlugin');
 
 const leadSchema = new mongoose.Schema({
   companyId: {
@@ -80,5 +81,7 @@ leadSchema.index({ companyId: 1, ownerId: 1 });
 
 leadSchema.set('toJSON', { virtuals: true });
 leadSchema.set('toObject', { virtuals: true });
+
+leadSchema.plugin(softDeletePlugin);
 
 module.exports = mongoose.model('CrmLead', leadSchema);
