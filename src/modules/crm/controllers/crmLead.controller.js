@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const CrmLead = require('../models/crmLead.model');
+const CrmImportData = require('../models/crmImportData.model');
 const CrmContact = require('../models/crmContact.model');
 const CrmAccount = require('../models/crmAccount.model');
 const CrmDeal = require('../models/crmDeal.model');
@@ -493,6 +494,22 @@ const deleteLead = async (req, res, next) => {
 
     await lead.softDelete(req.user?._id);
 
+    const compName = (lead.companyName || '').trim();
+    const orConds = [{ leadId: lead._id }];
+    if (compName) {
+      orConds.push({ companyName: new RegExp(`^${compName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    }
+    if (lead.email) {
+      orConds.push({ emailId: lead.email.toLowerCase() });
+    }
+    if (lead.phone) {
+      orConds.push({ mobileNo: lead.phone });
+    }
+    await CrmImportData.updateMany(
+      { companyId, $or: orConds },
+      { $set: { isConvertedToLead: false } }
+    );
+
     await logCrmAudit({
       companyId,
       userId: req.user?._id,
@@ -520,6 +537,13 @@ const bulkUpdateLeads = async (req, res, next) => {
     }
 
     if (action === 'delete') {
+      const leadsToDelete = await CrmLead.find({ _id: { $in: ids }, companyId })
+        .select('_id companyName email phone')
+        .lean();
+      const compNames = leadsToDelete.map((l) => (l.companyName || '').trim()).filter(Boolean);
+      const emails = leadsToDelete.map((l) => (l.email || '').toLowerCase().trim()).filter(Boolean);
+      const phones = leadsToDelete.map((l) => (l.phone || '').trim()).filter(Boolean);
+
       await CrmLead.updateMany(
         { _id: { $in: ids }, companyId },
         {
@@ -530,6 +554,23 @@ const bulkUpdateLeads = async (req, res, next) => {
           },
         }
       );
+
+      const orConds = [{ leadId: { $in: ids } }];
+      if (compNames.length > 0) {
+        orConds.push({ companyName: { $in: compNames } });
+      }
+      if (emails.length > 0) {
+        orConds.push({ emailId: { $in: emails } });
+      }
+      if (phones.length > 0) {
+        orConds.push({ mobileNo: { $in: phones } });
+      }
+
+      await CrmImportData.updateMany(
+        { companyId, $or: orConds },
+        { $set: { isConvertedToLead: false } }
+      );
+
       return res.json({ success: true, message: `${ids.length} leads moved to recycle bin successfully` });
     }
 
@@ -569,82 +610,76 @@ const moveToRecycleBin = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'No items provided' });
     }
 
-    const existingIds = [];
-    const newItemsToCreateAsDeleted = [];
-
     for (const item of items) {
-      const dbId = item.leadId || (item._id && mongoose.Types.ObjectId.isValid(item._id) ? item._id : null);
-      if (dbId) {
-        existingIds.push(dbId);
-      } else {
-        newItemsToCreateAsDeleted.push(item);
-      }
-    }
-
-    // 1. Soft delete existing DB leads
-    if (existingIds.length > 0) {
-      await CrmLead.updateMany(
-        { _id: { $in: existingIds }, companyId },
-        {
-          $set: {
-            isDeleted: true,
-            deletedAt: new Date(),
-            deletedBy: req.user?._id || null,
-          },
-        }
-      );
-    }
-
-    // 2. For items not yet linked by ID, check if duplicate exists in DB or create soft-deleted
-    for (const item of newItemsToCreateAsDeleted) {
+      const rowId = item.id || item.rowId || (item._id ? String(item._id) : null);
       const compName = (item.companyName || '').trim();
+      const contactName = (item.contactPerson || '').trim();
       const mobile = (item.mobileNo || item.phone || '').trim();
       const email = (item.emailId || item.email || '').trim().toLowerCase();
 
-      const orConds = [];
-      if (email) orConds.push({ email });
-      if (mobile) orConds.push({ phone: mobile });
-      if (compName) orConds.push({ companyName: compName });
-
-      let matchedLead = null;
-      if (orConds.length > 0) {
-        matchedLead = await CrmLead.findOne({ companyId, $or: orConds });
+      // Look up existing CrmImportData for this company
+      let importDoc = null;
+      if (rowId) {
+        importDoc = await CrmImportData.findOne({ companyId, rowId });
+      }
+      if (!importDoc && (compName || email || mobile)) {
+        const orConds = [];
+        if (compName) orConds.push({ companyName: compName });
+        if (email) orConds.push({ emailId: email });
+        if (mobile) orConds.push({ mobileNo: mobile });
+        importDoc = await CrmImportData.findOne({ companyId, $or: orConds });
       }
 
-      if (matchedLead) {
-        await matchedLead.softDelete(req.user?._id);
-      } else {
-        const contactName = (item.contactPerson || '').trim();
-        const nameParts = contactName ? contactName.split(/\s+/) : [];
-        const firstName = nameParts[0] || compName || 'Lead';
-        const lastName = nameParts.slice(1).join(' ') || '';
+      const isConverted = Boolean(item.isConvertedToLead);
+      const linkedLeadId = item.leadId && mongoose.Types.ObjectId.isValid(item.leadId) ? item.leadId : null;
 
-        await CrmLead.create({
+      if (importDoc) {
+        importDoc.isDeleted = true;
+        importDoc.deletedAt = new Date();
+        importDoc.deletedBy = req.user?._id || null;
+        if (linkedLeadId) importDoc.leadId = linkedLeadId;
+        importDoc.isConvertedToLead = isConverted;
+        await importDoc.save();
+      } else {
+        await CrmImportData.create({
           companyId,
-          firstName,
-          lastName,
+          rowId: rowId || `row_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          sNo: item.sNo || '',
           companyName: compName,
-          phone: mobile,
-          email,
-          jobTitle: item.designation || '',
-          address: {
-            street: item.address || '',
-            country: 'India',
-          },
-          notes: item.remarks || '',
+          industry: item.industry || '',
+          address: item.address || '',
+          rating: item.rating || '',
+          contactPerson: contactName,
+          designation: item.designation || '',
+          mobileNo: mobile,
+          emailId: email,
+          remarks: item.remarks || '',
+          date: item.date || new Date().toISOString(),
+          isConvertedToLead: isConverted,
+          leadId: linkedLeadId,
+          isDuplicate: Boolean(item.isDuplicate),
+          duplicateReason: item.duplicateReason || '',
           source: 'Excel Import',
           isDeleted: true,
           deletedAt: new Date(),
           deletedBy: req.user?._id || null,
         });
       }
+
+      // ONLY soft-delete linked lead if this record was already converted to a CRM lead
+      if (isConverted && linkedLeadId) {
+        await CrmLead.updateOne(
+          { _id: linkedLeadId, companyId },
+          { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: req.user?._id || null } }
+        );
+      }
     }
 
     await logCrmAudit({
       companyId,
       userId: req.user?._id,
-      action: 'MOVE_LEAD_TO_BIN',
-      entityType: 'Lead',
+      action: 'MOVE_IMPORT_DATA_TO_BIN',
+      entityType: 'ImportData',
       entityName: `${items.length} records`,
       ipAddress: req.ip,
     });

@@ -22,6 +22,7 @@ const OnboardingPolicyBin = require('../onboarding/model/onboardingPolicyBin.mod
 const Department = require('../organization/models/department.model');
 const Designation = require('../organization/models/designation.model');
 const CrmLead = require('../crm/models/crmLead.model');
+const CrmImportData = require('../crm/models/crmImportData.model');
 
 const ENTITY_MAP = {
     project: Project,
@@ -46,7 +47,8 @@ const ENTITY_MAP = {
     emailtemplate: EmailTemplate,
     onboardingtemplate: OnboardingTemplateBin,
     onboardingpolicy: OnboardingPolicyBin,
-    crmlead: CrmLead
+    crmlead: CrmLead,
+    crmimportdata: CrmImportData
 };
 
 const buildSoftDeleteUpdate = (userId, deletedAt = new Date()) => ({
@@ -64,6 +66,7 @@ const buildRestoreUpdate = () => ({
 const getEntityModel = (entity) => {
     const key = String(entity || '').trim().toLowerCase();
     if (key === 'lead') return CrmLead;
+    if (key === 'crmimportdata' || key === 'importdata') return CrmImportData;
     return ENTITY_MAP[key] || null;
 };
 
@@ -214,6 +217,14 @@ const getEntityConflictQuery = (entity, item) => {
         return { ...baseQuery, $or: conds };
     }
 
+    if (entityKey === 'crmimportdata' || entityKey === 'importdata') {
+        const conds = [];
+        if (item.rowId) conds.push({ rowId: item.rowId });
+        if (item.companyName) conds.push({ companyName: item.companyName });
+        if (!conds.length) return null;
+        return { ...baseQuery, $or: conds };
+    }
+
     return null;
 };
 
@@ -226,6 +237,10 @@ const getEntityConflictLabel = (entity, item) => {
 
     if (entityKey === 'crmlead' || entityKey === 'lead') {
         return item.companyName || [item.firstName, item.lastName].filter(Boolean).join(' ').trim() || 'Lead';
+    }
+
+    if (entityKey === 'crmimportdata' || entityKey === 'importdata') {
+        return item.companyName || item.contactPerson || 'Import Data Record';
     }
 
     if (entityKey === 'leaveconfig') {

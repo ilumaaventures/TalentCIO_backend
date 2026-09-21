@@ -114,6 +114,29 @@ const restoreEntityTree = async (entity, item, req) => {
         }
         await item.deleteOne();
     }
+
+    if (entityKey === 'crmimportdata' || entityKey === 'importdata') {
+        const CrmLead = require('../crm/models/crmLead.model');
+        if (item.isConvertedToLead && item.leadId) {
+            await CrmLead.updateOne(
+                { _id: item.leadId, companyId: req.companyId },
+                { $set: { isDeleted: false, deletedAt: null, deletedBy: null } }
+            );
+        }
+    }
+
+    if (entityKey === 'crmlead' || entityKey === 'lead') {
+        const CrmImportData = require('../crm/models/crmImportData.model');
+        const compName = (item.companyName || '').trim();
+        const orConditions = [{ leadId: item._id }];
+        if (compName) {
+            orConditions.push({ companyName: new RegExp(`^${compName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+        }
+        await CrmImportData.updateMany(
+            { companyId: req.companyId, $or: orConditions },
+            { $set: { isConvertedToLead: true, leadId: item._id } }
+        );
+    }
 };
 
 const buildConflictResponse = (entity, binItem, activeItem) => {
