@@ -47,6 +47,10 @@ const publicApplicationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Candidate'
     },
+    transferredHiringRequestId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'HiringRequest'
+    },
     transferredAt: { type: Date },
     transferredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
