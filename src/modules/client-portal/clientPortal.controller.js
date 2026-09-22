@@ -8,6 +8,7 @@ const {
     sanitizeCandidateForClient,
     sanitizeRequisitionForClient
 } = require('../talent-acquisition/utils/taClientVisibility');
+const { parseScheduledDateWithTimezone } = require('../talent-acquisition/controllers/candidateInterviewController');
 
 const escapeRegex = (string = '') => String(string || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -642,7 +643,8 @@ exports.scheduleRound = async (req, res) => {
             return res.status(403).json({ message: 'You are not assigned to schedule this interview round' });
         }
 
-        round.scheduledDate = new Date(scheduledDate);
+        const parsedScheduled = parseScheduledDateWithTimezone(scheduledDate);
+        round.scheduledDate = parsedScheduled || new Date(scheduledDate);
         round.status = 'Scheduled';
         if (meetingLink !== undefined) round.meetingLink = String(meetingLink).trim();
         if (meetingProvider !== undefined) round.meetingProvider = meetingProvider;

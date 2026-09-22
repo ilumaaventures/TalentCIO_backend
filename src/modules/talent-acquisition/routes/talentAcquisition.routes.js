@@ -53,9 +53,72 @@ const PublicApplication = require('../model/publicApplication.model');
 const { attachLastApplicationData } = require('../utils/applicationHistoryUtils');
 const Candidate = require('../model/candidate.model');
 const { HiringRequest: HiringRequestModel } = require('../model/hiringRequest.model');
+const Company = require('../../company/company.model');
 const { canAccessHiringRequest } = require('../utils/hiringRequestAccess');
 const { hasAssignedTAAnalyticsAccess, hasGlobalTAAnalyticsAccess } = require('../utils/taAnalyticsAccess');
 const { authorizeHiringRequestApproval } = require('../../../common/middleware/authorizeHiringRequestApproval');
+
+const getCanViewUnlistedApplications = async (req) => {
+    let careers = req.company?.settings?.careers;
+    if (!careers && req.companyId) {
+        const comp = await Company.findById(req.companyId).select('settings.careers').lean();
+        careers = comp?.settings?.careers;
+    }
+    return Boolean(careers?.enableUnlistedApplications);
+};
+
+const attachTransferredHiringRequestData = async (apps) => {
+    if (!Array.isArray(apps) || apps.length === 0) return apps;
+
+    const appsNeedingTransferReq = [];
+    apps.forEach(a => {
+        if (a.reviewStatus === 'Transferred') {
+            if (a.transferredHiringRequestId && typeof a.transferredHiringRequestId === 'object' && (a.transferredHiringRequestId.roleDetails || a.transferredHiringRequestId.requestId)) {
+                a.transferredHiringRequest = a.transferredHiringRequestId;
+            } else if (a.transferredCandidateId?.hiringRequestId && typeof a.transferredCandidateId.hiringRequestId === 'object') {
+                a.transferredHiringRequest = a.transferredCandidateId.hiringRequestId;
+                a.transferredHiringRequestId = a.transferredCandidateId.hiringRequestId;
+            } else {
+                appsNeedingTransferReq.push(a);
+            }
+        }
+    });
+
+    if (appsNeedingTransferReq.length > 0) {
+        const appIds = appsNeedingTransferReq.map(a => a._id);
+        const candIds = appsNeedingTransferReq.map(a => a.transferredCandidateId).filter(Boolean);
+        const candidates = await Candidate.find({
+            $or: [
+                { publicApplicationId: { $in: appIds } },
+                ...(candIds.length > 0 ? [{ _id: { $in: candIds } }] : [])
+            ]
+        })
+            .select('publicApplicationId hiringRequestId')
+            .populate('hiringRequestId', 'requestId roleDetails client')
+            .lean();
+
+        const hrByAppId = {};
+        const hrByCandId = {};
+        candidates.forEach(c => {
+            if (c.hiringRequestId && typeof c.hiringRequestId === 'object') {
+                if (c.publicApplicationId) {
+                    hrByAppId[String(c.publicApplicationId)] = c.hiringRequestId;
+                }
+                hrByCandId[String(c._id)] = c.hiringRequestId;
+            }
+        });
+
+        appsNeedingTransferReq.forEach(a => {
+            const hr = hrByAppId[String(a._id)] || (a.transferredCandidateId ? hrByCandId[String(a.transferredCandidateId)] : null);
+            if (hr) {
+                a.transferredHiringRequest = hr;
+                a.transferredHiringRequestId = hr;
+            }
+        });
+    }
+
+    return apps;
+};
 
 const APPLICANT_REVIEW_SELECT = [
     'firstName',
@@ -184,12 +247,22 @@ router.post('/hiring-request/upload-jd', protect, upload.single('jdFile'), taCon
 
 router.get('/public-applications', protect, async (req, res) => {
     try {
-        const query = {
+        const canViewUnlisted = await getCanViewUnlistedApplications(req);
+
+        if (req.query.type === 'unlisted' || req.query.unlistedOnly === 'true') {
+            if (!canViewUnlisted) {
+                return res.json([]);
+            }
+        }
+
+        const query = canViewUnlisted ? {
             $or: [
                 { companyId: req.companyId },
                 { companyId: { $exists: false } },
                 { companyId: null }
             ]
+        } : {
+            companyId: req.companyId
         };
 
         if (req.query.type === 'unlisted' || req.query.unlistedOnly === 'true') {
@@ -212,6 +285,15 @@ router.get('/public-applications', protect, async (req, res) => {
         const apps = await PublicApplication.find(query)
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
             .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
+            .populate('transferredHiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
+            .populate({
+                path: 'transferredCandidateId',
+                select: 'hiringRequestId candidateName',
+                populate: {
+                    path: 'hiringRequestId',
+                    select: 'requestId roleDetails client'
+                }
+            })
             .sort({ createdAt: -1 })
             .lean();
 
@@ -251,6 +333,7 @@ router.get('/public-applications', protect, async (req, res) => {
             });
         }
 
+        await attachTransferredHiringRequestData(apps);
         const appsWithHistory = await attachLastApplicationData(apps);
         res.json(appsWithHistory);
     } catch (err) {
@@ -268,11 +351,22 @@ router.patch('/public-applications/:appId/review', protect, authorizeAny(['ta.ca
             return res.status(400).json({ message: 'Invalid review status' });
         }
 
-        const app = await PublicApplication.findOneAndUpdate(
-            {
-                _id: req.params.appId,
+        const canViewUnlisted = await getCanViewUnlistedApplications(req);
+        const appQuery = {
+            _id: req.params.appId,
+            ...(canViewUnlisted ? {
+                $or: [
+                    { companyId: req.companyId },
+                    { companyId: { $exists: false } },
+                    { companyId: null }
+                ]
+            } : {
                 companyId: req.companyId
-            },
+            })
+        };
+
+        const app = await PublicApplication.findOneAndUpdate(
+            appQuery,
             {
                 reviewStatus,
                 reviewNote: reviewNote || '',
@@ -280,8 +374,7 @@ router.patch('/public-applications/:appId/review', protect, authorizeAny(['ta.ca
                 reviewedAt: new Date()
             },
             { new: true }
-        ).populate('applicantId', APPLICANT_REVIEW_SELECT)
-         .populate('hiringRequestId', 'requestId roleDetails client');
+        );
 
         if (!app) {
             return res.status(404).json({ message: 'Application not found' });
@@ -296,10 +389,21 @@ router.patch('/public-applications/:appId/review', protect, authorizeAny(['ta.ca
 
 router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), async (req, res) => {
     try {
-        const app = await PublicApplication.findOne({
+        const canViewUnlisted = await getCanViewUnlistedApplications(req);
+        const appQuery = {
             _id: req.params.appId,
-            companyId: req.companyId
-        });
+            ...(canViewUnlisted ? {
+                $or: [
+                    { companyId: req.companyId },
+                    { companyId: { $exists: false } },
+                    { companyId: null }
+                ]
+            } : {
+                companyId: req.companyId
+            })
+        };
+
+        const app = await PublicApplication.findOne(appQuery);
 
         if (!app) {
             return res.status(404).json({ message: 'Application not found' });
@@ -309,16 +413,17 @@ router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.c
             return res.status(409).json({ message: 'This applicant has already been transferred.' });
         }
 
-        const targetRequestId = req.body.targetHiringRequestId || app.hiringRequestId;
+        const { targetHiringRequestId } = req.body;
+        const targetRequestId = targetHiringRequestId || app.hiringRequestId;
 
         if (!targetRequestId) {
-            return res.status(400).json({ message: 'Please select a target hiring request for transfer.' });
+            return res.status(400).json({ message: 'Target hiring request is required for transfer.' });
         }
 
         const targetRequest = await HiringRequestModel.findOne({
             _id: targetRequestId,
             companyId: req.companyId,
-            status: { $in: ['Approved', 'Active'] }
+            status: { $in: ['Approved', 'active'] }
         });
 
         if (!targetRequest) {
@@ -357,13 +462,14 @@ router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.c
             candidateName: app.candidateName,
             email: String(app.email || '').trim().toLowerCase(),
             mobile: String(app.mobile || '').trim(),
-            source: 'Public Job Board',
+            source: app.source || 'Public Job Board',
             profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
             currentCTC: app.currentCTC,
             expectedCTC: app.expectedCTC,
             noticePeriod: app.noticePeriod,
             remark: app.coverNote || '',
-            totalExperience: 0,
+            totalExperience: app.totalExperienceYears || 0,
+            currentCompany: app.currentCompany || '',
             status: 'Total Sourced',
             profileShared: false,
             decision: 'None',
@@ -377,8 +483,12 @@ router.post('/public-applications/:appId/transfer', protect, authorizeAny(['ta.c
 
         app.reviewStatus = 'Transferred';
         app.transferredCandidateId = candidate._id;
+        app.transferredHiringRequestId = targetRequestId;
         app.transferredAt = new Date();
         app.transferredBy = req.user._id;
+        if (!app.companyId) {
+            app.companyId = req.companyId;
+        }
         await app.save();
 
         res.json({
@@ -427,6 +537,15 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
         })
             .populate('applicantId', APPLICANT_REVIEW_SELECT)
             .populate('hiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
+            .populate('transferredHiringRequestId', 'requestId roleDetails client isPublic isResourceGatewayPublic')
+            .populate({
+                path: 'transferredCandidateId',
+                select: 'hiringRequestId candidateName',
+                populate: {
+                    path: 'hiringRequestId',
+                    select: 'requestId roleDetails client'
+                }
+            })
             .sort({ createdAt: -1 })
             .lean();
 
@@ -436,6 +555,7 @@ router.get('/hiring-request/:id/public-applications', protect, async (req, res) 
             }
         });
 
+        await attachTransferredHiringRequestData(apps);
         const appsWithHistory = await attachLastApplicationData(apps);
         res.json(appsWithHistory);
     } catch (err) {
@@ -470,7 +590,11 @@ router.patch('/hiring-request/:id/public-applications/:appId/review', protect, a
             {
                 _id: req.params.appId,
                 hiringRequestId: req.params.id,
-                companyId: req.companyId
+                $or: [
+                    { companyId: req.companyId },
+                    { companyId: { $exists: false } },
+                    { companyId: null }
+                ]
             },
             {
                 reviewStatus,
@@ -510,7 +634,11 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
         const app = await PublicApplication.findOne({
             _id: req.params.appId,
             hiringRequestId: req.params.id,
-            companyId: req.companyId
+            $or: [
+                { companyId: req.companyId },
+                { companyId: { $exists: false } },
+                { companyId: null }
+            ]
         });
 
         if (!app) {
@@ -565,13 +693,14 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
             candidateName: app.candidateName,
             email: String(app.email || '').trim().toLowerCase(),
             mobile: String(app.mobile || '').trim(),
-            source: 'Public Job Board',
+            source: app.source || 'Public Job Board',
             profilePulledBy: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
             currentCTC: app.currentCTC,
             expectedCTC: app.expectedCTC,
             noticePeriod: app.noticePeriod,
             remark: app.coverNote || '',
-            totalExperience: 0,
+            totalExperience: app.totalExperienceYears || 0,
+            currentCompany: app.currentCompany || '',
             status: 'Total Sourced',
             profileShared: false,
             decision: 'None',
@@ -585,8 +714,12 @@ router.post('/hiring-request/:id/public-applications/:appId/transfer', protect, 
 
         app.reviewStatus = 'Transferred';
         app.transferredCandidateId = candidate._id;
+        app.transferredHiringRequestId = targetRequestId;
         app.transferredAt = new Date();
         app.transferredBy = req.user._id;
+        if (!app.companyId) {
+            app.companyId = req.companyId;
+        }
         await app.save();
 
         res.json({

@@ -5,6 +5,68 @@ const TAEmailLog = require('../model/taEmailLog.model');
 const NotificationService = require('../../../services/notificationService');
 const { sendEmailForCompany, getCompanyEmailSettings, pickEmailAccount } = require('../../../services/companyEmailService');
 const mongoose = require('mongoose');
+const Company = require('../../company/company.model');
+
+const getCompanyTimezone = async (companyId) => {
+    try {
+        if (!companyId) return 'Asia/Kolkata';
+        const company = await Company.findById(companyId).select('timezone').lean();
+        return company?.timezone || 'Asia/Kolkata';
+    } catch {
+        return 'Asia/Kolkata';
+    }
+};
+
+const parseScheduledDateWithTimezone = (dateVal, defaultTimezone = 'Asia/Kolkata') => {
+    if (!dateVal) return undefined;
+    if (dateVal instanceof Date) {
+        return isNaN(dateVal.getTime()) ? undefined : dateVal;
+    }
+    const str = String(dateVal).trim();
+    if (!str) return undefined;
+
+    // If string already has a timezone indicator ('Z' at end or '+HH:mm' / '-HH:mm'):
+    if (/Z$/i.test(str) || /[+-]\d{2}(:?\d{2})?$/.test(str)) {
+        const parsed = new Date(str);
+        return isNaN(parsed.getTime()) ? undefined : parsed;
+    }
+
+    // If string is naive format like "2026-09-22T14:30" or "2026-09-22 14:30":
+    // Interpret it in defaultTimezone (IST = +05:30) so servers running in UTC don't misinterpret local time
+    try {
+        const match = str.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+        if (match) {
+            const [_, y, m, d, h, min, s = '00'] = match;
+            const offset = (defaultTimezone === 'Asia/Kolkata' || defaultTimezone === 'Asia/Calcutta') ? '+05:30' : '+05:30';
+            const isoWithOffset = `${y}-${m}-${d}T${h}:${min}:${s}${offset}`;
+            const parsed = new Date(isoWithOffset);
+            if (!isNaN(parsed.getTime())) return parsed;
+        }
+    } catch (e) {
+        // fallback
+    }
+
+    const fallback = new Date(str);
+    return isNaN(fallback.getTime()) ? undefined : fallback;
+};
+
+const formatScheduledDateForEmail = (dateVal, timeZone = 'Asia/Kolkata') => {
+    if (!dateVal) return 'To Be Confirmed / Scheduled Soon';
+    try {
+        const d = new Date(dateVal);
+        if (isNaN(d.getTime())) return 'To Be Confirmed / Scheduled Soon';
+        const tz = timeZone || 'Asia/Kolkata';
+        const formatted = d.toLocaleString('en-US', {
+            timeZone: tz,
+            dateStyle: 'full',
+            timeStyle: 'short'
+        });
+        const tzSuffix = (tz === 'Asia/Kolkata' || tz === 'Asia/Calcutta') ? ' IST' : '';
+        return `${formatted}${tzSuffix}`;
+    } catch {
+        return 'To Be Confirmed / Scheduled Soon';
+    }
+};
 
 const resolveSenderAccountDetails = async (companyId, requestedAccountId = null) => {
     try {
@@ -90,9 +152,8 @@ const sendInterviewScheduleEmails = async ({
             }
         }
 
-        const scheduledDateFormatted = round.scheduledDate
-            ? new Date(round.scheduledDate).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })
-            : 'To Be Confirmed / Scheduled Soon';
+        const companyTimezone = await getCompanyTimezone(companyId);
+        const scheduledDateFormatted = formatScheduledDateForEmail(round.scheduledDate, companyTimezone);
 
         const clientName = candidate.hiringRequestId?.client || candidate.companyName || '';
         const candidateLocation = candidate.currentLocation || candidate.location || candidate.currentCity || candidate.hiringRequestId?.requirements?.location || '';
@@ -424,6 +485,8 @@ const addInterviewRound = async (req, res) => {
             });
         }
 
+        const companyTimezone = await getCompanyTimezone(req.companyId);
+
         const newRound = {
             levelName: roundLevelName,
             assignAfterStage: normalizedAssignAfter || 'Shortlisted',
@@ -433,7 +496,7 @@ const addInterviewRound = async (req, res) => {
                 : [],
             isClientInterview: Boolean(req.body.isClientInterview),
             status: 'Pending',
-            scheduledDate,
+            scheduledDate: parseScheduledDateWithTimezone(scheduledDate, companyTimezone),
             phase: phase || 1,
             customFields: Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : [],
             emailTemplateId: emailTemplateId || null,
@@ -582,10 +645,12 @@ const updateInterviewRound = async (req, res) => {
             return res.status(404).json({ message: 'Interview round not found' });
         }
 
+        const companyTimezone = await getCompanyTimezone(req.companyId);
+
         if (levelName !== undefined) round.levelName = String(levelName).trim() || 'Round 1';
         if (assignAfterStage !== undefined) round.assignAfterStage = assignAfterStage;
         if (assignedTo !== undefined) round.assignedTo = assignedTo;
-        if (scheduledDate !== undefined) round.scheduledDate = scheduledDate;
+        if (scheduledDate !== undefined) round.scheduledDate = scheduledDate ? parseScheduledDateWithTimezone(scheduledDate, companyTimezone) : null;
         if (phase !== undefined) round.phase = phase;
         if (customFields !== undefined) round.customFields = Array.isArray(customFields) ? customFields.filter(f => f.key && String(f.key).trim()) : [];
         if (emailTemplateId !== undefined) round.emailTemplateId = emailTemplateId || null;
@@ -778,9 +843,8 @@ const previewInterviewRoundEmail = async (req, res) => {
         const candidateDisplayName = candidate.candidateName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || candidate.name || 'Candidate';
         const roundDisplayName = round.levelName || round.name || 'Interview Round';
 
-        const scheduledDateFormatted = round.scheduledDate
-            ? new Date(round.scheduledDate).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })
-            : 'To Be Confirmed / Scheduled Soon';
+        const companyTimezone = await getCompanyTimezone(req.companyId);
+        const scheduledDateFormatted = formatScheduledDateForEmail(round.scheduledDate, companyTimezone);
 
         const assignedInterviewers = Array.isArray(round.assignedTo) ? round.assignedTo : [];
         const interviewersList = assignedInterviewers.length > 0
@@ -1331,7 +1395,7 @@ const bulkScheduleInterview = async (req, res) => {
                         assignedClientUsers: normalizedClientUsers,
                         isClientInterview: Boolean(roundConfig.isClientInterview),
                         status: 'Pending',
-                        scheduledDate: roundConfig.scheduledDate || undefined,
+                        scheduledDate: parseScheduledDateWithTimezone(roundConfig.scheduledDate, companyTimezone),
                         phase: roundPhase,
                         customFields: Array.isArray(roundConfig.customFields) ? roundConfig.customFields.filter(f => f.key && String(f.key).trim()) : [],
                         emailTemplateId: roundConfig.emailTemplateId || null,
@@ -1440,5 +1504,8 @@ module.exports = {
     previewInterviewRoundEmail,
     getMyScheduledInterviews,
     evaluateInterviewRound,
-    bulkScheduleInterview
+    bulkScheduleInterview,
+    parseScheduledDateWithTimezone,
+    formatScheduledDateForEmail,
+    getCompanyTimezone
 };

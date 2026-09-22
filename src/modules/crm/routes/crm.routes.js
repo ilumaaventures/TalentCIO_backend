@@ -132,7 +132,7 @@ router.get('/ai/insights', authorize(['crm.ai.use', 'crm.admin']), aiController.
 // --- Administration & Settings ---
 router.get('/admin/settings', authorize(['crm.admin']), adminController.getSettings);
 router.put('/admin/settings', authorize(['crm.admin']), adminController.updateSettings);
-router.get('/admin/users', authorize(['crm.admin']), adminController.getUsers);
+router.get('/admin/users', authorize(['crm.admin', 'crm.data.import', 'crm.leads.read', 'crm.leads.create']), adminController.getUsers);
 router.get('/admin/territories', authorize(['crm.territories.read', 'crm.territories.manage', 'crm.admin']), adminController.getTerritories);
 router.post('/admin/territories', authorize(['crm.territories.manage', 'crm.admin']), adminController.createTerritory);
 router.delete('/admin/territories/:id', authorize(['crm.territories.manage', 'crm.admin']), adminController.deleteTerritory);
@@ -142,6 +142,8 @@ router.post('/admin/custom-fields', authorize(['crm.admin']), adminController.cr
 
 // --- Data Management: Import, Export, Merge ---
 router.post('/data/import', authorize(['crm.data.import', 'crm.leads.create', 'crm.admin']), dataController.importData);
+router.get('/data/import-data', authorize(['crm.leads.read', 'crm.data.import', 'crm.admin']), dataController.getImportData);
+router.post('/data/import-data/sync', authorize(['crm.data.import', 'crm.admin']), dataController.syncImportData);
 router.get('/data/export/:entityType', authorize(['crm.data.export', 'crm.admin']), dataController.exportData);
 router.post('/data/merge', authorize(['crm.data.merge', 'crm.admin']), dataController.mergeDuplicates);
 
