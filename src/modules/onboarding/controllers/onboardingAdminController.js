@@ -6,6 +6,8 @@ const { processCalculatedSalary } = require('../../payroll/payrollMath');
 const {
     generateTempPassword,
     formatDate,
+    formatDateTime,
+    normalizeDeadline,
     formatCurrency,
     syncTADecision,
     normalizeOnboardingExperienceCertificateLabels
@@ -67,7 +69,7 @@ exports.addEmployee = async (req, res) => {
 
         const cleanJoiningDate = (joiningDate && typeof joiningDate === 'string' && joiningDate.trim()) ? new Date(joiningDate) : (joiningDate instanceof Date ? joiningDate : undefined);
         const cleanOfferDate = (offerDate && typeof offerDate === 'string' && offerDate.trim()) ? new Date(offerDate) : (offerDate instanceof Date ? offerDate : undefined);
-        const cleanDeadline = (documentDeadline && typeof documentDeadline === 'string' && documentDeadline.trim()) ? new Date(documentDeadline) : (documentDeadline instanceof Date ? documentDeadline : undefined);
+        const cleanDeadline = normalizeDeadline(documentDeadline);
 
         const employee = new OnboardingEmployee({
             tempEmployeeId,
@@ -315,7 +317,7 @@ exports.updateEmployee = async (req, res) => {
         }
 
         // Handle Date fields safely to prevent Mongoose CastErrors with empty strings
-        const dateFields = ['joiningDate', 'offerDate', 'documentDeadline'];
+        const dateFields = ['joiningDate', 'offerDate'];
         for (const field of dateFields) {
             if (req.body[field] !== undefined) {
                 const rawVal = req.body[field];
@@ -331,10 +333,12 @@ exports.updateEmployee = async (req, res) => {
         if (req.body.documentDeadline !== undefined) {
             const rawDeadline = req.body.documentDeadline;
             if (!rawDeadline || (typeof rawDeadline === 'string' && rawDeadline.trim() === '')) {
+                employee.documentDeadline = undefined;
                 employee.credentialsExpireAt = undefined;
             } else {
-                const parsed = new Date(rawDeadline);
-                employee.credentialsExpireAt = isNaN(parsed.getTime()) ? undefined : parsed;
+                const cleanDeadline = normalizeDeadline(rawDeadline);
+                employee.documentDeadline = cleanDeadline;
+                employee.credentialsExpireAt = cleanDeadline;
             }
         }
 
@@ -432,6 +436,11 @@ exports.regenerateCredentials = async (req, res) => {
         employee.pendingCredentialPassword = newPassword;
         employee.tokenVersion = (employee.tokenVersion || 0) + 1;
         employee.credentialsExpireAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        employee.credentialRegenerationRequest = {
+            requested: false,
+            requestedAt: null,
+            reason: ''
+        };
 
         employee.auditLog.push({
             action: 'CREDENTIALS_REGENERATED',
@@ -482,10 +491,12 @@ exports.requestExtension = async (req, res) => {
 
 exports.resolveExtensionRequest = async (req, res) => {
     try {
-        const { action, newDeadline } = req.body;
+        const { action, status, newDeadline } = req.body;
         const { id, extId } = req.params;
 
-        if (!['Approve', 'Reject'].includes(action)) {
+        const resolvedAction = action || (status === 'Approved' ? 'Approve' : (status === 'Rejected' ? 'Reject' : null));
+
+        if (!['Approve', 'Reject'].includes(resolvedAction)) {
             return res.status(400).json({ message: 'Action must be Approve or Reject' });
         }
 
@@ -503,23 +514,24 @@ exports.resolveExtensionRequest = async (req, res) => {
             return res.status(404).json({ message: 'Extension request not found' });
         }
 
-        extReq.status = action === 'Approve' ? 'Approved' : 'Rejected';
+        extReq.status = resolvedAction === 'Approve' ? 'Approved' : 'Rejected';
 
-        if (action === 'Approve') {
+        if (resolvedAction === 'Approve') {
             if (!newDeadline) {
                 return res.status(400).json({ message: 'New deadline is required when approving' });
             }
-            employee.documentDeadline = new Date(newDeadline);
-            employee.credentialsExpireAt = new Date(newDeadline);
+            const cleanNewDeadline = normalizeDeadline(newDeadline);
+            employee.documentDeadline = cleanNewDeadline;
+            employee.credentialsExpireAt = cleanNewDeadline;
         }
 
         employee.auditLog.push({
-            action: `EXTENSION_${action.toUpperCase()}D`,
-            details: `Extension request ${action.toLowerCase()}d by ${req.user.firstName || 'Admin'}${action === 'Approve' ? `. New deadline: ${newDeadline}` : ''}`
+            action: `EXTENSION_${resolvedAction.toUpperCase()}D`,
+            details: `Extension request ${resolvedAction.toLowerCase()}d by ${req.user.firstName || 'Admin'}${resolvedAction === 'Approve' ? `. New deadline: ${newDeadline}` : ''}`
         });
 
         await employee.save();
-        res.json({ message: `Extension request ${action.toLowerCase()}d successfully`, employee });
+        res.json({ message: `Extension request ${resolvedAction.toLowerCase()}d successfully`, employee });
     } catch (error) {
         console.error('Error resolving extension request:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -528,29 +540,46 @@ exports.resolveExtensionRequest = async (req, res) => {
 
 exports.requestCredentialRegeneration = async (req, res) => {
     try {
-        const { email } = req.body;
-        if (!email) {
-            return res.status(400).json({ message: 'Email address is required' });
+        const { email, tempEmployeeId, reason } = req.body;
+        let query = {};
+
+        if (tempEmployeeId && typeof tempEmployeeId === 'string' && tempEmployeeId.trim()) {
+            query.tempEmployeeId = tempEmployeeId.trim();
+        } else if (email && typeof email === 'string' && email.trim()) {
+            query.email = email.trim().toLowerCase();
+        } else {
+            return res.status(400).json({ message: 'Employee ID or email address is required' });
         }
 
-        const employee = await OnboardingEmployee.findOne({ email: email.trim().toLowerCase() });
+        const employee = await OnboardingEmployee.findOne(query);
         if (!employee) {
-            return res.json({ message: 'If an onboarding record matches that email, HR will be notified of your request.' });
+            return res.json({ message: 'If an onboarding record matches that information, HR will be notified of your request.' });
         }
+
+        const cleanReason = (reason && typeof reason === 'string' && reason.trim())
+            ? reason.trim()
+            : 'Candidate requested credential regeneration from login page.';
+
+        employee.credentialRegenerationRequest = {
+            requested: true,
+            requestedAt: new Date(),
+            reason: cleanReason
+        };
 
         employee.extensionRequests.push({
             requestedAt: new Date(),
-            reason: 'Candidate requested credential regeneration from login page.',
+            reason: cleanReason,
+            requestedDays: 0,
             status: 'Pending'
         });
 
         employee.auditLog.push({
             action: 'CREDENTIAL_REGEN_REQUESTED',
-            details: `Candidate requested credential regeneration from login screen.`
+            details: `Candidate requested credential regeneration from login screen. Reason: ${cleanReason}`
         });
 
         await employee.save();
-        res.json({ message: 'If an onboarding record matches that email, HR will be notified of your request.' });
+        res.json({ message: 'Your request has been submitted. HR will be notified to provide new credentials.' });
     } catch (error) {
         console.error('Error requesting credential regeneration:', error);
         res.status(500).json({ message: 'Server error', error: error.message });

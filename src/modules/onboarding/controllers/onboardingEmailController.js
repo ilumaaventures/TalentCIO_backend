@@ -18,7 +18,9 @@ const {
     resolveNotificationEmailDelivery,
     stripHtml,
     buildPreOnboardingTemplateData,
-    syncTADecision
+    syncTADecision,
+    normalizeDeadline,
+    formatDateTime
 } = require('../utils/onboardingHelpers');
 
 const getCompanyEmailBranding = async (companyId, company = null) => {
@@ -54,8 +56,9 @@ exports.sendPreOnboardingEmail = async (req, res) => {
         const emailSentAt = new Date();
 
         if (submissionDeadline) {
-            employee.documentDeadline = new Date(submissionDeadline);
-            employee.credentialsExpireAt = new Date(submissionDeadline);
+            const cleanDeadline = normalizeDeadline(submissionDeadline);
+            employee.documentDeadline = cleanDeadline;
+            employee.credentialsExpireAt = cleanDeadline;
         }
 
         const sectionsData = employee.requestedSections || [];
@@ -177,7 +180,7 @@ exports.sendPreOnboardingEmail = async (req, res) => {
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Employee ID:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${employee.tempEmployeeId}</code></p>
                     <p style="margin: 4px 0; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background: #e0e7ff; padding: 2px 8px; border-radius: 4px; font-size: 16px;">${rawPassword}</code></p>
                     ${employee.credentialsExpireAt ? `
-                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${new Date(employee.credentialsExpireAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</p>
+                    <p style="margin: 12px 0 0; font-size: 13px; color: #dc2626;"><strong>⏳ Credentials Expire On:</strong> ${formatDateTime(employee.credentialsExpireAt)}</p>
                     ` : ''}
                     <p style="color: #64748b; font-size: 12px; margin-top: 8px;">⚠️ You will be asked to change your password on first login. Please keep these credentials secure.</p>
                 </div>

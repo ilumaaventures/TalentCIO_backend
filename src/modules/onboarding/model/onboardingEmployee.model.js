@@ -31,7 +31,7 @@ const auditEntrySchema = new mongoose.Schema({
 const extensionRequestSchema = new mongoose.Schema({
     requestedAt: { type: Date, default: Date.now },
     reason: { type: String, required: true },
-    requestedDays: { type: Number, required: true },
+    requestedDays: { type: Number, default: 0 },
     status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
     respondedAt: { type: Date },
     responseNote: { type: String, default: '' }
