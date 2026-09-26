@@ -620,12 +620,35 @@ exports.applyToJob = async (req, res) => {
             useProfileResume,
             profileResumeUrl,
             profileResumePublicId,
-            source
+            source,
+            mustHaveSkills
         } = req.body;
 
         if (!candidateName?.trim() || !email?.trim() || !mobile?.trim()) {
             return res.status(400).json({ message: 'Name, email, and mobile are required' });
         }
+
+        let parsedMustHaveSkills = [];
+        if (typeof mustHaveSkills === 'string') {
+            try {
+                parsedMustHaveSkills = JSON.parse(mustHaveSkills);
+            } catch (e) {
+                parsedMustHaveSkills = [];
+            }
+        } else if (Array.isArray(mustHaveSkills)) {
+            parsedMustHaveSkills = mustHaveSkills;
+        }
+
+        const cleanedMustHaveSkills = Array.isArray(parsedMustHaveSkills)
+            ? parsedMustHaveSkills
+                .map((item) => ({
+                    skill: String(item?.skill || item?.name || '').trim(),
+                    experience: item?.experience !== '' && item?.experience !== null && !isNaN(Number(item?.experience))
+                        ? Math.max(0, Number(item.experience))
+                        : 0
+                }))
+                .filter((item) => item.skill)
+            : [];
 
         let resumeUrl = '';
         let resumePublicId = '';
@@ -680,6 +703,7 @@ exports.applyToJob = async (req, res) => {
             currentCTC: currentCTC ? Number(currentCTC) : undefined,
             expectedCTC: expectedCTC ? Number(expectedCTC) : undefined,
             noticePeriod: noticePeriod ? Number(noticePeriod) : undefined,
+            mustHaveSkills: cleanedMustHaveSkills,
             coverNote: coverNote?.trim() || '',
             resumeUrl,
             resumePublicId,

@@ -28,6 +28,10 @@ const publicApplicationSchema = new mongoose.Schema({
     currentCTC: { type: Number, min: 0 },
     expectedCTC: { type: Number, min: 0 },
     noticePeriod: { type: Number, min: 0 },
+    mustHaveSkills: [{
+        skill: { type: String, trim: true },
+        experience: { type: Number, min: 0 }
+    }],
     coverNote: { type: String, trim: true, maxlength: 1000 },
 
     resumeUrl: { type: String, required: true },
