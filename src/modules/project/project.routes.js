@@ -8,9 +8,15 @@ const {
     getClients, createClient, updateClient,
     getProjects, createProject, updateProject, deleteProject, getProjectHierarchy,
     getModules, createModule, updateModule, deleteModule,
-    getTasks, createTask, updateTask, deleteTask,
     getEmployees
 } = require('./project.controller');
+const {
+    getTasks, createTask, updateTask, deleteTask
+} = require('../task/task.controller');
+const {
+    getProjectPerformance,
+    getProjectMemberPerformance
+} = require('../performance/performance.controller');
 const { getProjectBootstrap } = require('../system/pageBootstrap.controller');
 
 router.use(protect);
@@ -31,6 +37,8 @@ router.put('/clients/:id', authorize('client.update'), requireModule('clients'),
 
 // Projects
 router.get('/:id/hierarchy', requireModule(['projects', 'timesheet', 'attendance']), getProjectHierarchy);
+router.get('/:id/performance', requireModule(['projects', 'timesheet', 'attendance']), getProjectPerformance);
+router.get('/:id/performance/:userId', requireModule(['projects', 'timesheet', 'attendance']), getProjectMemberPerformance);
 router.get('/', requireModule(['projects', 'timesheet', 'attendance']), getProjects);
 router.post('/', authorize('project.create'), requireModule('projects'), createProject);
 router.put('/:id', authorize('project.update'), requireModule('projects'), updateProject);
@@ -42,15 +50,23 @@ router.post('/modules', authorize('project.create'), requireModule('projects'), 
 router.put('/modules/:id', authorize('project.update'), requireModule('projects'), updateModule);
 router.delete('/modules/:id', authorize('module.delete'), requireModule('projects'), deleteModule);
 
+const {
+    canAccessTaskCreate,
+    canAccessTaskUpdate,
+    canAccessTaskDelete
+} = require('../task/task.middleware');
+
 // Tasks
 router.get('/tasks', requireModule(['projects', 'timesheet', 'attendance']), getTasks); // /api/projects/tasks?moduleId=...
-router.post('/tasks', authorize('task.create'), requireModule('projects'), createTask);
-router.put('/tasks/:id', authorize('task.update'), requireModule('projects'), updateTask);
-router.delete('/tasks/:id', authorize('task.delete'), requireModule('projects'), deleteTask);
+router.post('/tasks', requireModule('projects'), canAccessTaskCreate, createTask);
+router.put('/tasks/:id', requireModule('projects'), canAccessTaskUpdate, updateTask);
+router.delete('/tasks/:id', requireModule('projects'), canAccessTaskDelete, deleteTask);
 
 // Work Logs
 const { logWork, getWorkLogs, updateWorkLog, deleteWorkLog } = require('../timesheet/workLog.controller');
+const { addEntry } = require('../timesheet/timesheet.controller');
 router.post('/tasks/:taskId/log', requireModule(['projects', 'timesheet', 'attendance']), logWork);
+router.post('/worklogs', requireModule(['projects', 'timesheet', 'attendance']), addEntry);
 router.get('/worklogs', requireModule(['projects', 'timesheet', 'attendance']), getWorkLogs);
 router.put('/worklogs/:id', requireModule(['projects', 'timesheet', 'attendance']), updateWorkLog);
 router.delete('/worklogs/:id', requireModule(['projects', 'timesheet', 'attendance']), deleteWorkLog);

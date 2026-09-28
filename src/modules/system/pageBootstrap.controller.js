@@ -101,17 +101,16 @@ const canManageProjectDirectory = (user) =>
 
 // MED-9: Parallelized into two tiers instead of 5 sequential awaits
 const buildProjectVisibilityFilter = async ({ requestUser, companyId, assignedOnly = false }) => {
-    const filter = { companyId };
+    const filter = { companyId, isDeleted: { $ne: true } };
     const canViewAssigned = hasPermission(requestUser, 'project.view_assigned');
     const canViewTeam     = hasPermission(requestUser, 'project.view_team');
     const canViewAll      = isAdminUser(requestUser) || hasPermission(requestUser, 'project.read');
 
     if (canViewAll && !assignedOnly) return filter;
-    if (!canViewAssigned && !canViewTeam && !canViewAll) return { ...filter, _id: null };
 
     // ── Tier 1: Parallel — user's own assigned tasks + direct reports ────────
     const [assignedModuleIds, directReports] = await Promise.all([
-        Task.distinct('module', { assignees: requestUser._id, companyId }),
+        Task.distinct('module', { assignees: requestUser._id, companyId, isDeleted: { $ne: true } }),
         canViewTeam
             ? User.find({ reportingManagers: requestUser._id, companyId }).select('_id').lean()
             : Promise.resolve([])
@@ -122,26 +121,26 @@ const buildProjectVisibilityFilter = async ({ requestUser, companyId, assignedOn
     // ── Tier 2: Parallel — resolve module IDs → project IDs ─────────────────
     const [taskProjectIds, teamAssignedModuleIds] = await Promise.all([
         assignedModuleIds.length > 0
-            ? Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId })
+            ? Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId, isDeleted: { $ne: true } })
             : Promise.resolve([]),
         reportIds.length > 0
-            ? Task.distinct('module', { assignees: { $in: reportIds }, companyId })
+            ? Task.distinct('module', { assignees: { $in: reportIds }, companyId, isDeleted: { $ne: true } })
             : Promise.resolve([])
     ]);
 
     // ── Tier 3: Resolve team module IDs → project IDs ───────────────────────
     const teamTaskProjectIds = teamAssignedModuleIds.length > 0
-        ? await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId })
+        ? await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId, isDeleted: { $ne: true } })
         : [];
 
     const orConditions = [];
-    if (canViewAssigned || assignedOnly) {
-        orConditions.push({ manager: requestUser._id });
-        orConditions.push({ members: requestUser._id });
-        if (taskProjectIds.length > 0) {
-            orConditions.push({ _id: { $in: taskProjectIds } });
-        }
+    // Always allow user to see projects they manage, are a member of, or have tasks in
+    orConditions.push({ manager: requestUser._id });
+    orConditions.push({ members: requestUser._id });
+    if (taskProjectIds.length > 0) {
+        orConditions.push({ _id: { $in: taskProjectIds } });
     }
+
     if (canViewTeam) {
         if (reportIds.length > 0) {
             orConditions.push({ manager: { $in: reportIds } });

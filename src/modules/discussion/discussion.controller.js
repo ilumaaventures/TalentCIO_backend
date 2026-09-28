@@ -51,19 +51,32 @@ const attachWorkLogTotals = async (discussions) => {
 exports.createDiscussion = async (req, res) => {
     try {
         const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, priority, hours } = req.body;
-        const selectedSupervisorIds = Array.isArray(supervisor)
-            ? supervisor
+        let selectedSupervisorIds = Array.isArray(supervisor)
+            ? [...supervisor]
             : (supervisor || participantUserId ? [supervisor || participantUserId] : []);
-        const normalizedVisibleTo = Array.isArray(visibleToUserIds)
-            ? visibleToUserIds
+        let normalizedVisibleTo = Array.isArray(visibleToUserIds)
+            ? [...visibleToUserIds]
             : (visibleToUserIds ? [visibleToUserIds] : []);
 
+        if (project && mongoose.isValidObjectId(project)) {
+            const Project = require('../project/project.model');
+            const projDoc = await Project.findById(project).select('members manager').lean();
+            if (projDoc) {
+                const projMembers = Array.isArray(projDoc.members) ? projDoc.members.map(String) : [];
+                if (projDoc.manager) projMembers.push(String(projDoc.manager));
+                normalizedVisibleTo = Array.from(new Set([...normalizedVisibleTo, ...projMembers]));
+                if (!selectedSupervisorIds.length && projDoc.manager) {
+                    selectedSupervisorIds.push(String(projDoc.manager));
+                }
+            }
+        }
+
         if (!selectedSupervisorIds.length) {
-            return res.status(400).json({ message: 'Supervisor is required' });
+            selectedSupervisorIds = [String(req.user._id)];
         }
 
         if (!normalizedVisibleTo.length) {
-            return res.status(400).json({ message: 'At least one visible user is required' });
+            normalizedVisibleTo = [String(req.user._id)];
         }
         const newDiscussion = new Discussion({
             companyId: req.companyId,

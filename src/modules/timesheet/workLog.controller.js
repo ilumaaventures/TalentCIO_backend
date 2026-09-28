@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Timesheet = require('./timesheet.model');
 const WorkLog = require('./workLog.model');
 const Task = require('../task/task.model');
@@ -152,25 +153,89 @@ const deleteWorkLog = async (req, res) => {
 };
 
 // @desc    Get work logs for user (optional, for history)
-// @route   GET /api/projects/worklogs?limit=4
 const getWorkLogs = async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 0; // 0 means no limit in Mongoose
 
-        const logs = await WorkLog.find({ user: req.user._id, companyId: req.companyId })
+        const filter = { companyId: req.companyId, isDeleted: { $ne: true } };
+        const mongoose = require('mongoose');
+        if (req.query.taskId) {
+            filter.task = req.query.taskId;
+        } else if (req.query.discussionId) {
+            const discId = String(req.query.discussionId);
+            const discMatch = mongoose.isValidObjectId(discId)
+                ? { $in: [discId, new mongoose.Types.ObjectId(discId)] }
+                : discId;
+            filter.discussion = discMatch;
+        } else if (req.query.projectId) {
+            const Module = require('../task/module.model');
+            const Task = require('../task/task.model');
+            const Discussion = require('../discussion/discussion.model');
+            const projIdStr = String(req.query.projectId);
+            const projIdMatch = mongoose.isValidObjectId(projIdStr)
+                ? { $in: [projIdStr, new mongoose.Types.ObjectId(projIdStr)] }
+                : projIdStr;
+
+            const modules = await Module.find({ project: projIdMatch, companyId: req.companyId }).select('_id');
+            const tasks = await Task.find({ module: { $in: modules.map(m => m._id) }, companyId: req.companyId }).select('_id');
+            const projectDiscussions = await Discussion.find({ project: projIdMatch, isDeleted: { $ne: true } }).select('_id').lean();
+            const taskIds = tasks.map(t => t._id);
+
+            const discObjAndStrIds = [];
+            projectDiscussions.forEach(d => {
+                if (d && d._id) {
+                    const s = String(d._id);
+                    discObjAndStrIds.push(s);
+                    if (mongoose.isValidObjectId(s)) {
+                        discObjAndStrIds.push(new mongoose.Types.ObjectId(s));
+                    }
+                }
+            });
+
+            const projObjAndStrIds = [projIdStr];
+            if (mongoose.isValidObjectId(projIdStr)) {
+                projObjAndStrIds.push(new mongoose.Types.ObjectId(projIdStr));
+            }
+
+            const orConditions = [
+                { project: { $in: projObjAndStrIds } }
+            ];
+            if (taskIds.length > 0) {
+                orConditions.push({ task: { $in: taskIds } });
+            }
+            if (discObjAndStrIds.length > 0) {
+                orConditions.push({ discussion: { $in: discObjAndStrIds } });
+            }
+
+            filter.$or = orConditions;
+            if (req.query.userId) {
+                filter.user = req.query.userId;
+            }
+        } else {
+            filter.user = req.user._id;
+        }
+
+        const logs = await WorkLog.find(filter)
+            .populate('user', 'firstName lastName email profilePicture profilePhoto')
             .populate({
                 path: 'task',
+                select: 'name taskKey status module priority estimatedHours',
                 populate: {
                     path: 'module',
-                    populate: { path: 'project' }
+                    select: 'name project',
+                    populate: { path: 'project', select: 'name' }
                 }
             })
+            .populate('module', 'name')
+            .populate('project', 'name')
+            .populate('discussion', 'title discussion status priority hours')
             .sort({ date: -1 })
             .limit(limit)
             .lean();
 
         res.json(logs);
     } catch (error) {
+        console.error('[WorkLogController] getWorkLogs error:', error);
         res.status(500).json({ message: 'Server Error' });
     }
 };
