@@ -32,6 +32,62 @@ const formatDate = (date) => {
     return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 };
 
+const formatDateTime = (date) => {
+    if (!date) return '';
+    return new Date(date).toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Asia/Kolkata'
+    });
+};
+
+/**
+ * Normalizes a deadline input to the end of that day (23:59:59.999 IST = 18:29:59.999 UTC)
+ * if it represents a date-only value (YYYY-MM-DD or UTC midnight).
+ * If an explicit non-midnight time is provided, preserves that exact timestamp.
+ */
+const normalizeDeadline = (dateInput) => {
+    if (!dateInput) return undefined;
+
+    if (typeof dateInput === 'string') {
+        const trimmed = dateInput.trim();
+        if (!trimmed) return undefined;
+
+        // Matches YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            const [y, m, d] = trimmed.split('-').map(Number);
+            // In IST (+5:30), 23:59:59.999 IST corresponds to 18:29:59.999 UTC on the same calendar day
+            return new Date(Date.UTC(y, m - 1, d, 18, 29, 59, 999));
+        }
+
+        const parsed = new Date(trimmed);
+        if (isNaN(parsed.getTime())) return undefined;
+
+        // If string was ISO formatted at UTC midnight (e.g. 2026-09-25T00:00:00.000Z), normalize to end of day IST
+        if (trimmed.endsWith('T00:00:00.000Z') || trimmed.endsWith('T00:00:00Z')) {
+            const [y, m, d] = parsed.toISOString().split('T')[0].split('-').map(Number);
+            return new Date(Date.UTC(y, m - 1, d, 18, 29, 59, 999));
+        }
+
+        return parsed;
+    }
+
+    if (dateInput instanceof Date) {
+        if (isNaN(dateInput.getTime())) return undefined;
+        // If Date represents UTC midnight (common result of new Date('YYYY-MM-DD'))
+        if (dateInput.getUTCHours() === 0 && dateInput.getUTCMinutes() === 0 && dateInput.getUTCSeconds() === 0 && dateInput.getUTCMilliseconds() === 0) {
+            return new Date(Date.UTC(dateInput.getUTCFullYear(), dateInput.getUTCMonth(), dateInput.getUTCDate(), 18, 29, 59, 999));
+        }
+        return dateInput;
+    }
+
+    const fallback = new Date(dateInput);
+    return isNaN(fallback.getTime()) ? undefined : fallback;
+};
+
 const formatCurrency = (val) => {
     if (!val) return '—';
     const num = parseFloat(String(val).replace(/[^0-9.]/g, ''));
@@ -453,6 +509,8 @@ module.exports = {
     syncTADecision,
     generateTempPassword,
     formatDate,
+    formatDateTime,
+    normalizeDeadline,
     formatCurrency,
     DEFAULT_PRE_ONBOARDING_EMAIL_SUBJECT,
     DEFAULT_PRE_ONBOARDING_EMAIL_BODY,

@@ -14,6 +14,8 @@ const rgAttendanceRoutes = require('../modules/rg-attendance/routes/rgAttendance
 const timesheetRoutes = require('../modules/timesheet/timesheet.routes');
 const adminRoutes = require('../modules/system/admin.routes');
 const projectRoutes = require('../modules/project/project.routes');
+const taskRoutes = require('../modules/task/task.routes');
+const performanceRoutes = require('../modules/performance/performance.routes');
 const dashboardRoutes = require('../modules/system/dashboard.routes');
 const holidayRoutes = require('../modules/holiday/holiday.routes');
 const leaveRoutes = require('../modules/leave/leave.routes');
@@ -90,6 +92,8 @@ router.use('/attendance/attachments', attendanceDocumentRoutes);
 router.use('/timesheet', timesheetRoutes);
 router.use('/admin', adminRoutes);
 router.use('/projects', projectRoutes);
+router.use('/tasks', taskRoutes);
+router.use('/performance', performanceRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/holidays', holidayRoutes);
 router.use('/leaves', leaveRoutes);

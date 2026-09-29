@@ -34,6 +34,13 @@ const crmImportDataSchema = new mongoose.Schema(
 
 crmImportDataSchema.index({ companyId: 1, isDeleted: 1 });
 crmImportDataSchema.index({ companyId: 1, rowId: 1 });
+// Compound content-key index: prevents duplicate DB documents when the same
+// company is re-imported with a different rowId (e.g., across separate uploads).
+crmImportDataSchema.index(
+  { companyId: 1, companyName: 1, mobileNo: 1, emailId: 1 },
+  { sparse: true, background: true }
+);
+
 
 crmImportDataSchema.plugin(softDeletePlugin);
 
