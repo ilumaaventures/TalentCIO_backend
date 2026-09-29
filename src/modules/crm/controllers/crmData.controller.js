@@ -34,6 +34,13 @@ const importData = async (req, res, next) => {
     const seenPhoneDigs = new Set();
     const seenCompanies = new Set();
 
+    // Valid enum values for CrmLead schema — used to sanitize imported rows
+    const VALID_STATUS = ['New', 'Contacted', 'Qualified', 'Unqualified', 'Nurturing', 'Converted', 'Lost'];
+    const VALID_PRIORITY = ['Low', 'Medium', 'High', 'Urgent'];
+    const VALID_TEMPERATURE = ['Cold', 'Warm', 'Hot'];
+
+    let updateCount = 0;
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
@@ -46,6 +53,7 @@ const importData = async (req, res, next) => {
           // 1. Check intra-batch duplicate
           let isDuplicate = false;
           let dupReason = '';
+          let existingLead = null;
 
           if (rawEmail && seenEmails.has(rawEmail)) {
             isDuplicate = true;
@@ -75,10 +83,10 @@ const importData = async (req, res, next) => {
             }
 
             if (orConditions.length > 0) {
-              const existingLead = await CrmLead.findOne({
+              existingLead = await CrmLead.findOne({
                 companyId,
                 $or: orConditions,
-              }).select('companyName email phone').lean();
+              }).select('_id companyName email phone').lean();
 
               if (existingLead) {
                 isDuplicate = true;
@@ -94,10 +102,43 @@ const importData = async (req, res, next) => {
             }
           }
 
+          // FIX #2: If record already exists in CRM and the row is flagged as an update,
+          // update the safe back-fields instead of silently skipping.
+          if (isDuplicate && existingLead && row.isUpdate) {
+            const safeUpdateFields = {};
+
+            if (row.notes || row.remarks) safeUpdateFields.notes = row.notes || row.remarks;
+            if (row.jobTitle || row.designation) safeUpdateFields.jobTitle = row.jobTitle || row.designation;
+            if (row.website) safeUpdateFields.website = row.website;
+
+            // Sanitize enum fields before update
+            if (row.status && VALID_STATUS.includes(row.status)) safeUpdateFields.status = row.status;
+            if (row.priority && VALID_PRIORITY.includes(row.priority)) safeUpdateFields.priority = row.priority;
+            if (row.temperature && VALID_TEMPERATURE.includes(row.temperature)) safeUpdateFields.temperature = row.temperature;
+
+            // Rebuild address if provided
+            if (row.address) {
+              safeUpdateFields.address = typeof row.address === 'string'
+                ? { street: row.address, city: '', state: '', country: 'India', postalCode: '' }
+                : row.address;
+            }
+
+            if (Object.keys(safeUpdateFields).length > 0) {
+              await CrmLead.findByIdAndUpdate(existingLead._id, { $set: safeUpdateFields });
+              updateCount++;
+              successCount++;
+            } else {
+              // Nothing to update — count as duplicate skip
+              duplicateCount++;
+              duplicates.push({ row: i + 1, companyName: rawCompany, reason: dupReason });
+            }
+            continue;
+          }
+
           if (isDuplicate) {
             duplicateCount++;
             duplicates.push({ row: i + 1, companyName: rawCompany, reason: dupReason });
-            continue; // Skip uploading duplicate!
+            continue; // Skip uploading duplicate that has no update intent
           }
 
           // Mark as seen in batch
@@ -122,18 +163,28 @@ const importData = async (req, res, next) => {
           if (row.industry && !tags.includes(row.industry)) tags.push(row.industry);
           if (row.rating && !tags.some(t => t.startsWith('Rating:'))) tags.push(`Rating: ${row.rating}`);
 
+          // FIX #1: Whitelist only known CrmLead schema fields — never spread raw row.
+          // Sanitize enum fields to prevent Mongoose ValidationError from bad Excel values.
           const leadPayload = {
-            ...row,
             firstName,
             lastName,
-            companyName: row.companyName || '',
-            jobTitle: row.jobTitle || row.designation || '',
-            phone: row.phone || row.mobileNo || '',
-            email: row.email || row.emailId || '',
+            companyName: rawCompany,
+            jobTitle: (row.jobTitle || row.designation || '').trim(),
+            phone: rawPhone,
+            email: rawEmail,
+            alternatePhone: (row.alternatePhone || row.altPhone || '').trim(),
+            website: (row.website || '').trim(),
             address,
             tags,
-            source: row.source || 'Excel Import',
-            notes: row.notes || row.remarks || '',
+            source: (row.source || 'Excel Import').trim(),
+            notes: (row.notes || row.remarks || '').trim(),
+            budget: (row.budget || '').trim(),
+            requirements: (row.requirements || '').trim(),
+            estimatedValue: Number(row.estimatedValue) || 0,
+            // Sanitize enum values — fall back to schema defaults if invalid
+            status: VALID_STATUS.includes(row.status) ? row.status : 'New',
+            priority: VALID_PRIORITY.includes(row.priority) ? row.priority : 'Medium',
+            temperature: VALID_TEMPERATURE.includes(row.temperature) ? row.temperature : 'Warm',
             companyId,
             ownerId: req.user?._id,
           };
@@ -180,17 +231,30 @@ const importData = async (req, res, next) => {
       userId: req.user?._id,
       action: 'DATA_IMPORT',
       entityType,
-      changes: { total: rows.length, successCount, failedCount, duplicateCount },
+      changes: { total: rows.length, successCount, updateCount, failedCount, duplicateCount },
     });
 
-    const msg = duplicateCount > 0
-      ? `Import complete: ${successCount} imported successfully, ${duplicateCount} duplicate(s) skipped.`
-      : `Import complete: ${successCount} imported successfully, ${failedCount} failed.`;
+    // FIX #3: Return success:false when every single row failed (not just some)
+    const totalProcessed = successCount + failedCount + duplicateCount;
+    const allFailed = failedCount > 0 && successCount === 0 && duplicateCount === 0;
+
+    let msg;
+    if (allFailed) {
+      msg = `Import failed: all ${failedCount} row(s) could not be processed.`;
+    } else if (updateCount > 0 && successCount > updateCount) {
+      msg = `Import complete: ${successCount - updateCount} new, ${updateCount} updated, ${duplicateCount} duplicate(s) skipped${failedCount > 0 ? `, ${failedCount} failed` : ''}.`;
+    } else if (updateCount > 0) {
+      msg = `Import complete: ${updateCount} record(s) updated, ${duplicateCount} duplicate(s) skipped${failedCount > 0 ? `, ${failedCount} failed` : ''}.`;
+    } else if (duplicateCount > 0) {
+      msg = `Import complete: ${successCount} imported successfully, ${duplicateCount} duplicate(s) skipped${failedCount > 0 ? `, ${failedCount} failed` : ''}.`;
+    } else {
+      msg = `Import complete: ${successCount} imported successfully${failedCount > 0 ? `, ${failedCount} failed` : ''}.`;
+    }
 
     res.json({
-      success: true,
+      success: !allFailed,
       message: msg,
-      data: { successCount, failedCount, duplicateCount, duplicates, errors },
+      data: { successCount, updateCount, failedCount, duplicateCount, duplicates, errors },
     });
   } catch (error) {
     next(error);
@@ -435,22 +499,39 @@ const syncImportData = async (req, res, next) => {
 
     const bulkOps = rows.map((item) => {
       const rowId = item.id || item.rowId;
+      const companyName = (item.companyName || '').trim();
+      const mobileNo = (item.mobileNo || '').trim();
+      const emailId = (item.emailId || '').trim().toLowerCase();
+
+      // FIX #4: Use a compound content-key filter as fallback so that re-importing
+      // the same company reuses the existing DB document rather than inserting a new
+      // one each time (prevents unbounded growth when rowId changes per import).
+      const contentFilter = {};
+      if (rowId) {
+        contentFilter.rowId = rowId;
+      } else {
+        // Fallback to content-based match when rowId is absent
+        if (companyName) contentFilter.companyName = companyName;
+        if (mobileNo) contentFilter.mobileNo = mobileNo;
+        if (emailId) contentFilter.emailId = emailId;
+      }
+
       return {
         updateOne: {
-          filter: { companyId, rowId },
+          filter: { companyId, ...contentFilter },
           update: {
             $set: {
               companyId,
               rowId,
               sNo: item.sNo || '',
-              companyName: (item.companyName || '').trim(),
+              companyName,
               industry: (item.industry || '').trim(),
               address: (item.address || '').trim(),
               rating: (item.rating || '').trim(),
               contactPerson: (item.contactPerson || '').trim(),
               designation: (item.designation || '').trim(),
-              mobileNo: (item.mobileNo || '').trim(),
-              emailId: (item.emailId || '').trim(),
+              mobileNo,
+              emailId,
               remarks: (item.remarks || '').trim(),
               date: item.date || new Date().toISOString(),
               importedBy: (item.importedBy || userFullName || '').trim(),
