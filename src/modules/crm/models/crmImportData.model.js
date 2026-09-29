@@ -21,13 +21,17 @@ const crmImportDataSchema = new mongoose.Schema(
     emailId: { type: String, trim: true, default: '' },
     remarks: { type: String, trim: true, default: '' },
     date: { type: String, default: () => new Date().toISOString() },
+    // Status dropdown value from Excel (Interested, Not Interested, etc.)
+    leadStatus: { type: String, trim: true, default: '' },
+    // Source column from Excel (LinkedIn, Cold Call, Referral, etc.)
+    leadSource: { type: String, trim: true, default: '' },
     isConvertedToLead: { type: Boolean, default: false },
     leadId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmLead', default: null },
     isDuplicate: { type: Boolean, default: false },
     duplicateReason: { type: String, default: '' },
     importedBy: { type: String, trim: true, default: '' },
     importedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    source: { type: String, default: 'Excel Import' },
+    source: { type: String, default: 'Excel Import' }, // internal: always 'Excel Import'
   },
   { timestamps: true }
 );
