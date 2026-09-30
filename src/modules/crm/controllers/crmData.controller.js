@@ -4,6 +4,12 @@ const CrmDeal = require('../models/crmDeal.model');
 const CrmContact = require('../models/crmContact.model');
 const CrmAccount = require('../models/crmAccount.model');
 const { logCrmAudit } = require('../utils/crmAudit');
+const {
+  canViewAllImportData,
+  getImportDataOwnerFilter,
+  canViewAllLeads,
+  getLeadOwnerFilter,
+} = require('../utils/crmScope');
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
@@ -270,7 +276,17 @@ const exportData = async (req, res, next) => {
     let data = [];
 
     if (entityType === 'leads') {
-      data = await CrmLead.find({ companyId }).lean();
+      const q = { companyId };
+      if (!canViewAllLeads(req.user)) {
+        Object.assign(q, getLeadOwnerFilter(req.user));
+      }
+      data = await CrmLead.find(q).lean();
+    } else if (entityType === 'import-data' || entityType === 'database') {
+      const q = { companyId, isDeleted: false };
+      if (!canViewAllImportData(req.user)) {
+        Object.assign(q, getImportDataOwnerFilter(req.user));
+      }
+      data = await CrmImportData.find(q).lean();
     } else if (entityType === 'contacts') {
       data = await CrmContact.find({ companyId }).lean();
     } else if (entityType === 'companies' || entityType === 'accounts') {
@@ -347,22 +363,29 @@ const getImportData = async (req, res, next) => {
       all,
     } = req.query;
 
-    const query = { companyId, isDeleted: false };
+    const andConditions = [{ companyId, isDeleted: false }];
+
+    // Scoping: If user cannot view all imported data, restrict to their own uploaded/assigned records
+    if (!canViewAllImportData(req.user)) {
+      andConditions.push(getImportDataOwnerFilter(req.user));
+    }
 
     // Search filter across multiple fields
     if (search && search.trim()) {
       const q = search.trim();
       const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [
-        { companyName: regex },
-        { contactPerson: regex },
-        { emailId: regex },
-        { mobileNo: regex },
-        { industry: regex },
-        { address: regex },
-        { remarks: regex },
-        { importedBy: regex },
-      ];
+      andConditions.push({
+        $or: [
+          { companyName: regex },
+          { contactPerson: regex },
+          { emailId: regex },
+          { mobileNo: regex },
+          { industry: regex },
+          { address: regex },
+          { remarks: regex },
+          { importedBy: regex },
+        ],
+      });
     }
 
     // Imported By user filter (supports array or comma-separated string)
@@ -371,9 +394,11 @@ const getImportData = async (req, res, next) => {
         .map((s) => s.trim())
         .filter(Boolean);
       if (names.length > 0) {
-        query.importedBy = {
-          $in: names.map((n) => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')),
-        };
+        andConditions.push({
+          importedBy: {
+            $in: names.map((n) => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')),
+          },
+        });
       }
     }
 
@@ -382,26 +407,35 @@ const getImportData = async (req, res, next) => {
     if (dateFilter === 'today') {
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
-      query.date = { $gte: startOfDay, $lte: endOfDay };
+      andConditions.push({ date: { $gte: startOfDay, $lte: endOfDay } });
     } else if (dateFilter === '2days') {
       const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
-      query.date = { $gte: twoDaysAgo };
+      andConditions.push({ date: { $gte: twoDaysAgo } });
     } else if (dateFilter === '5days') {
       const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
-      query.date = { $gte: fiveDaysAgo };
+      andConditions.push({ date: { $gte: fiveDaysAgo } });
     } else if (dateFilter === 'custom' && (fromDate || toDate)) {
-      query.date = {};
-      if (fromDate) query.date.$gte = new Date(fromDate).toISOString();
+      const dateCond = {};
+      if (fromDate) dateCond.$gte = new Date(fromDate).toISOString();
       if (toDate) {
         const toDateEnd = new Date(toDate);
         toDateEnd.setHours(23, 59, 59, 999);
-        query.date.$lte = toDateEnd.toISOString();
+        dateCond.$lte = toDateEnd.toISOString();
       }
+      andConditions.push({ date: dateCond });
     }
+
+    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
+
+    const baseCountConditions = [{ companyId, isDeleted: false }];
+    if (!canViewAllImportData(req.user)) {
+      baseCountConditions.push(getImportDataOwnerFilter(req.user));
+    }
+    const baseCountQuery = baseCountConditions.length > 1 ? { $and: baseCountConditions } : baseCountConditions[0];
 
     // Total counts in database
     const totalMatching = await CrmImportData.countDocuments(query);
-    const totalAll = await CrmImportData.countDocuments({ companyId, isDeleted: false });
+    const totalAll = await CrmImportData.countDocuments(baseCountQuery);
 
     // Determine pagination
     const isPaginated = all !== 'true' && (page !== undefined || limit !== undefined);
@@ -498,29 +532,52 @@ const syncImportData = async (req, res, next) => {
 
     const userId = req.user?._id || req.user?.id || null;
     const userFullName = [req.user?.firstName, req.user?.lastName].filter(Boolean).join(' ').trim() || req.user?.name || req.user?.email || '';
+    const isRestricted = !canViewAllImportData(req.user);
 
-    const bulkOps = rows.map((item) => {
+    // Security Filter: Restricted users can ONLY sync records that belong to them
+    const eligibleRows = isRestricted
+      ? rows.filter((item) => {
+          const itemUser = (item.importedBy || '').trim().toLowerCase();
+          const currUser = userFullName.toLowerCase();
+          const itemUserId = item.importedByUserId ? String(item.importedByUserId) : '';
+          const myId = String(userId || '');
+          return (itemUserId && itemUserId === myId) || (!itemUserId && (!itemUser || itemUser === currUser));
+        })
+      : rows;
+
+    if (eligibleRows.length === 0) {
+      return res.json({ success: true, message: 'No eligible user rows to sync' });
+    }
+
+    const bulkOps = eligibleRows.map((item) => {
       const rowId = item.id || item.rowId;
       const companyName = (item.companyName || '').trim();
       const mobileNo = (item.mobileNo || '').trim();
       const emailId = (item.emailId || '').trim().toLowerCase();
 
-      // FIX #4: Use a compound content-key filter as fallback so that re-importing
-      // the same company reuses the existing DB document rather than inserting a new
-      // one each time (prevents unbounded growth when rowId changes per import).
+      // Compound content-key filter
       const contentFilter = {};
       if (rowId) {
         contentFilter.rowId = rowId;
       } else {
-        // Fallback to content-based match when rowId is absent
         if (companyName) contentFilter.companyName = companyName;
         if (mobileNo) contentFilter.mobileNo = mobileNo;
         if (emailId) contentFilter.emailId = emailId;
       }
 
+      const ownFilter = isRestricted && userId
+        ? {
+            $or: [
+              { importedByUserId: userId },
+              { importedByUserId: { $exists: false } },
+              { importedByUserId: null },
+            ],
+          }
+        : {};
+
       return {
         updateOne: {
-          filter: { companyId, ...contentFilter },
+          filter: { companyId, ...contentFilter, ...ownFilter },
           update: {
             $set: {
               companyId,
@@ -539,7 +596,7 @@ const syncImportData = async (req, res, next) => {
               leadStatus: (item.status || item.leadStatus || '').trim(),
               leadSource: (item.source || item.leadSource || '').trim(),
               importedBy: (item.importedBy || userFullName || '').trim(),
-              importedByUserId: item.importedByUserId || userId,
+              importedByUserId: isRestricted ? userId : (item.importedByUserId || userId),
               isConvertedToLead: Boolean(item.isConvertedToLead),
               leadId: item.leadId || null,
               isDuplicate: Boolean(item.isDuplicate),
