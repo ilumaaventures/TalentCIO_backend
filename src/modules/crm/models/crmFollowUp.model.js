@@ -25,6 +25,7 @@ const followUpSchema = new mongoose.Schema({
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
 
   // Related entity
+  importDataId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmImportData', index: true },
   leadId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmLead' },
   dealId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmDeal' },
   contactId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmContact' },

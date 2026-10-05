@@ -21,8 +21,9 @@ const crmImportDataSchema = new mongoose.Schema(
     emailId: { type: String, trim: true, default: '' },
     remarks: { type: String, trim: true, default: '' },
     date: { type: String, default: () => new Date().toISOString() },
-    // Status dropdown value from Excel (Interested, Not Interested, etc.)
-    leadStatus: { type: String, trim: true, default: '' },
+    // Status value (Interested, Not Interested, New, etc.)
+    status: { type: String, trim: true, default: 'New' },
+    leadStatus: { type: String, trim: true, default: 'New' },
     // Source column from Excel (LinkedIn, Cold Call, Referral, etc.)
     leadSource: { type: String, trim: true, default: '' },
     isConvertedToLead: { type: Boolean, default: false },
@@ -32,6 +33,17 @@ const crmImportDataSchema = new mongoose.Schema(
     importedBy: { type: String, trim: true, default: '' },
     importedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     source: { type: String, default: 'Excel Import' }, // internal: always 'Excel Import'
+
+    // User Outreach & Performance Tracking
+    callCount: { type: Number, default: 0 },
+    whatsappCount: { type: Number, default: 0 },
+    emailCount: { type: Number, default: 0 },
+    lastContactedAt: { type: Date, default: null },
+    lastContactedBy: { type: String, trim: true, default: '' },
+    lastContactedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    lastOutcome: { type: String, trim: true, default: '' },
+    lastCallType: { type: String, trim: true, default: '' },
+    nextFollowUpAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
