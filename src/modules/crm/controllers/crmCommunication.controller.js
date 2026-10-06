@@ -387,7 +387,21 @@ const sendEmail = async (req, res, next) => {
       });
     }
 
+    // Ensure clean HTML body without attaching corporate branding or logo header
+    let formattedHtml = emailContent;
+    if (!/<[a-z][\s\S]*>/i.test(formattedHtml)) {
+      formattedHtml = formattedHtml
+        .split(/\r?\n\r?\n/)
+        .map((para) => `<p style="margin: 0 0 16px 0;">${para.replace(/\r?\n/g, '<br/>')}</p>`)
+        .join('\n');
+    }
+
+    if (!formattedHtml.includes('font-family')) {
+      formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b;">${formattedHtml}</div>`;
+    }
+
     // Dispatch email using configured company account or platform default
+    // Sales outreach emails exclude the corporate logo header configured in general email settings
     let sendResult = false;
     let errorMessage = null;
 
@@ -399,8 +413,10 @@ const sendEmail = async (req, res, next) => {
         cc: cc ? String(cc).trim() : undefined,
         bcc: bcc ? String(bcc).trim() : undefined,
         subject: subject.trim(),
-        html: emailContent,
+        html: formattedHtml,
         text: plainBody || emailContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+        brandEmail: false,
+        logoUrl: '',
         throwOnError: true
       });
     } catch (err) {

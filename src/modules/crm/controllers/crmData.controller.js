@@ -404,11 +404,35 @@ const getImportData = async (req, res, next) => {
         .map((s) => s.trim())
         .filter(Boolean);
       if (names.length > 0) {
-        andConditions.push({
-          importedBy: {
-            $in: names.map((n) => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')),
+        // Resolve user IDs if names or IDs were supplied
+        const validObjectIds = names.filter((n) => mongoose.Types.ObjectId.isValid(n)).map((n) => new mongoose.Types.ObjectId(n));
+        const matchingUsers = await User.find({
+          companyId,
+          $or: [
+            ...(validObjectIds.length > 0 ? [{ _id: { $in: validObjectIds } }] : []),
+            ...names.map((n) => ({
+              $or: [
+                { firstName: new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                { lastName: new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                { email: new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+              ],
+            })),
+          ],
+        }).select('_id').lean();
+
+        const allUserIds = [...new Set([...validObjectIds, ...matchingUsers.map((u) => u._id)])];
+
+        const userFilterOr = [
+          {
+            importedBy: {
+              $in: names.map((n) => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')),
+            },
           },
-        });
+        ];
+        if (allUserIds.length > 0) {
+          userFilterOr.push({ importedByUserId: { $in: allUserIds } });
+        }
+        andConditions.push({ $or: userFilterOr });
       }
     }
 
@@ -457,6 +481,7 @@ const getImportData = async (req, res, next) => {
     const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus leadSource source date createdAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks';
     let findQuery = CrmImportData.find(query)
       .select(TABLE_FIELDS)
+      .populate('importedByUserId', 'firstName lastName name email')
       .sort({ [sortField]: sortOrder === 'asc' ? 1 : -1 });
 
     if (isPaginated) {
@@ -482,6 +507,15 @@ const getImportData = async (req, res, next) => {
         (comp && activeLeadCompNames.has(comp))
       );
 
+      const userDoc = r.importedByUserId;
+      const actualUserName = (userDoc && typeof userDoc === 'object' && userDoc._id)
+        ? ([userDoc.firstName, userDoc.lastName].filter(Boolean).join(' ').trim() || userDoc.name || userDoc.email || '')
+        : '';
+      const finalImportedBy = actualUserName || r.importedBy || '';
+      const finalImportedByUserId = (userDoc && typeof userDoc === 'object' && userDoc._id)
+        ? String(userDoc._id)
+        : (r.importedByUserId ? String(r.importedByUserId) : null);
+
       return {
         id: r.rowId || String(r._id),
         _id: r._id,
@@ -493,8 +527,8 @@ const getImportData = async (req, res, next) => {
         leadStatus: r.leadStatus || r.status || '',
         source: r.leadSource || r.source || '',
         leadSource: r.leadSource || r.source || '',
-        importedBy: r.importedBy || '',
-        importedByUserId: r.importedByUserId || null,
+        importedBy: finalImportedBy,
+        importedByUserId: finalImportedByUserId,
         isConvertedToLead: hasActiveLead,
         leadId: r.leadId || null,
         isDuplicate: Boolean(r.isDuplicate),
@@ -573,36 +607,59 @@ const syncImportData = async (req, res, next) => {
           }
         : {};
 
+      const setFields = {
+        companyId,
+        rowId,
+        sNo: item.sNo || '',
+        companyName,
+        industry: (item.industry || '').trim(),
+        address: (item.address || '').trim(),
+        rating: (item.rating || '').trim(),
+        contactPerson: (item.contactPerson || '').trim(),
+        designation: (item.designation || '').trim(),
+        mobileNo,
+        emailId,
+        remarks: (item.remarks || '').trim(),
+        date: item.date || new Date().toISOString(),
+        status: (item.status || item.leadStatus || 'New').trim(),
+        leadStatus: (item.status || item.leadStatus || 'New').trim(),
+        source: (item.source || item.leadSource || 'Website').trim(),
+        leadSource: (item.source || item.leadSource || 'Website').trim(),
+        isConvertedToLead: Boolean(item.isConvertedToLead),
+        leadId: item.leadId || null,
+        isDuplicate: Boolean(item.isDuplicate),
+        duplicateReason: item.duplicateReason || '',
+        isDeleted: false,
+      };
+
+      const setOnInsertFields = {};
+
+      if (isRestricted) {
+        setFields.importedBy = userFullName;
+        setFields.importedByUserId = userId;
+      } else {
+        // If an explicit user is passed on item, preserve it
+        if (item.importedBy && item.importedBy.trim()) {
+          setFields.importedBy = item.importedBy.trim();
+        }
+        if (item.importedByUserId) {
+          setFields.importedByUserId = item.importedByUserId;
+        }
+        // Fallback for new documents created by this sync
+        if (!setFields.importedBy) {
+          setOnInsertFields.importedBy = (item.importedBy || userFullName || '').trim();
+        }
+        if (!setFields.importedByUserId) {
+          setOnInsertFields.importedByUserId = item.importedByUserId || userId;
+        }
+      }
+
       return {
         updateOne: {
           filter: { companyId, ...contentFilter, ...ownFilter },
           update: {
-            $set: {
-              companyId,
-              rowId,
-              sNo: item.sNo || '',
-              companyName,
-              industry: (item.industry || '').trim(),
-              address: (item.address || '').trim(),
-              rating: (item.rating || '').trim(),
-              contactPerson: (item.contactPerson || '').trim(),
-              designation: (item.designation || '').trim(),
-              mobileNo,
-              emailId,
-              remarks: (item.remarks || '').trim(),
-              date: item.date || new Date().toISOString(),
-              status: (item.status || item.leadStatus || 'New').trim(),
-              leadStatus: (item.status || item.leadStatus || 'New').trim(),
-              source: (item.source || item.leadSource || 'Website').trim(),
-              leadSource: (item.source || item.leadSource || 'Website').trim(),
-              importedBy: (item.importedBy || userFullName || '').trim(),
-              importedByUserId: isRestricted ? userId : (item.importedByUserId || userId),
-              isConvertedToLead: Boolean(item.isConvertedToLead),
-              leadId: item.leadId || null,
-              isDuplicate: Boolean(item.isDuplicate),
-              duplicateReason: item.duplicateReason || '',
-              isDeleted: false,
-            },
+            $set: setFields,
+            ...(Object.keys(setOnInsertFields).length > 0 ? { $setOnInsert: setOnInsertFields } : {}),
           },
           upsert: true,
         },
@@ -629,12 +686,12 @@ const resolveImportDataProspect = async (companyId, id, req = null) => {
     const row = await CrmImportData.findOne({
       companyId,
       $or: [{ _id: id }, { rowId: id }],
-    });
+    }).populate('importedByUserId', 'firstName lastName name email');
     if (row) return row;
   }
 
   // 2. Try finding by rowId string
-  let row = await CrmImportData.findOne({ companyId, rowId: id });
+  let row = await CrmImportData.findOne({ companyId, rowId: id }).populate('importedByUserId', 'firstName lastName name email');
   if (row) return row;
 
   // 3. If id is base64 row format (e.g. 'row_YmhrIGluIGd1cmdhb258OTIwNTEzNjE0NHw_')
@@ -1503,6 +1560,15 @@ const getImportDataById = async (req, res, next) => {
 
     const rowObj = row.toObject ? row.toObject() : row;
     rowObj.id = rowObj.rowId || String(rowObj._id);
+
+    const userDoc = rowObj.importedByUserId;
+    if (userDoc && typeof userDoc === 'object' && userDoc._id) {
+      const actualUserName = [userDoc.firstName, userDoc.lastName].filter(Boolean).join(' ').trim() || userDoc.name || userDoc.email || '';
+      if (actualUserName) {
+        rowObj.importedBy = actualUserName;
+      }
+      rowObj.importedByUserId = String(userDoc._id);
+    }
 
     res.json({
       success: true,
