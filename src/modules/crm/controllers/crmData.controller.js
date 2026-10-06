@@ -817,12 +817,42 @@ const getImportDataActivities = async (req, res, next) => {
       actConditions.push({ subject: new RegExp(escaped, 'i') });
     }
 
-    const activities = await CrmActivity.find({
+    // Pagination parameters (default 20, allowed up to 100)
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    // Optional channel filter ('all', 'call', 'whatsapp', 'email', etc.)
+    const channel = req.query.channel || req.query.type;
+    const baseActFilter = {
       companyId,
       $or: actConditions,
-    })
+    };
+
+    const queryActFilter = { ...baseActFilter };
+    if (channel && ['call', 'whatsapp', 'email', 'task', 'meeting'].includes(channel)) {
+      queryActFilter.type = channel;
+    }
+
+    const [
+      totalCalls,
+      totalWhatsApps,
+      totalEmails,
+      totalAllActivities,
+      totalFilteredActivities,
+    ] = await Promise.all([
+      CrmActivity.countDocuments({ ...baseActFilter, type: 'call' }),
+      CrmActivity.countDocuments({ ...baseActFilter, type: 'whatsapp' }),
+      CrmActivity.countDocuments({ ...baseActFilter, type: 'email' }),
+      CrmActivity.countDocuments(baseActFilter),
+      CrmActivity.countDocuments(queryActFilter),
+    ]);
+
+    const activities = await CrmActivity.find(queryActFilter)
       .populate('performedBy', 'firstName lastName name email profilePicture')
-      .sort({ performedAt: -1 });
+      .sort({ performedAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
     const flwConditions = [{ importDataId: row._id }];
     if (row.leadId) {
@@ -836,9 +866,35 @@ const getImportDataActivities = async (req, res, next) => {
       .populate('assignedTo', 'firstName lastName name email')
       .sort({ scheduledDate: 1 });
 
-    const totalCalls = activities.filter((a) => a.type === 'call').length;
-    const totalWhatsApps = activities.filter((a) => a.type === 'whatsapp').length;
-    const totalEmails = activities.filter((a) => a.type === 'email').length;
+    const totalPages = Math.ceil(totalFilteredActivities / limit) || 1;
+    const pagination = {
+      page,
+      limit,
+      total: totalFilteredActivities,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
+    };
+
+    // Self-healing / reconciliation of stored counters when activities exist
+    if (totalAllActivities > 0) {
+      if (
+        row.callCount !== totalCalls ||
+        row.whatsappCount !== totalWhatsApps ||
+        row.emailCount !== totalEmails
+      ) {
+        await CrmImportData.findByIdAndUpdate(row._id, {
+          $set: {
+            callCount: totalCalls,
+            whatsappCount: totalWhatsApps,
+            emailCount: totalEmails,
+          },
+        });
+        row.callCount = totalCalls;
+        row.whatsappCount = totalWhatsApps;
+        row.emailCount = totalEmails;
+      }
+    }
 
     res.json({
       success: true,
@@ -846,15 +902,13 @@ const getImportDataActivities = async (req, res, next) => {
         activities,
         followUps,
         record: row,
+        pagination,
         summary: {
-          totalCalls: Math.max(totalCalls, row.callCount || 0),
-          totalWhatsApps: Math.max(totalWhatsApps, row.whatsappCount || 0),
-          totalEmails: Math.max(totalEmails, row.emailCount || 0),
+          totalCalls: totalAllActivities > 0 ? totalCalls : (row.callCount || 0),
+          totalWhatsApps: totalAllActivities > 0 ? totalWhatsApps : (row.whatsappCount || 0),
+          totalEmails: totalAllActivities > 0 ? totalEmails : (row.emailCount || 0),
           totalFollowUps: followUps.length,
-          totalTouches: Math.max(
-            activities.length,
-            (row.callCount || 0) + (row.whatsappCount || 0) + (row.emailCount || 0)
-          ),
+          totalTouches: totalAllActivities > 0 ? totalAllActivities : ((row.callCount || 0) + (row.whatsappCount || 0) + (row.emailCount || 0)),
           lastOutcome: row.lastOutcome || activities[0]?.outcome || 'No contact yet',
           lastContactedAt: row.lastContactedAt || activities[0]?.performedAt || null,
           lastContactedBy: row.lastContactedBy || activities[0]?.performedByName || '',
@@ -862,6 +916,7 @@ const getImportDataActivities = async (req, res, next) => {
       },
       activities,
       followUps,
+      pagination,
     });
   } catch (error) {
     next(error);

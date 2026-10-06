@@ -91,7 +91,13 @@ router.patch('/follow-ups/:id/complete', authorize(['crm.followups.manage', 'crm
 router.patch('/follow-ups/:id/reschedule', authorize(['crm.followups.manage', 'crm.admin']), followUpController.rescheduleFollowUp);
 router.delete('/follow-ups/:id', authorize(['crm.followups.manage', 'crm.admin']), followUpController.deleteFollowUp);
 
-// --- Communication Hub ---
+// --- Communication Hub & CRM Email Templates ---
+router.get('/communication/senders', authorize(['crm.communication.read', 'crm.communication.send', 'crm.growth.read', 'crm.growth.manage', 'crm.data.import', 'crm.leads.read', 'crm.admin']), communicationController.getSenderAccounts);
+router.get('/communication/email-templates', authorize(['crm.communication.read', 'crm.communication.send', 'crm.growth.read', 'crm.growth.manage', 'crm.data.import', 'crm.leads.read', 'crm.admin']), communicationController.getCrmEmailTemplates);
+router.post('/communication/email-templates', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.createCrmEmailTemplate);
+router.put('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.updateCrmEmailTemplate);
+router.delete('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.deleteCrmEmailTemplate);
+router.post('/communication/send-email', authorize(['crm.communication.send', 'crm.data.import', 'crm.leads.create', 'crm.leads.update', 'crm.admin']), communicationController.sendEmail);
 router.get('/communication/emails', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getEmails);
 router.post('/communication/emails', authorize(['crm.communication.send', 'crm.admin']), communicationController.sendEmail);
 router.get('/communication/whatsapp', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getWhatsAppMessages);

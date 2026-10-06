@@ -10,7 +10,7 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     scope: {
         type: String,
-        enum: ['ta', 'general'],
+        enum: ['ta', 'general', 'crm'],
         default: 'ta',
         index: true
     },
@@ -30,13 +30,13 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     templateType: {
         type: String,
-        enum: ['general', 'onboarding', 'offboarding'],
+        enum: ['general', 'onboarding', 'offboarding', 'crm', 'sales'],
         default: 'general',
         index: true
     },
     category: {
         type: String,
-        enum: ['interview_invite', 'rejection', 'offer', 'shortlist', 'general'],
+        enum: ['interview_invite', 'rejection', 'offer', 'shortlist', 'general', 'sales_pitch', 'follow_up', 'meeting_invite', 'quote_proposal', 'cold_outreach'],
         default: 'general'
     },
     createdBy: {
