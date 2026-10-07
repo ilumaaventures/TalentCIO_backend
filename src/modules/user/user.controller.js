@@ -14,6 +14,7 @@ const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.servi
 const { buildMasterSalaryStructure, buildPayrollSnapshot, processCalculatedSalary } = require('../payroll/payrollMath');
 const PayrollConfig = require('../payroll/payrollConfig.model');
 const emailService = require('../../services/emailService');
+const { resolveRolesWithInheritance } = require('../../utils/permissionResolver');
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
 
@@ -831,6 +832,17 @@ const getUserById = async (req, res) => {
 
         user.directReports = directReports;
         user.isProtectedPrimaryAdmin = await isProtectedPrimaryAdminUser(user, req.companyId);
+
+        const roleIds = (user.roles || []).map(r => r._id || r);
+        try {
+            const resolvedRoleContext = await resolveRolesWithInheritance({
+                roleIds,
+                companyId: req.companyId
+            });
+            user.permissions = resolvedRoleContext.permissionKeys || [];
+        } catch (resolveErr) {
+            user.permissions = [];
+        }
 
         res.json(user);
     } catch (error) {
