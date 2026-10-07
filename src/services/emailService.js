@@ -113,16 +113,17 @@ const wrapEmailHtmlWithBranding = (html, branding = {}) => {
         ? String(branding.logoAlignment).toLowerCase()
         : DEFAULT_LOGO_ALIGNMENT;
 
+    const headerHtml = logoUrl
+        ? `<div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:${logoAlignment};">
+            <a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="width:${logoWidth}px;height:${logoHeight}px;max-width:100%;object-fit:contain;display:block;margin:0 auto;" /></a>
+           </div>`
+        : '';
+
     return `
         <div style="background:#f8fafc;padding:24px 12px;font-family:Arial,sans-serif;">
             <div style="max-width:640px;margin:0 auto;">
-                <div style="background:${brandColor};padding:16px 24px;border-radius:8px 8px 0 0;text-align:${logoAlignment};">
-                    ${logoUrl
-            ? `<a href="${logoLink}" style="display:inline-block;"><img src="${logoUrl}" alt="${logoAlt}" style="width:${logoWidth}px;height:${logoHeight}px;max-width:100%;object-fit:contain;display:block;margin:0 auto;" /></a>`
-            : ''
-        }
-                </div>
-                <div style="background:#ffffff;padding:32px 24px;border:1px solid #e2e8f0;border-top:none;">
+                ${headerHtml}
+                <div style="background:#ffffff;padding:32px 24px;border:1px solid #e2e8f0;${logoUrl ? 'border-top:none;' : 'border-radius:8px;'}">
                     ${content}
                 </div>
                 ${footerText

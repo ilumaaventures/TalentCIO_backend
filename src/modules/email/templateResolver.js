@@ -48,9 +48,43 @@ const TEMPLATE_PLACEHOLDERS = [
     'JD'
 ];
 
+const CRM_EMAIL_TEMPLATE_PLACEHOLDERS = [
+    'companyName',
+    'contactPerson',
+    'firstName',
+    'lastName',
+    'fullName',
+    'email',
+    'emailId',
+    'mobileNo',
+    'phoneNumber',
+    'phone',
+    'designation',
+    'industry',
+    'address',
+    'rating',
+    'status',
+    'leadStatus',
+    'source',
+    'leadSource',
+    'remarks',
+    'senderName',
+    'senderEmail',
+    'senderPhone',
+    'senderCompany',
+    'senderDesignation',
+    'senderRole',
+    'meetingLink',
+    'proposalDetails',
+    'customNote',
+    'currentDate',
+    'currentYear'
+];
+
 // Backwards-compatible aliases accepted in template validation
 const PLACEHOLDER_ALIASES = [
     ...TEMPLATE_PLACEHOLDERS,
+    ...CRM_EMAIL_TEMPLATE_PLACEHOLDERS,
     'fullName',
     'candidateEmail',
     'workEmail',
@@ -251,6 +285,7 @@ module.exports = {
     MISSING_OPEN_BRACE_PLACEHOLDER_REGEX,
     SINGLE_BRACE_PLACEHOLDER_REGEX,
     TEMPLATE_PLACEHOLDERS,
+    CRM_EMAIL_TEMPLATE_PLACEHOLDERS,
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     ONBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,
     OFFBOARDING_EMAIL_TEMPLATE_PLACEHOLDERS,

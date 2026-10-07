@@ -343,6 +343,7 @@ const sendViaSmtp = async ({
 const sendEmailForCompany = async ({
     companyId,
     emailAccountId,
+    fromName,
     to,
     cc,
     bcc,
@@ -373,6 +374,7 @@ const sendEmailForCompany = async ({
         ? wrapEmailHtmlWithBranding(html, resolvedBranding)
         : html;
     const resolvedReplyTo = resolvedBranding.replyTo || undefined;
+    const resolvedFromName = fromName || selection.account?.fromName || companyBranding.displayName || settings?.companyName || 'TalentCIO';
 
     if (selection.mode === 'missing') {
         console.error(`[EMAIL] Selected account ${selection.accountId} not found for company ${companyId}`);
@@ -395,7 +397,7 @@ const sendEmailForCompany = async ({
                 subject,
                 htmlContent: brandedHtml,
                 textContent: text,
-                fromName: selection.account.fromName || companyBranding.displayName || settings?.companyName || 'TalentCIO',
+                fromName: resolvedFromName,
                 fromAddress: selection.account.fromAddress,
                 brevoApiKey: selection.account.brevoApiKey,
                 attachments,
@@ -425,7 +427,7 @@ const sendEmailForCompany = async ({
                 subject,
                 html: brandedHtml,
                 text,
-                fromName: selection.account.fromName || companyBranding.displayName || settings?.companyName || 'TalentCIO',
+                fromName: resolvedFromName,
                 fromAddress: selection.account.fromAddress,
                 smtpConfig: selection.account.smtp,
                 attachments,
@@ -453,6 +455,7 @@ const sendEmailForCompany = async ({
         text,
         attachments,
         brandEmail: false,
+        displayName: resolvedFromName,
         replyTo: resolvedReplyTo
     });
 };

@@ -721,7 +721,12 @@ module.exports = [
     {
         key: "crm.leads.read",
         module: "CRM",
-        description: "View CRM leads directory and profiles"
+        description: "View assigned or owned CRM leads"
+    },
+    {
+        key: "crm.leads.read_all",
+        module: "CRM",
+        description: "View all CRM leads across the organization (unrestricted)"
     },
     {
         key: "crm.leads.create",
@@ -912,7 +917,12 @@ module.exports = [
     {
         key: "crm.data.import",
         module: "CRM",
-        description: "Import CRM leads, deals, contacts, and accounts"
+        description: "Import and view own imported CRM database records"
+    },
+    {
+        key: "crm.data.view_all",
+        module: "CRM",
+        description: "View all imported database records across all users (unrestricted)"
     },
     {
         key: "crm.data.export",

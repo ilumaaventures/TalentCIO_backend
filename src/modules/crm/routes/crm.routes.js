@@ -91,7 +91,13 @@ router.patch('/follow-ups/:id/complete', authorize(['crm.followups.manage', 'crm
 router.patch('/follow-ups/:id/reschedule', authorize(['crm.followups.manage', 'crm.admin']), followUpController.rescheduleFollowUp);
 router.delete('/follow-ups/:id', authorize(['crm.followups.manage', 'crm.admin']), followUpController.deleteFollowUp);
 
-// --- Communication Hub ---
+// --- Communication Hub & CRM Email Templates ---
+router.get('/communication/senders', authorize(['crm.communication.read', 'crm.communication.send', 'crm.growth.read', 'crm.growth.manage', 'crm.data.import', 'crm.leads.read', 'crm.admin']), communicationController.getSenderAccounts);
+router.get('/communication/email-templates', authorize(['crm.communication.read', 'crm.communication.send', 'crm.growth.read', 'crm.growth.manage', 'crm.data.import', 'crm.leads.read', 'crm.admin']), communicationController.getCrmEmailTemplates);
+router.post('/communication/email-templates', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.createCrmEmailTemplate);
+router.put('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.updateCrmEmailTemplate);
+router.delete('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.deleteCrmEmailTemplate);
+router.post('/communication/send-email', authorize(['crm.communication.send', 'crm.data.import', 'crm.leads.create', 'crm.leads.update', 'crm.admin']), communicationController.sendEmail);
 router.get('/communication/emails', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getEmails);
 router.post('/communication/emails', authorize(['crm.communication.send', 'crm.admin']), communicationController.sendEmail);
 router.get('/communication/whatsapp', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getWhatsAppMessages);
@@ -140,10 +146,17 @@ router.get('/admin/audit-logs', authorize(['crm.admin']), adminController.getAud
 router.get('/admin/custom-fields', authorize(['crm.admin']), adminController.getCustomFields);
 router.post('/admin/custom-fields', authorize(['crm.admin']), adminController.createCustomField);
 
-// --- Data Management: Import, Export, Merge ---
+// --- Data Management: Import, Export, Merge & Outreach Tracking ---
 router.post('/data/import', authorize(['crm.data.import', 'crm.leads.create', 'crm.admin']), dataController.importData);
 router.get('/data/import-data', authorize(['crm.leads.read', 'crm.data.import', 'crm.admin']), dataController.getImportData);
 router.post('/data/import-data/sync', authorize(['crm.data.import', 'crm.admin']), dataController.syncImportData);
+router.get('/data/import-data/:id', authorize(['crm.leads.read', 'crm.data.import', 'crm.admin']), dataController.getImportDataById);
+router.post('/data/import-data/:id/activity', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.create', 'crm.admin']), dataController.logImportDataActivity);
+router.get('/data/import-data/:id/activities', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.read', 'crm.admin']), dataController.getImportDataActivities);
+router.post('/data/import-data/:id/follow-up', authorize(['crm.leads.read', 'crm.data.import', 'crm.followups.manage', 'crm.admin']), dataController.scheduleImportDataFollowUp);
+router.patch('/data/import-data/:id/status', authorize(['crm.leads.read', 'crm.data.import', 'crm.leads.manage', 'crm.admin']), dataController.updateImportDataStatus);
+router.get('/data/performance', authorize(['crm.leads.read', 'crm.data.import', 'crm.analytics.read', 'crm.admin']), dataController.getRepPerformanceSummary);
+router.get('/data/rep-activities', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.read', 'crm.admin']), dataController.getRepActivities);
 router.get('/data/export/:entityType', authorize(['crm.data.export', 'crm.admin']), dataController.exportData);
 router.post('/data/merge', authorize(['crm.data.merge', 'crm.admin']), dataController.mergeDuplicates);
 

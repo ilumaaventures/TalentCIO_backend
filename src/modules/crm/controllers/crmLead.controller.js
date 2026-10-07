@@ -9,6 +9,7 @@ const CrmActivity = require('../models/crmActivity.model');
 const CrmTask = require('../models/crmTask.model');
 const CrmFollowUp = require('../models/crmFollowUp.model');
 const { logCrmAudit } = require('../utils/crmAudit');
+const { canViewAllLeads, getLeadOwnerFilter } = require('../utils/crmScope');
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
@@ -127,34 +128,43 @@ const getLeads = async (req, res, next) => {
       sortOrder = 'desc',
     } = req.query;
 
-    const query = { companyId };
+    const andConditions = [{ companyId }];
+
+    // If user does not have permission to view all leads, restrict to assigned / owned leads
+    if (!canViewAllLeads(req.user)) {
+      andConditions.push(getLeadOwnerFilter(req.user));
+    }
 
     if (status && status !== 'all') {
-      query.status = status;
+      andConditions.push({ status });
     }
     if (source && source !== 'all') {
-      query.source = source;
+      andConditions.push({ source });
     }
     if (priority && priority !== 'all') {
-      query.priority = priority;
+      andConditions.push({ priority });
     }
     if (ownerId && ownerId !== 'all') {
-      query.ownerId = ownerId;
+      andConditions.push({ ownerId });
     }
 
     if (search) {
       const searchRegex = new RegExp(search, 'i');
-      query.$or = [
-        { firstName: searchRegex },
-        { lastName: searchRegex },
-        { email: searchRegex },
-        { phone: searchRegex },
-        { companyName: searchRegex },
-        { jobTitle: searchRegex },
-        { 'address.city': searchRegex },
-        { 'address.state': searchRegex },
-      ];
+      andConditions.push({
+        $or: [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { email: searchRegex },
+          { phone: searchRegex },
+          { companyName: searchRegex },
+          { jobTitle: searchRegex },
+          { 'address.city': searchRegex },
+          { 'address.state': searchRegex },
+        ],
+      });
     }
+
+    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
 
     const total = await CrmLead.countDocuments(query);
     const leads = await CrmLead.find(query)
@@ -191,6 +201,15 @@ const getLeadById = async (req, res, next) => {
 
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    if (!canViewAllLeads(req.user)) {
+      const isOwner = String(lead.ownerId?._id || lead.ownerId) === String(req.user._id)
+        || String(lead.assignedTo) === String(req.user._id)
+        || String(lead.createdBy) === String(req.user._id);
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only view your own assigned or created leads' });
+      }
     }
 
     const activities = await CrmActivity.find({ leadId: lead._id, companyId })
@@ -439,6 +458,15 @@ const updateLead = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
+    if (!canViewAllLeads(req.user)) {
+      const isOwner = String(lead.ownerId) === String(req.user._id)
+        || String(lead.assignedTo) === String(req.user._id)
+        || String(lead.createdBy) === String(req.user._id);
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only update your own assigned or created leads' });
+      }
+    }
+
     const oldStatus = lead.status;
     const updates = { ...req.body };
 
@@ -490,6 +518,15 @@ const deleteLead = async (req, res, next) => {
     const lead = await CrmLead.findOne({ _id: req.params.id, companyId });
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    if (!canViewAllLeads(req.user)) {
+      const isOwner = String(lead.ownerId) === String(req.user._id)
+        || String(lead.assignedTo) === String(req.user._id)
+        || String(lead.createdBy) === String(req.user._id);
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only delete your own assigned or created leads' });
+      }
     }
 
     await lead.softDelete(req.user?._id);

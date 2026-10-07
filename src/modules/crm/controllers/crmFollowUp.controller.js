@@ -52,6 +52,7 @@ const getFollowUps = async (req, res, next) => {
       .populate('dealId', 'title value stage accountId')
       .populate('contactId', 'firstName lastName phone email')
       .populate('accountId', 'name')
+      .populate('importDataId')
       .sort({ scheduledDate: 1 });
 
     const baseQuery = { companyId };

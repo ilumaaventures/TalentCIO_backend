@@ -16,14 +16,31 @@ const activitySchema = new mongoose.Schema({
   description: { type: String, default: '' },
   outcome: {
     type: String,
-    enum: ['Connected', 'Left Voicemail', 'No Answer', 'Busy', 'Scheduled Meeting', 'Completed', 'Cancelled', 'Sent', 'Replied', 'Other'],
+    enum: [
+      'Connected',
+      'Connected - Interested',
+      'Connected - Not Interested',
+      'Callback Requested',
+      'Left Voicemail',
+      'No Answer',
+      'Busy',
+      'Wrong Number',
+      'Scheduled Meeting',
+      'Completed',
+      'Cancelled',
+      'Sent',
+      'Replied',
+      'Other',
+    ],
     default: 'Completed',
   },
   durationMinutes: { type: Number, default: 0 },
+  callType: { type: String, trim: true, default: 'Cold Call' },
   performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   performedByName: { type: String },
 
   // Polymorphic References
+  importDataId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmImportData', index: true },
   leadId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmLead', index: true },
   contactId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmContact', index: true },
   accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmAccount', index: true },
@@ -34,5 +51,6 @@ const activitySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 activitySchema.index({ companyId: 1, performedBy: 1, performedAt: -1 });
+activitySchema.index({ companyId: 1, importDataId: 1, performedAt: -1 });
 
 module.exports = mongoose.model('CrmActivity', activitySchema);
