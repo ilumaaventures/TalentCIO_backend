@@ -3,9 +3,10 @@ const User = require('../../user/user.model');
 const Department = require('../models/department.model');
 const Designation = require('../models/designation.model');
 const BusinessUnit = require('../../business-unit/businessUnit.model');
+const Company = require('../../company/company.model');
 
 /**
- * Returns direct reports for a specific manager within a company.
+ * Returns direct reports for a specific manager within a company (strictly workforce members).
  */
 const getDirectReports = async (userId, companyId, { includeInactive = false } = {}) => {
     if (!userId || !companyId) return [];
@@ -13,6 +14,7 @@ const getDirectReports = async (userId, companyId, { includeInactive = false } =
     const query = {
         companyId,
         isDeleted: { $ne: true },
+        isTotalWorkforce: { $ne: false },
         reportingManagers: new mongoose.Types.ObjectId(userId)
     };
 
@@ -21,7 +23,7 @@ const getDirectReports = async (userId, companyId, { includeInactive = false } =
     }
 
     return await User.find(query)
-        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode')
+        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode employmentType')
         .populate('departmentRef', 'name code')
         .populate('designationRef', 'title level')
         .lean();
@@ -36,14 +38,15 @@ const getAllReports = async (userId, companyId, { maxDepth = 25, includeInactive
     const targetUserIdStr = String(userId);
     const query = {
         companyId,
-        isDeleted: { $ne: true }
+        isDeleted: { $ne: true },
+        isTotalWorkforce: { $ne: false }
     };
     if (!includeInactive) {
         query.isActive = true;
     }
 
     const allUsers = await User.find(query)
-        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode')
+        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode employmentType')
         .populate('departmentRef', 'name code')
         .populate('designationRef', 'title level')
         .lean();
@@ -86,8 +89,12 @@ const getAllReports = async (userId, companyId, { maxDepth = 25, includeInactive
 const getManagerChain = async (userId, companyId) => {
     if (!userId || !companyId) return [];
 
-    const allUsers = await User.find({ companyId, isDeleted: { $ne: true } })
-        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode')
+    const allUsers = await User.find({
+        companyId,
+        isDeleted: { $ne: true },
+        isTotalWorkforce: { $ne: false }
+    })
+        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode employmentType')
         .populate('departmentRef', 'name code')
         .populate('designationRef', 'title level')
         .lean();
@@ -141,22 +148,170 @@ const detectCycle = async (userId, proposedManagerId, companyId) => {
 };
 
 /**
+ * Resolves the Total Workforce users and company hierarchy context.
+ * Strictly adheres to the dashboard calculation:
+ * - isActive: true (or all non-deleted if includeInactive is true)
+ * - isDeleted: { $ne: true }
+ * - Excludes primary admin system user (matching company email or oldest system account with isSystem: true)
+ * - Excludes users where isTotalWorkforce === false
+ */
+const getWorkforceContext = async (companyId, { includeInactive = false } = {}) => {
+    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
+        : companyId;
+
+    const matchQuery = {
+        companyId: companyObjectId,
+        isDeleted: { $ne: true }
+    };
+    if (!includeInactive) {
+        matchQuery.isActive = true;
+    }
+
+    const [usersResult, company] = await Promise.all([
+        User.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: 'roles',
+                    localField: 'roles',
+                    foreignField: '_id',
+                    as: 'rolesResolved',
+                    pipeline: [{ $project: { name: 1, isSystem: 1 } }]
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    email: 1,
+                    createdAt: 1,
+                    firstName: 1,
+                    lastName: 1,
+                    reportingManagers: 1,
+                    employmentType: 1,
+                    isTotalWorkforce: 1,
+                    roles: '$rolesResolved',
+                    isSystemUser: {
+                        $gt: [
+                            { $size: { $filter: { input: '$rolesResolved', as: 'r', cond: { $eq: ['$$r.isSystem', true] } } } },
+                            0
+                        ]
+                    }
+                }
+            }
+        ]),
+        Company.findById(companyId).select('email').lean()
+    ]);
+
+    const primaryAdminEmail = company?.email?.toLowerCase();
+    const systemUsers = usersResult.filter((u) => u.isSystemUser);
+    const oldestSystemUser = systemUsers.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+    const oldestSystemUserId = oldestSystemUser?._id?.toString();
+
+    const filteredUsers = usersResult.filter((u) => {
+        const isMatchByEmail   = u.email?.toLowerCase() === primaryAdminEmail;
+        const isMatchByOldest  = u._id?.toString() === oldestSystemUserId;
+        const isPrimaryAccount = isMatchByEmail || isMatchByOldest;
+        return !(u.isSystemUser && isPrimaryAccount);
+    });
+
+    const totalWorkforceUsers = filteredUsers.filter((u) => u.isTotalWorkforce !== false);
+    const totalWorkforceUserIdsSet = new Set(totalWorkforceUsers.map((u) => String(u._id)));
+    const allUsersBasicMap = new Map(usersResult.map((u) => [String(u._id), u]));
+
+    return {
+        totalWorkforceUsers,
+        totalWorkforceUserIdsSet,
+        allUsersBasicMap,
+        filteredUsers
+    };
+};
+
+/**
+ * Normalizes and checks if a node's employment type matches any selected types.
+ */
+const matchesEmploymentType = (nodeTypeRaw, selectedTypes = []) => {
+    if (!Array.isArray(selectedTypes) || selectedTypes.length === 0) return true;
+    const nodeType = (nodeTypeRaw || 'Full Time').trim().toLowerCase();
+
+    return selectedTypes.some((selected) => {
+        const sel = String(selected).trim().toLowerCase();
+        if (!sel) return false;
+        if (sel === 'employee') return nodeType === 'employee' || nodeType === 'full time';
+        if (sel === 'full time') return nodeType === 'full time' || nodeType === 'employee';
+        if (sel === 'advisor' || sel === 'advisors') return nodeType.includes('advisor');
+        if (sel === 'trainee' || sel === 'tranee') return nodeType.includes('trainee') || nodeType.includes('tranee');
+        if (sel === 'consultant') return nodeType.includes('consultant');
+        if (sel === 'intern') return nodeType.includes('intern');
+        if (sel === 'probation') return nodeType.includes('probation');
+        if (sel === 'part time') return nodeType.includes('part time');
+        if (sel === 'contract') return nodeType.includes('contract');
+        if (sel === 'freelance') return nodeType.includes('freelance');
+        return nodeType === sel || nodeType.includes(sel);
+    });
+};
+
+/**
+ * Finds the nearest manager up the reporting chain who belongs to the target dataset.
+ * Bypasses intermediate unselected accounts gracefully so subordinate links are preserved.
+ */
+const getEffectiveWorkforceManagerId = (user, allUsersBasicMap, targetUserIdsSet) => {
+    let current = user;
+    const visited = new Set([String(user._id)]);
+    while (current && current.reportingManagers && current.reportingManagers.length > 0) {
+        const mgrId = String(current.reportingManagers[0]);
+        if (visited.has(mgrId)) break;
+        visited.add(mgrId);
+
+        if (targetUserIdsSet.has(mgrId)) {
+            return mgrId;
+        }
+        current = allUsersBasicMap.get(mgrId);
+    }
+    return null;
+};
+
+/**
  * Constructs an in-memory org chart tree/forest for a company.
+ * - By default (no employment type filter): Strictly shows Total Workforce members.
+ * - When employment type filter is specified: Pulls in matching users (including non-workforce
+ *   users such as consultants, interns, trainees, etc.) and prunes tree accordingly.
  */
 const getOrgTree = async (companyId, {
     rootUserId = null,
     departmentId = null,
     businessUnitId = null,
     search = '',
-    includeInactive = false
+    includeInactive = false,
+    employmentTypes = []
 } = {}) => {
-    const userQuery = { companyId, isDeleted: { $ne: true } };
-    if (!includeInactive) {
-        userQuery.isActive = true;
+    const {
+        totalWorkforceUsers,
+        totalWorkforceUserIdsSet,
+        allUsersBasicMap,
+        filteredUsers
+    } = await getWorkforceContext(
+        companyId,
+        { includeInactive }
+    );
+
+    const hasEmploymentTypesFilter = Array.isArray(employmentTypes) && employmentTypes.length > 0;
+
+    // By default, strictly include Total Workforce members.
+    // If employment types filter is active, also include non-workforce users matching the filter.
+    const targetUserIdsSet = new Set(totalWorkforceUserIdsSet);
+    if (hasEmploymentTypesFilter) {
+        for (const u of filteredUsers) {
+            if (matchesEmploymentType(u.employmentType, employmentTypes)) {
+                targetUserIdsSet.add(String(u._id));
+            }
+        }
     }
 
-    const allUsers = await User.find(userQuery)
-        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode')
+    const allUsers = await User.find({
+        _id: { $in: Array.from(targetUserIdsSet) }
+    })
+        .select('_id firstName lastName email department departmentRef designationRef profilePicture isActive reportingManagers employeeCode employmentType')
         .populate('departmentRef', 'name code businessUnit')
         .populate('designationRef', 'title level')
         .lean();
@@ -165,7 +320,7 @@ const getOrgTree = async (companyId, {
     const childrenMap = new Map();
 
     for (const u of allUsers) {
-        const primaryMgrId = u.reportingManagers?.[0] ? String(u.reportingManagers[0]) : null;
+        const primaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
         if (primaryMgrId && userMap.has(primaryMgrId) && primaryMgrId !== String(u._id)) {
             if (!childrenMap.has(primaryMgrId)) childrenMap.set(primaryMgrId, []);
             childrenMap.get(primaryMgrId).push(u);
@@ -195,6 +350,7 @@ const getOrgTree = async (companyId, {
             }
         }
 
+        const effectivePrimaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
         const secondaryManagerIds = (u.reportingManagers || []).slice(1).map(String);
         const secondaryManagers = secondaryManagerIds
             .map((id) => userMap.get(id))
@@ -214,13 +370,14 @@ const getOrgTree = async (companyId, {
             employeeCode: u.employeeCode || '',
             profilePicture: u.profilePicture || '',
             isActive: u.isActive !== false,
+            employmentType: u.employmentType || 'Full Time',
             department: u.departmentRef?.name || u.department || 'Unassigned',
             departmentId: u.departmentRef?._id || null,
             businessUnitId: u.departmentRef?.businessUnit || null,
             designation: u.designationRef?.title || 'Team Member',
             designationId: u.designationRef?._id || null,
             grade: u.designationRef?.level || '',
-            primaryManagerId: u.reportingManagers?.[0] || null,
+            primaryManagerId: effectivePrimaryMgrId,
             secondaryManagers,
             directReportsCount: children.length,
             totalDownstreamCount: totalDownstream,
@@ -234,9 +391,9 @@ const getOrgTree = async (companyId, {
         const rootNode = buildNode(userMap.get(String(rootUserId)));
         if (rootNode) tree.push(rootNode);
     } else {
-        // 1. Natural roots: users with no primary manager, or whose manager is not in the active dataset
+        // 1. Natural roots: users with no primary manager in the target dataset
         for (const u of allUsers) {
-            const primaryMgrId = u.reportingManagers?.[0] ? String(u.reportingManagers[0]) : null;
+            const primaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
             if (!primaryMgrId || !userMap.has(primaryMgrId) || primaryMgrId === String(u._id)) {
                 const node = buildNode(u);
                 if (node) tree.push(node);
@@ -253,8 +410,8 @@ const getOrgTree = async (companyId, {
         }
     }
 
-    // Apply department or business unit filtering if requested
-    if (departmentId || businessUnitId || (search && search.trim())) {
+    // Apply department, business unit, search, or employment type filtering if requested
+    if (departmentId || businessUnitId || (search && search.trim()) || hasEmploymentTypesFilter) {
         const matchesFilter = (node) => {
             let match = true;
             if (departmentId && String(node.departmentId) !== String(departmentId)) {
@@ -269,6 +426,11 @@ const getOrgTree = async (companyId, {
                 const email = (node.email || '').toLowerCase();
                 const desig = (node.designation || '').toLowerCase();
                 if (!fullName.includes(s) && !email.includes(s) && !desig.includes(s)) {
+                    match = false;
+                }
+            }
+            if (hasEmploymentTypesFilter) {
+                if (!matchesEmploymentType(node.employmentType, employmentTypes)) {
                     match = false;
                 }
             }
@@ -301,42 +463,34 @@ const getOrgTree = async (companyId, {
 };
 
 /**
- * Summary stats for headcount, department distribution, and span-of-control.
+ * Summary stats for headcount and people managers.
+ * Total Headcount strictly mirrors dashboard calculation (active workforce excluding primary admin system user and non-workforce users).
+ * People Managers counts active managers who are part of the total workforce and have workforce reports.
  */
 const getOrgStats = async (companyId) => {
-    const allUsers = await User.find({ companyId, isDeleted: { $ne: true } })
-        .select('_id firstName lastName department departmentRef designationRef isActive reportingManagers')
-        .populate('departmentRef', 'name')
-        .populate('designationRef', 'title level')
-        .lean();
+    const { totalWorkforceUsers, totalWorkforceUserIdsSet, allUsersBasicMap } = await getWorkforceContext(
+        companyId,
+        { includeInactive: false }
+    );
 
-    const activeUsers = allUsers.filter((u) => u.isActive !== false);
-    const departmentCounts = {};
-    const managerReportCounts = {};
+    const totalHeadcount = totalWorkforceUsers.length;
 
-    for (const u of activeUsers) {
-        const deptName = u.departmentRef?.name || u.department || 'Unassigned';
-        departmentCounts[deptName] = (departmentCounts[deptName] || 0) + 1;
-
-        if (u.reportingManagers?.[0]) {
-            const mgrId = String(u.reportingManagers[0]);
-            managerReportCounts[mgrId] = (managerReportCounts[mgrId] || 0) + 1;
+    // People managers who are in the total workforce:
+    // A manager must themselves be in total workforce AND have at least one active workforce subordinate reporting to them
+    const managersInTotalWorkforce = new Set();
+    for (const u of totalWorkforceUsers) {
+        const effMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, totalWorkforceUserIdsSet);
+        if (effMgrId && effMgrId !== String(u._id) && totalWorkforceUserIdsSet.has(effMgrId)) {
+            managersInTotalWorkforce.add(effMgrId);
         }
     }
 
-    const managersCount = Object.keys(managerReportCounts).length;
-    const totalReportsAcrossManagers = Object.values(managerReportCounts).reduce((a, b) => a + b, 0);
-    const avgSpanOfControl = managersCount > 0 ? (totalReportsAcrossManagers / managersCount).toFixed(1) : 0;
+    const managersCount = managersInTotalWorkforce.size;
 
     return {
-        totalHeadcount: activeUsers.length,
-        inactiveCount: allUsers.length - activeUsers.length,
-        managersCount,
-        averageSpanOfControl: Number(avgSpanOfControl),
-        departmentDistribution: Object.entries(departmentCounts).map(([department, count]) => ({
-            department,
-            count
-        }))
+        totalHeadcount,
+        totalEmployees: totalHeadcount,
+        managersCount
     };
 };
 

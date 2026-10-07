@@ -21,18 +21,26 @@ const isGlobalOrgViewer = (user) => {
 const getOrgChart = async (req, res) => {
     try {
         const companyId = req.companyId || req.user?.companyId;
-        const { rootUserId, departmentId, businessUnitId, search, includeInactive } = req.query;
+        const { rootUserId, departmentId, businessUnitId, search, includeInactive, employmentTypes } = req.query;
 
         const isGlobal = isGlobalOrgViewer(req.user);
         // If not global viewer, enforce root to the logged-in user so they only see themselves and their subordinates
         const effectiveRootUserId = isGlobal ? rootUserId : String(req.user?._id);
+
+        let parsedEmploymentTypes = [];
+        if (Array.isArray(employmentTypes)) {
+            parsedEmploymentTypes = employmentTypes.map((t) => String(t).trim()).filter(Boolean);
+        } else if (typeof employmentTypes === 'string' && employmentTypes.trim()) {
+            parsedEmploymentTypes = employmentTypes.split(',').map((t) => t.trim()).filter(Boolean);
+        }
 
         const result = await hierarchyService.getOrgTree(companyId, {
             rootUserId: effectiveRootUserId,
             departmentId: isGlobal ? departmentId : undefined,
             businessUnitId: isGlobal ? businessUnitId : undefined,
             search,
-            includeInactive: includeInactive === 'true'
+            includeInactive: includeInactive === 'true',
+            employmentTypes: parsedEmploymentTypes
         });
 
         res.json(result);
@@ -179,11 +187,28 @@ const getOrgStats = async (req, res) => {
             hierarchyService.getAllReports(req.user?._id, companyId)
         ]);
 
+        const userInWorkforce = req.user?.isTotalWorkforce !== false;
+        const workforceReports = allReports.filter((r) => r.isTotalWorkforce !== false);
+        const scopedTotalHeadcount = (userInWorkforce ? 1 : 0) + workforceReports.length;
+
+        const managerIdsInBranch = new Set();
+        if (directReports.length > 0 && userInWorkforce) {
+            managerIdsInBranch.add(String(req.user?._id));
+        }
+        for (const r of workforceReports) {
+            if (r.reportingManagers?.[0]) {
+                const mgrId = String(r.reportingManagers[0]);
+                if (workforceReports.some((w) => String(w._id) === mgrId) || (userInWorkforce && String(req.user?._id) === mgrId)) {
+                    managerIdsInBranch.add(mgrId);
+                }
+            }
+        }
+
         res.json({
-            totalEmployees: 1 + allReports.length,
+            totalHeadcount: scopedTotalHeadcount,
+            totalEmployees: scopedTotalHeadcount,
+            managersCount: managerIdsInBranch.size,
             activeEmployees: 1 + allReports.filter((r) => r.isActive !== false).length,
-            totalDepartments: new Set(allReports.map((r) => r.departmentRef?._id || r.department).filter(Boolean)).size,
-            totalDesignations: new Set(allReports.map((r) => r.designationRef?._id || r.designation).filter(Boolean)).size,
             rootNodesCount: 1,
             directReportsCount: directReports.length
         });
