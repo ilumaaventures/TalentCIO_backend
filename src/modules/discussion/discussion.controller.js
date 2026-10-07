@@ -128,18 +128,89 @@ exports.createDiscussion = async (req, res) => {
 exports.getDiscussions = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit, 10) || 100;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.max(1, parseInt(req.query.limit, 10) || 20);
         const skip = (page - 1) * limit;
 
         const accessMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
-        if (req.query.status) {
+        if (req.query.project) {
+            accessMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+        }
+
+        // Summary counts across all project discussions (for KPI cards and tab badges)
+        let counts = null;
+        let metrics = null;
+        if (req.query.project) {
+            const baseProjectMatch = buildAccessibleDiscussionMatch(req.companyId, req.user);
+            baseProjectMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+            baseProjectMatch.isDeleted = { $ne: true };
+
+            const [statusAgg, allProjectDiscs] = await Promise.all([
+                Discussion.aggregate([
+                    { $match: baseProjectMatch },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ]),
+                Discussion.find(baseProjectMatch).select('_id').lean()
+            ]);
+
+            const statusMap = {};
+            let totalProjectDiscs = 0;
+            statusAgg.forEach(s => {
+                const key = s._id || 'inprogress';
+                statusMap[key] = s.count;
+                totalProjectDiscs += s.count;
+            });
+
+            const discIds = allProjectDiscs.map(d => d._id);
+            let totalHours = 0;
+            if (discIds.length > 0) {
+                const hoursAgg = await WorkLog.aggregate([
+                    {
+                        $match: {
+                            discussion: { $in: discIds },
+                            isDeleted: { $ne: true }
+                        }
+                    },
+                    { $group: { _id: null, total: { $sum: '$hours' } } }
+                ]);
+                totalHours = Number((hoursAgg[0]?.total || 0).toFixed(1));
+            }
+
+            counts = {
+                all: totalProjectDiscs,
+                inprogress: statusMap['inprogress'] || 0,
+                planning: statusMap['planning'] || 0,
+                'on-hold': statusMap['on-hold'] || 0,
+                'mark as complete': (statusMap['mark as complete'] || 0) + (statusMap['completed'] || 0) + (statusMap['complete'] || 0)
+            };
+
+            metrics = {
+                totalDiscussions: totalProjectDiscs,
+                inProgress: counts.inprogress,
+                completed: counts['mark as complete'],
+                totalHoursLogged: totalHours
+            };
+        }
+
+        if (req.query.status && req.query.status !== 'all') {
             accessMatch.status = req.query.status;
         } else if (req.query.excludeCompleted === 'true' || req.query.excludeCompleted === true) {
             accessMatch.status = { $nin: ['mark as complete', 'completed', 'complete'] };
         }
-        if (req.query.project) {
-            accessMatch.project = req.query.project === 'null' ? null : new mongoose.Types.ObjectId(String(req.query.project));
+
+        if (req.query.search && req.query.search.trim()) {
+            const searchRegex = new RegExp(req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            const searchConditions = [
+                { title: searchRegex },
+                { discussion: searchRegex }
+            ];
+            if (accessMatch.$or) {
+                accessMatch.$and = accessMatch.$and || [];
+                accessMatch.$and.push({ $or: accessMatch.$or }, { $or: searchConditions });
+                delete accessMatch.$or;
+            } else {
+                accessMatch.$or = searchConditions;
+            }
         }
 
         const queryUserId = req.query.userId;
@@ -166,7 +237,7 @@ exports.getDiscussions = async (req, res) => {
                 }
             }
         }
-        if (req.query.priority) {
+        if (req.query.priority && req.query.priority !== 'all') {
             if (req.query.priority === 'Medium') {
                 accessMatch.$and = accessMatch.$and || [];
                 accessMatch.$and.push({
@@ -179,6 +250,7 @@ exports.getDiscussions = async (req, res) => {
                 accessMatch.priority = req.query.priority;
             }
         }
+        accessMatch.isDeleted = { $ne: true };
         const total = await Discussion.countDocuments(accessMatch);
 
         let discussions = await Discussion.aggregate([
@@ -206,8 +278,11 @@ exports.getDiscussions = async (req, res) => {
         res.status(200).json({
             discussions,
             currentPage: page,
-            totalPages: Math.ceil(total / limit),
-            total
+            totalPages: Math.ceil(total / limit) || 1,
+            total,
+            limit,
+            counts,
+            metrics
         });
     } catch (error) {
         console.error('Error fetching discussions:', error);
