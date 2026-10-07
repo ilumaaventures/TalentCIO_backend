@@ -4,6 +4,7 @@ const Module = require('../task/module.model');
 const Task = require('../task/task.model');
 const TaskActivity = require('../task/taskActivity.model');
 const WorkLog = require('../timesheet/workLog.model');
+const Discussion = require('../discussion/discussion.model');
 const User = require('../user/user.model');
 
 const isAdminOrManager = (user) => {
@@ -488,8 +489,24 @@ const getEmployeePerformance = async (req, res) => {
         let days = 30;
         if (range === '7d') days = 7;
         else if (range === '90d') days = 90;
+        else if (range === 'all' || range === 'all_time') days = 3650;
 
-        const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const cutoffDate = (range === 'all' || range === 'all_time')
+            ? new Date(0)
+            : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+        // Fetch all projects where user is explicitly allocated (manager or member)
+        const allocatedProjects = await Project.find({
+            companyId,
+            isDeleted: { $ne: true },
+            $or: [
+                { members: userId },
+                { manager: userId }
+            ]
+        })
+            .populate('client', 'name')
+            .select('name status client manager members startDate dueDate estimatedHours isActive')
+            .lean();
 
         // Find all tasks assigned to user created or updated within range
         const tasks = await Task.find({
@@ -501,7 +518,7 @@ const getEmployeePerformance = async (req, res) => {
             .populate({
                 path: 'module',
                 select: 'name project',
-                populate: { path: 'project', select: 'name' }
+                populate: { path: 'project', select: 'name status client' }
             })
             .lean();
 
@@ -509,17 +526,114 @@ const getEmployeePerformance = async (req, res) => {
         const totalAssigned = tasks.length;
         const totalCompleted = completedTasks.length;
 
-        // Worklogs in date range
+        // Worklogs in date range with project details
         const worklogs = await WorkLog.find({
             user: userId,
             companyId,
             isDeleted: { $ne: true },
             date: { $gte: cutoffDate }
-        }).select('hours date project task').lean();
+        })
+            .populate('project', 'name status client')
+            .populate('task', 'name')
+            .sort({ date: -1 })
+            .lean();
 
         const totalLoggedHours = Number(worklogs.reduce((sum, w) => sum + (Number(w.hours) || 0), 0).toFixed(2));
         const totalEstimatedHours = Number(tasks.reduce((sum, t) => sum + (Number(t.estimatedHours) || 0), 0).toFixed(2));
         const estimationRatio = totalEstimatedHours > 0 ? Number((totalLoggedHours / totalEstimatedHours).toFixed(2)) : null;
+
+        // Discussions created & completed in range
+        const userDiscussions = await Discussion.find({
+            companyId,
+            isDeleted: { $ne: true },
+            $or: [
+                { createdBy: userId },
+                { supervisor: userId },
+                { participants: userId }
+            ],
+            createdAt: { $gte: cutoffDate }
+        }).select('status createdBy supervisor participants').lean();
+
+        const discussionsCreated = userDiscussions.filter(d => String(d.createdBy) === String(userId)).length;
+        const discussionsCompleted = userDiscussions.filter(d =>
+            ['mark as complete', 'completed', 'complete'].includes(String(d.status || '').toLowerCase())
+        ).length;
+
+        // Breakdown per project
+        const projectMap = new Map();
+
+        allocatedProjects.forEach(p => {
+            const pId = String(p._id);
+            const isMgr = String(p.manager?._id || p.manager) === String(userId);
+            projectMap.set(pId, {
+                _id: pId,
+                name: p.name || 'Untitled Project',
+                status: p.status || (p.isActive !== false ? 'Active' : 'Completed'),
+                clientName: p.client?.name || '-',
+                role: isMgr ? 'Project Manager' : 'Team Member',
+                isAllocated: true,
+                loggedHours: 0,
+                estimatedHours: 0,
+                tasksAssigned: 0,
+                tasksCompleted: 0
+            });
+        });
+
+        tasks.forEach(t => {
+            const proj = t.module?.project;
+            const projId = proj?._id || proj;
+            if (projId) {
+                const pId = String(projId);
+                if (!projectMap.has(pId)) {
+                    projectMap.set(pId, {
+                        _id: pId,
+                        name: proj?.name || 'Project',
+                        status: proj?.status || 'Active',
+                        clientName: '-',
+                        role: 'Assignee',
+                        isAllocated: false,
+                        loggedHours: 0,
+                        estimatedHours: 0,
+                        tasksAssigned: 0,
+                        tasksCompleted: 0
+                    });
+                }
+                const entry = projectMap.get(pId);
+                entry.tasksAssigned++;
+                if (t.status === 'DONE') entry.tasksCompleted++;
+                entry.estimatedHours += Number(t.estimatedHours || 0);
+            }
+        });
+
+        worklogs.forEach(w => {
+            const proj = w.project;
+            const projId = proj?._id || proj;
+            if (projId) {
+                const pId = String(projId);
+                if (!projectMap.has(pId)) {
+                    projectMap.set(pId, {
+                        _id: pId,
+                        name: proj?.name || 'Project',
+                        status: proj?.status || 'Active',
+                        clientName: '-',
+                        role: 'Contributor',
+                        isAllocated: false,
+                        loggedHours: 0,
+                        estimatedHours: 0,
+                        tasksAssigned: 0,
+                        tasksCompleted: 0
+                    });
+                }
+                const entry = projectMap.get(pId);
+                entry.loggedHours = Number((entry.loggedHours + (Number(w.hours) || 0)).toFixed(2));
+            }
+        });
+
+        const projectBreakdown = Array.from(projectMap.values()).map(p => ({
+            ...p,
+            loggedHours: Number(p.loggedHours.toFixed(2)),
+            estimatedHours: Number(p.estimatedHours.toFixed(2))
+        })).sort((a, b) => b.loggedHours - a.loggedHours || b.tasksAssigned - a.tasksAssigned);
 
         // Timing & On-time completion
         let completedWithDueDate = 0;
@@ -569,7 +683,7 @@ const getEmployeePerformance = async (req, res) => {
         const bucketIntervalDays = days <= 14 ? 1 : 7;
         const trendMap = new Map();
 
-        for (let i = 0; i < days; i += bucketIntervalDays) {
+        for (let i = 0; i < Math.min(days, 90); i += bucketIntervalDays) {
             const bStart = new Date(cutoffDate.getTime() + i * 24 * 60 * 60 * 1000);
             const bEnd = new Date(bStart.getTime() + bucketIntervalDays * 24 * 60 * 60 * 1000);
             const key = bStart.toISOString().slice(0, 10);
@@ -646,7 +760,24 @@ const getEmployeePerformance = async (req, res) => {
                 reopenedTasks: reopenedCount,
                 reworkRate
             },
-            trend
+            discussions: {
+                created: discussionsCreated,
+                completed: discussionsCompleted
+            },
+            trend,
+            projectsAllocated: {
+                totalAllocated: allocatedProjects.length,
+                totalActiveAllocated: allocatedProjects.filter(p => p.status === 'Active' || p.isActive !== false).length,
+                list: projectBreakdown
+            },
+            recentLogs: worklogs.slice(0, 20).map(w => ({
+                _id: w._id,
+                date: w.date,
+                hours: Number(w.hours || 0),
+                description: w.description || '',
+                projectName: w.project?.name || 'Project',
+                taskTitle: w.task?.name || 'General Task'
+            }))
         });
     } catch (error) {
         console.error('[PerformanceController] getEmployeePerformance error:', error);
