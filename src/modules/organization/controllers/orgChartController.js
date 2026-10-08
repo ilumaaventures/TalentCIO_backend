@@ -13,6 +13,16 @@ const isGlobalOrgViewer = (user) => {
     );
 };
 
+const canManageOrgChart = (user) => {
+    const userRoles = (user?.roles || []).map((r) => (typeof r === 'string' ? r : r?.name));
+    return (
+        userRoles.some((r) => ['Admin', 'Super Admin', 'System Admin'].includes(r))
+        || (user?.permissions || []).includes('org_chart.manage')
+        || (user?.permissions || []).includes('*')
+        || Boolean(user?.hasAllPermissions)
+    );
+};
+
 /**
  * Get organization tree/forest with optional filtering.
  * If user has full permission (org_chart.view / Admin), returns complete company tree.
@@ -21,17 +31,20 @@ const isGlobalOrgViewer = (user) => {
 const getOrgChart = async (req, res) => {
     try {
         const companyId = req.companyId || req.user?.companyId;
-        const { rootUserId, departmentId, businessUnitId, search, includeInactive, employmentTypes } = req.query;
+        const { rootUserId, departmentId, businessUnitId, search, includeInactive, employmentTypes, showReportingManagers } = req.query;
 
         const isGlobal = isGlobalOrgViewer(req.user);
+        const canManage = canManageOrgChart(req.user);
         // If not global viewer, enforce root to the logged-in user so they only see themselves and their subordinates
         const effectiveRootUserId = isGlobal ? rootUserId : String(req.user?._id);
 
         let parsedEmploymentTypes = [];
-        if (Array.isArray(employmentTypes)) {
-            parsedEmploymentTypes = employmentTypes.map((t) => String(t).trim()).filter(Boolean);
-        } else if (typeof employmentTypes === 'string' && employmentTypes.trim()) {
-            parsedEmploymentTypes = employmentTypes.split(',').map((t) => t.trim()).filter(Boolean);
+        if (canManage) {
+            if (Array.isArray(employmentTypes)) {
+                parsedEmploymentTypes = employmentTypes.map((t) => String(t).trim()).filter(Boolean);
+            } else if (typeof employmentTypes === 'string' && employmentTypes.trim()) {
+                parsedEmploymentTypes = employmentTypes.split(',').map((t) => t.trim()).filter(Boolean);
+            }
         }
 
         const result = await hierarchyService.getOrgTree(companyId, {
@@ -40,7 +53,8 @@ const getOrgChart = async (req, res) => {
             businessUnitId: isGlobal ? businessUnitId : undefined,
             search,
             includeInactive: includeInactive === 'true',
-            employmentTypes: parsedEmploymentTypes
+            employmentTypes: parsedEmploymentTypes,
+            showReportingManagers: canManage && showReportingManagers === 'true'
         });
 
         res.json(result);

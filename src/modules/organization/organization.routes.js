@@ -65,8 +65,8 @@ router.get('/org-chart/:userId/reporting-line', requireModule('organization'), g
 router.put('/org-chart/:userId/manager', authorize('org_chart.manage'), requireModule('organization'), updateReportingManager);
 
 // --- BUSINESS UNITS ---
-router.get('/business-units', authorizeAny(['business_unit.read', 'department.read', 'department.create', 'department.update', 'designation.read', 'user.create', 'user.update', 'dossier.edit', 'org_chart.view', 'project.read', 'client.read', 'client.create']), requireModule('businessUnits'), getBusinessUnits);
-router.get('/business-units/:id', authorizeAny(['business_unit.read', 'department.read', 'org_chart.view']), requireModule('businessUnits'), getBusinessUnit);
+router.get('/business-units', authorizeAny(['business_unit.read', 'business_unit.create', 'business_unit.update', 'department.create', 'department.update', 'user.create', 'user.update', 'project.read', 'client.read', 'client.create']), requireModule('businessUnits'), getBusinessUnits);
+router.get('/business-units/:id', authorizeAny(['business_unit.read', 'business_unit.create', 'business_unit.update']), requireModule('businessUnits'), getBusinessUnit);
 router.post('/business-units', authorizeAny(['business_unit.create', 'department.create']), requireModule('businessUnits'), createBusinessUnit);
 router.put('/business-units/:id', authorizeAny(['business_unit.update', 'department.update']), requireModule('businessUnits'), updateBusinessUnit);
 router.delete('/business-units/:id', authorizeAny(['business_unit.delete', 'department.delete']), requireModule('businessUnits'), deleteBusinessUnit);
