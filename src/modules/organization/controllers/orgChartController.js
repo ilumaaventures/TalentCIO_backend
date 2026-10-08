@@ -205,6 +205,7 @@ const getOrgStats = async (req, res) => {
         }
 
         res.json({
+            totalWorkforce: scopedTotalHeadcount,
             totalHeadcount: scopedTotalHeadcount,
             totalEmployees: scopedTotalHeadcount,
             managersCount: managerIdsInBranch.size,
