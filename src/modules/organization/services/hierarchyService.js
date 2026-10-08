@@ -297,14 +297,18 @@ const getOrgTree = async (companyId, {
 
     const hasEmploymentTypesFilter = Array.isArray(employmentTypes) && employmentTypes.length > 0;
 
-    // By default, strictly include Total Workforce members.
-    // If employment types filter is active, also include non-workforce users matching the filter.
-    const targetUserIdsSet = new Set(totalWorkforceUserIdsSet);
+    // By default (when no employment type filter is set), strictly include Total Workforce members.
+    // If employment types filter is active, only include matching users for the selected type(s).
+    const targetUserIdsSet = new Set();
     if (hasEmploymentTypesFilter) {
         for (const u of filteredUsers) {
             if (matchesEmploymentType(u.employmentType, employmentTypes)) {
                 targetUserIdsSet.add(String(u._id));
             }
+        }
+    } else {
+        for (const id of totalWorkforceUserIdsSet) {
+            targetUserIdsSet.add(id);
         }
     }
 
@@ -488,6 +492,7 @@ const getOrgStats = async (companyId) => {
     const managersCount = managersInTotalWorkforce.size;
 
     return {
+        totalWorkforce: totalHeadcount,
         totalHeadcount,
         totalEmployees: totalHeadcount,
         managersCount
