@@ -283,7 +283,8 @@ const getOrgTree = async (companyId, {
     businessUnitId = null,
     search = '',
     includeInactive = false,
-    employmentTypes = []
+    employmentTypes = [],
+    showReportingManagers = false
 } = {}) => {
     const {
         totalWorkforceUsers,
@@ -298,12 +299,32 @@ const getOrgTree = async (companyId, {
     const hasEmploymentTypesFilter = Array.isArray(employmentTypes) && employmentTypes.length > 0;
 
     // By default (when no employment type filter is set), strictly include Total Workforce members.
-    // If employment types filter is active, only include matching users for the selected type(s).
+    // If employment types filter is active:
+    // - When showReportingManagers is false (default): strictly include only matching users for the selected type(s).
+    // - When showReportingManagers is true: include matching users AND their upward reporting manager chain.
     const targetUserIdsSet = new Set();
     if (hasEmploymentTypesFilter) {
-        for (const u of filteredUsers) {
-            if (matchesEmploymentType(u.employmentType, employmentTypes)) {
-                targetUserIdsSet.add(String(u._id));
+        const matchingUsers = filteredUsers.filter((u) => matchesEmploymentType(u.employmentType, employmentTypes));
+        for (const u of matchingUsers) {
+            targetUserIdsSet.add(String(u._id));
+        }
+
+        if (showReportingManagers) {
+            for (const u of matchingUsers) {
+                let curr = u;
+                const visitedChain = new Set([String(u._id)]);
+                while (curr && curr.reportingManagers && curr.reportingManagers.length > 0) {
+                    const primaryMgrId = String(curr.reportingManagers[0]);
+                    if (visitedChain.has(primaryMgrId)) break;
+                    visitedChain.add(primaryMgrId);
+
+                    if (allUsersBasicMap.has(primaryMgrId)) {
+                        targetUserIdsSet.add(primaryMgrId);
+                        curr = allUsersBasicMap.get(primaryMgrId);
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     } else {
@@ -321,13 +342,42 @@ const getOrgTree = async (companyId, {
         .lean();
 
     const userMap = new Map(allUsers.map((u) => [String(u._id), u]));
-    const childrenMap = new Map();
 
+    // Construct parent-child relationships with strict cycle prevention
+    // Sort users by createdAt ascending so senior/earlier accounts take precedence as parents
+    const sortedUsers = [...allUsers].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
+    const parentMap = new Map();
+    const hasPathInParentMap = (fromId, toId) => {
+        let curr = fromId;
+        const visited = new Set();
+        while (curr && parentMap.has(curr)) {
+            if (visited.has(curr)) break;
+            visited.add(curr);
+            curr = parentMap.get(curr);
+            if (curr === toId) return true;
+        }
+        return false;
+    };
+
+    for (const u of sortedUsers) {
+        const uId = String(u._id);
+        const candidateMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
+        if (candidateMgrId && userMap.has(candidateMgrId) && candidateMgrId !== uId) {
+            // Prevent cycles: only attach as child if candidateMgr is not already a descendant of uId
+            if (!hasPathInParentMap(candidateMgrId, uId)) {
+                parentMap.set(uId, candidateMgrId);
+            }
+        }
+    }
+
+    const childrenMap = new Map();
     for (const u of allUsers) {
-        const primaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
-        if (primaryMgrId && userMap.has(primaryMgrId) && primaryMgrId !== String(u._id)) {
-            if (!childrenMap.has(primaryMgrId)) childrenMap.set(primaryMgrId, []);
-            childrenMap.get(primaryMgrId).push(u);
+        const uId = String(u._id);
+        const parentId = parentMap.get(uId);
+        if (parentId && userMap.has(parentId)) {
+            if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+            childrenMap.get(parentId).push(u);
         }
     }
 
@@ -354,7 +404,7 @@ const getOrgTree = async (companyId, {
             }
         }
 
-        const effectivePrimaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
+        const effectivePrimaryMgrId = parentMap.get(uId) || null;
         const secondaryManagerIds = (u.reportingManagers || []).slice(1).map(String);
         const secondaryManagers = secondaryManagerIds
             .map((id) => userMap.get(id))
@@ -395,10 +445,10 @@ const getOrgTree = async (companyId, {
         const rootNode = buildNode(userMap.get(String(rootUserId)));
         if (rootNode) tree.push(rootNode);
     } else {
-        // 1. Natural roots: users with no primary manager in the target dataset
+        // 1. Natural roots: users with no parent in parentMap
         for (const u of allUsers) {
-            const primaryMgrId = getEffectiveWorkforceManagerId(u, allUsersBasicMap, targetUserIdsSet);
-            if (!primaryMgrId || !userMap.has(primaryMgrId) || primaryMgrId === String(u._id)) {
+            const uId = String(u._id);
+            if (!parentMap.has(uId)) {
                 const node = buildNode(u);
                 if (node) tree.push(node);
             }
@@ -413,6 +463,9 @@ const getOrgTree = async (companyId, {
             }
         }
     }
+
+    // Sort roots so the primary organizational hierarchy (highest downstream count) is presented first
+    tree.sort((a, b) => (b.totalDownstreamCount || 0) - (a.totalDownstreamCount || 0));
 
     // Apply department, business unit, search, or employment type filtering if requested
     if (departmentId || businessUnitId || (search && search.trim()) || hasEmploymentTypesFilter) {
