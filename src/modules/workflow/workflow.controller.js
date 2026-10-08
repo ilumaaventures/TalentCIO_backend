@@ -3,13 +3,25 @@ const ApprovalWorkflow = require('../workflow/approvalWorkflow.model');
 
 const mapLevel = (l) => {
     const isObjectId = l.role && mongoose.Types.ObjectId.isValid(l.role) && String(new mongoose.Types.ObjectId(l.role)) === String(l.role);
+    const approvers = (l.approvers || [])
+        .map(id => {
+            const rawId = typeof id === 'object' && id?._id ? id._id : id;
+            return mongoose.Types.ObjectId.isValid(rawId) ? new mongoose.Types.ObjectId(rawId) : rawId;
+        })
+        .filter(Boolean);
+
     return {
         levelCheck: Number(l.levelCheck) || 1,
-        role: isObjectId ? l.role : null,
+        role: isObjectId ? new mongoose.Types.ObjectId(l.role) : null,
         roleName: typeof l.role === 'string' && !isObjectId ? l.role : (l.roleName || ''),
-        approvers: l.approvers || [],
+        approvers,
         isFinal: Boolean(l.isFinal)
     };
+};
+
+const getCompanyQuery = (companyId) => {
+    const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
+    return { $in: [companyId, compObjId].filter(Boolean) };
 };
 
 const handleWorkflowWriteError = (error, res) => {
@@ -27,9 +39,10 @@ const handleWorkflowWriteError = (error, res) => {
 exports.createWorkflow = async (req, res) => {
     try {
         const { name, description, levels, module, isActive } = req.body;
+        const compObjId = mongoose.Types.ObjectId.isValid(req.companyId) ? new mongoose.Types.ObjectId(req.companyId) : req.companyId;
 
         const workflow = await ApprovalWorkflow.create({
-            companyId: req.companyId,
+            companyId: compObjId,
             name,
             description,
             levels: (levels || []).map(mapLevel),
@@ -52,7 +65,7 @@ exports.getWorkflows = async (req, res) => {
             query.module = req.query.module;
         }
 
-        const workflows = await ApprovalWorkflow.find({ ...query, companyId: req.companyId })
+        const workflows = await ApprovalWorkflow.find({ ...query, companyId: getCompanyQuery(req.companyId) })
             .populate('levels.role', 'name')
             .populate('levels.approvers', 'firstName lastName email');
         res.status(200).json(workflows);
@@ -65,7 +78,7 @@ exports.getWorkflows = async (req, res) => {
 // --- Get Single Workflow ---
 exports.getWorkflowById = async (req, res) => {
     try {
-        const workflow = await ApprovalWorkflow.findOne({ _id: req.params.id, companyId: req.companyId })
+        const workflow = await ApprovalWorkflow.findOne({ _id: req.params.id, companyId: getCompanyQuery(req.companyId) })
             .populate('levels.role', 'name')
             .populate('levels.approvers', 'firstName lastName email');
         if (!workflow) return res.status(404).json({ message: 'Workflow not found' });
@@ -85,7 +98,7 @@ exports.updateWorkflow = async (req, res) => {
         }
 
         const workflow = await ApprovalWorkflow.findOneAndUpdate(
-            { _id: req.params.id, companyId: req.companyId },
+            { _id: req.params.id, companyId: getCompanyQuery(req.companyId) },
             updateData,
             { new: true, runValidators: true }
         );

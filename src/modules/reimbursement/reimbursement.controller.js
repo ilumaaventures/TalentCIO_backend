@@ -47,7 +47,7 @@ const isValidApproverForLevel = (workflow, level, userId) => {
     const levels = workflow?.levels || [];
     const lvl    = levels.find(l => Number(l.levelCheck) === Number(level));
     if (!lvl) return false;
-    const approverIds = (lvl.approvers || []).map(id => String(id));
+    const approverIds = (lvl.approvers || []).map(id => String(id?._id || id));
     return approverIds.includes(String(userId));
 };
 
@@ -199,12 +199,13 @@ exports.submitClaim = async (req, res) => {
         }
 
         // Look up active approval workflow for Reimbursement
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const workflow = await ApprovalWorkflow.findOne({
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             module:   'Reimbursement',
             isActive: true,
             isDeleted: { $ne: true }
-        }).lean();
+        }).sort({ updatedAt: -1 }).lean();
 
         const otherCategoryName = (req.body?.otherCategoryName || parsedItems[0]?.otherCategoryName || '').trim();
 
@@ -242,7 +243,7 @@ exports.submitClaim = async (req, res) => {
         // Notify level 1 approvers if a workflow is configured
         if (workflow?.levels?.length) {
             const lvl1 = workflow.levels.find(l => Number(l.levelCheck) === 1);
-            const approverIds = (lvl1?.approvers || []).map(id => id);
+            const approverIds = (lvl1?.approvers || []).map(id => String(id?._id || id));
             await notifyUsers(io, approverIds, {
                 companyId,
                 title:    'New Reimbursement Claim',
@@ -269,11 +270,12 @@ exports.submitClaim = async (req, res) => {
 exports.getMyClaims = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const { page, limit, skip } = buildPaginationOpts(req.query);
         const { status, category, from, to } = req.query;
 
         const filter = {
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             employee:  req.user._id,
             isDeleted: { $ne: true }
         };
@@ -317,9 +319,10 @@ exports.getMyClaims = async (req, res) => {
 exports.getClaimById = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const claim = await Reimbursement.findOne({
             _id: req.params.id,
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             isDeleted: { $ne: true }
         })
             .populate('employee', 'firstName lastName email department designation profilePicture employeeCode')
@@ -333,13 +336,30 @@ exports.getClaimById = async (req, res) => {
         // Only the employee or an approver may view the detail
         const userId = String(req.user._id);
         const isOwner = String(claim.employee._id || claim.employee) === userId;
-        const isAdmin = (req.user.roles || []).some(r => ['Admin', 'System Admin', 'HR Admin'].includes(typeof r === 'string' ? r : r?.name));
+        const isAdmin = (req.user.roles || []).some(r => ['Admin', 'System Admin', 'HR Admin'].includes(typeof r === 'string' ? r : r?.name))
+            || (req.user.permissions || []).includes('reimbursement.manage') || (req.user.permissions || []).includes('*');
+
         if (!isOwner && !isAdmin) {
             // Allow approvers in workflow
             const approverIds = (claim.approvalWorkflow?.levels || [])
                 .flatMap(l => l.approvers || [])
-                .map(id => String(id));
-            if (!approverIds.includes(userId))
+                .map(id => String(id?._id || id));
+
+            let hasActiveWfAccess = false;
+            if (!claim.approvalWorkflow) {
+                const activeWf = await ApprovalWorkflow.findOne({
+                    companyId: { $in: [companyId, compObjId].filter(Boolean) },
+                    module: 'Reimbursement',
+                    isActive: true,
+                    isDeleted: { $ne: true }
+                }).sort({ updatedAt: -1 }).lean();
+                const activeApproverIds = (activeWf?.levels || [])
+                    .flatMap(l => l.approvers || [])
+                    .map(id => String(id?._id || id));
+                if (activeApproverIds.includes(userId)) hasActiveWfAccess = true;
+            }
+
+            if (!approverIds.includes(userId) && !hasActiveWfAccess)
                 return res.status(403).json({ message: 'Access denied.' });
         }
 
@@ -531,11 +551,12 @@ exports.updateClaim = async (req, res) => {
 exports.getAllClaims = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const { page, limit, skip } = buildPaginationOpts(req.query);
         const { status, category, employeeId, from, to } = req.query;
 
         const filter = {
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             isDeleted: { $ne: true }
         };
 
@@ -581,6 +602,7 @@ exports.getAllClaims = async (req, res) => {
 exports.getPendingApprovals = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const { page, limit, skip } = buildPaginationOpts(req.query);
         const userId = req.user._id;
 
@@ -589,43 +611,88 @@ exports.getPendingApprovals = async (req, res) => {
         ) || (req.user.permissions || []).includes('reimbursement.manage') || (req.user.permissions || []).includes('*');
 
         let filter = {
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             isDeleted: { $ne: true },
             status: { $in: ['Pending', 'L1 Approved', 'L2 Approved'] }
         };
 
         if (!isAdmin) {
             // Find active workflows where this user is an approver at any level
+            // We search workflows by companyId and module without nested approvers path
+            // to avoid Mongoose BSON casting discrepancies on nested arrays of ObjectIds vs strings.
             const workflows = await ApprovalWorkflow.find({
-                companyId,
+                companyId: { $in: [companyId, compObjId].filter(Boolean) },
                 module:   'Reimbursement',
                 isActive: true,
-                isDeleted: { $ne: true },
-                'levels.approvers': userId
-            }).lean();
+                isDeleted: { $ne: true }
+            }).sort({ updatedAt: -1 }).lean();
 
             // Collect all level numbers at which this user appears, per workflow
             const approverLevelMap = {};
             workflows.forEach(wf => {
-                wf.levels.forEach(lvl => {
-                    if ((lvl.approvers || []).some(id => String(id) === String(userId))) {
-                        if (!approverLevelMap[String(wf._id)]) approverLevelMap[String(wf._id)] = new Set();
-                        approverLevelMap[String(wf._id)].add(Number(lvl.levelCheck));
+                (wf.levels || []).forEach(lvl => {
+                    const isApprover = (lvl.approvers || []).some(id => {
+                        const idStr = String(id?._id || id);
+                        return idStr === String(userId);
+                    });
+                    if (isApprover) {
+                        const wfIdStr = String(wf._id);
+                        if (!approverLevelMap[wfIdStr]) approverLevelMap[wfIdStr] = new Set();
+                        approverLevelMap[wfIdStr].add(Number(lvl.levelCheck));
                     }
                 });
             });
 
             const workflowIds = Object.keys(approverLevelMap);
-            const levelConditions = workflowIds.flatMap(wfId =>
-                [...approverLevelMap[wfId]].map(level => ({
-                    approvalWorkflow: wfId,
-                    currentLevel:     level
-                }))
-            );
 
-            if (levelConditions.length === 0) {
+            if (workflowIds.length === 0) {
                 return res.json({ claims: [], isApprover: false, pagination: { page, limit, total: 0, pages: 0 } });
             }
+
+            // If user is a Level 1 approver in any active workflow:
+            // 1) Auto-link any pending unlinked claims in this company to the primary active workflow
+            const isLevel1Approver = workflowIds.some(wfId => approverLevelMap[wfId].has(1));
+            if (isLevel1Approver && workflows.length > 0) {
+                const primaryWf = workflows[0];
+                await Reimbursement.updateMany(
+                    {
+                        companyId: { $in: [companyId, compObjId].filter(Boolean) },
+                        isDeleted: { $ne: true },
+                        status: 'Pending',
+                        $or: [
+                            { approvalWorkflow: null },
+                            { approvalWorkflow: { $exists: false } }
+                        ]
+                    },
+                    { $set: { approvalWorkflow: primaryWf._id, currentLevel: 1 } }
+                );
+            }
+
+            // 2) Build level conditions
+            const levelConditions = [];
+            workflowIds.forEach(wfId => {
+                const currentWfObjId = mongoose.Types.ObjectId.isValid(wfId) ? new mongoose.Types.ObjectId(wfId) : null;
+                approverLevelMap[wfId].forEach(level => {
+                    levelConditions.push({
+                        approvalWorkflow: currentWfObjId || wfId,
+                        currentLevel: level
+                    });
+                    if (currentWfObjId && String(currentWfObjId) !== String(wfId)) {
+                        levelConditions.push({
+                            approvalWorkflow: wfId,
+                            currentLevel: level
+                        });
+                    }
+
+                    // For level 1, also include any claims where approvalWorkflow is null/unset
+                    if (level === 1) {
+                        levelConditions.push(
+                            { approvalWorkflow: null, currentLevel: 1 },
+                            { approvalWorkflow: { $exists: false }, currentLevel: 1 }
+                        );
+                    }
+                });
+            });
 
             filter.$or = levelConditions;
         }
@@ -658,6 +725,7 @@ exports.getPendingApprovals = async (req, res) => {
 exports.actionClaim = async (req, res) => {
     try {
         const companyId = getCompanyId(req);
+        const compObjId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
         const io        = req.app.get('io');
         const { action, comment } = req.body || {};
 
@@ -667,7 +735,7 @@ exports.actionClaim = async (req, res) => {
 
         let claim = await Reimbursement.findOne({
             _id: req.params.id,
-            companyId,
+            companyId: { $in: [companyId, compObjId].filter(Boolean) },
             isDeleted: { $ne: true }
         }).populate('approvalWorkflow');
 
@@ -676,14 +744,27 @@ exports.actionClaim = async (req, res) => {
             return res.status(400).json({ message: `Claim cannot be actioned in status "${claim.status}".` });
         }
 
+        const isAdmin = (req.user.roles || []).some(r =>
+            ['Admin', 'System Admin', 'HR Admin'].includes(typeof r === 'string' ? r : r?.name)
+        ) || (req.user.permissions || []).includes('reimbursement.manage') || (req.user.permissions || []).includes('*');
+
         const isOwner = String(claim.employee) === String(req.user._id);
         if (isOwner && !isAdmin) {
             return res.status(403).json({ message: 'You cannot approve or reject your own reimbursement claim.' });
         }
 
-        const isAdmin = (req.user.roles || []).some(r =>
-            ['Admin', 'System Admin', 'HR Admin'].includes(typeof r === 'string' ? r : r?.name)
-        ) || (req.user.permissions || []).includes('reimbursement.manage') || (req.user.permissions || []).includes('*');
+        // If claim didn't have approvalWorkflow linked, attach the active one
+        if (!claim.approvalWorkflow) {
+            const activeWf = await ApprovalWorkflow.findOne({
+                companyId: { $in: [companyId, compObjId].filter(Boolean) },
+                module: 'Reimbursement',
+                isActive: true,
+                isDeleted: { $ne: true }
+            }).sort({ updatedAt: -1 });
+            if (activeWf) {
+                claim.approvalWorkflow = activeWf;
+            }
+        }
 
         // Check if user is an approver in the workflow level
         const isApprover = isValidApproverForLevel(claim.approvalWorkflow, claim.currentLevel, req.user._id);
