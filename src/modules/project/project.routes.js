@@ -46,7 +46,7 @@ router.delete('/:id', authorize('project.delete'), requireModule('projects'), de
 
 // Modules
 router.get('/:projectId/modules', requireModule(['projects', 'timesheet', 'attendance']), getModules);
-router.post('/modules', authorize('project.create'), requireModule('projects'), createModule);
+router.post('/modules', authorize(['project.create', 'project.update', 'discussion.create', 'task.create']), requireModule('projects'), createModule);
 router.put('/modules/:id', authorize('project.update'), requireModule('projects'), updateModule);
 router.delete('/modules/:id', authorize('module.delete'), requireModule('projects'), deleteModule);
 

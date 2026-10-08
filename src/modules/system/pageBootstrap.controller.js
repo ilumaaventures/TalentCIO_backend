@@ -745,6 +745,17 @@ exports.getDiscussionsBootstrap = async (req, res) => {
                 accessMatch.priority = req.query.priority;
             }
         }
+        if (req.query.createdBy && req.query.createdBy !== 'all') {
+            if (MongooseObjectId.isValid(req.query.createdBy)) {
+                accessMatch.createdBy = new MongooseObjectId(String(req.query.createdBy));
+            }
+        }
+        if (req.query.module && req.query.module !== 'all') {
+            accessMatch.module = (req.query.module === 'none' || req.query.module === 'null')
+                ? null
+                : (MongooseObjectId.isValid(req.query.module) ? new MongooseObjectId(String(req.query.module)) : undefined);
+            if (accessMatch.module === undefined) delete accessMatch.module;
+        }
         const totalPromise = Discussion.countDocuments(accessMatch);
         const discussionsPromise = Discussion.aggregate([
             { $match: accessMatch },
@@ -774,7 +785,8 @@ exports.getDiscussionsBootstrap = async (req, res) => {
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
             { path: 'supervisor', select: 'firstName lastName email profilePicture' },
             { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' },
-            { path: 'project', select: 'name' }
+            { path: 'project', select: 'name' },
+            { path: 'module', select: 'name' }
         ]);
 
         if (discussions && discussions.length > 0) {

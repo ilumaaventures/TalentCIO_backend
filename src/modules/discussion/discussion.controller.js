@@ -1,6 +1,7 @@
 const Discussion = require('./discussion.model');
 const User = require('../../modules/user/user.model');
 const WorkLog = require('../../modules/timesheet/workLog.model');
+const Module = require('../task/module.model');
 const NotificationService = require('../../services/notificationService');
 const mongoose = require('mongoose');
 const {
@@ -50,7 +51,7 @@ const attachWorkLogTotals = async (discussions) => {
 
 exports.createDiscussion = async (req, res) => {
     try {
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, priority, hours } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds = [], participantUserId, project, module: discussionModule, priority, hours } = req.body;
         let selectedSupervisorIds = Array.isArray(supervisor)
             ? [...supervisor]
             : (supervisor || participantUserId ? [supervisor || participantUserId] : []);
@@ -89,6 +90,7 @@ exports.createDiscussion = async (req, res) => {
             visibleToUsers: normalizedVisibleTo,
             participants: buildDiscussionParticipants(req.user._id, selectedSupervisorIds, normalizedVisibleTo),
             project: (project && mongoose.isValidObjectId(project)) ? project : null,
+            module: (discussionModule && mongoose.isValidObjectId(discussionModule)) ? discussionModule : null,
             priority: priority || 'Medium',
             hours: (hours !== undefined && hours !== null && hours !== '') ? Number(hours) : null
         });
@@ -116,6 +118,7 @@ exports.createDiscussion = async (req, res) => {
             .populate('supervisor', 'firstName lastName email profilePicture')
             .populate('visibleToUsers', 'firstName lastName email profilePicture')
             .populate('project', 'name')
+            .populate('module', 'name')
             .lean();
 
         res.status(201).json({ message: 'Discussion created successfully', discussion: attachDiscussionPermissions(populatedDiscussion, req.user) });
@@ -250,6 +253,17 @@ exports.getDiscussions = async (req, res) => {
                 accessMatch.priority = req.query.priority;
             }
         }
+        if (req.query.createdBy && req.query.createdBy !== 'all') {
+            if (mongoose.isValidObjectId(req.query.createdBy)) {
+                accessMatch.createdBy = new mongoose.Types.ObjectId(String(req.query.createdBy));
+            }
+        }
+        if (req.query.module && req.query.module !== 'all') {
+            accessMatch.module = (req.query.module === 'none' || req.query.module === 'null')
+                ? null
+                : (mongoose.isValidObjectId(req.query.module) ? new mongoose.Types.ObjectId(String(req.query.module)) : undefined);
+            if (accessMatch.module === undefined) delete accessMatch.module;
+        }
         accessMatch.isDeleted = { $ne: true };
         const total = await Discussion.countDocuments(accessMatch);
 
@@ -269,7 +283,8 @@ exports.getDiscussions = async (req, res) => {
             { path: 'createdBy', select: 'firstName lastName email profilePicture' },
             { path: 'supervisor', select: 'firstName lastName email profilePicture' },
             { path: 'visibleToUsers', select: 'firstName lastName email profilePicture' },
-            { path: 'project', select: 'name' }
+            { path: 'project', select: 'name' },
+            { path: 'module', select: 'name' }
         ]);
 
         discussions = await attachWorkLogTotals(discussions);
@@ -297,6 +312,7 @@ exports.getDiscussionById = async (req, res) => {
             .populate('supervisor', 'firstName lastName email profilePicture')
             .populate('visibleToUsers', 'firstName lastName email profilePicture')
             .populate('project', 'name')
+            .populate('module', 'name')
             .lean();
         if (!discussion) return res.status(404).json({ message: 'Discussion not found' });
         if (!canAccessDiscussion(discussion, req.user)) {
@@ -322,7 +338,7 @@ exports.getDiscussionById = async (req, res) => {
 exports.updateDiscussion = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project, priority, hours } = req.body;
+        const { title, discussion, status, dueDate, supervisor, visibleToUserIds, participantUserId, project, module: discussionModule, priority, hours } = req.body;
 
         const existingDiscussion = await Discussion.findOne({ _id: id, companyId: req.companyId });
         if (!existingDiscussion) return res.status(404).json({ message: 'Discussion not found' });
@@ -350,6 +366,10 @@ exports.updateDiscussion = async (req, res) => {
         }
         if (project !== undefined) {
             updateData.project = (project && mongoose.isValidObjectId(project)) ? project : null;
+        }
+        if (discussionModule !== undefined || req.body.module !== undefined) {
+            const modVal = discussionModule !== undefined ? discussionModule : req.body.module;
+            updateData.module = (modVal && mongoose.isValidObjectId(modVal)) ? modVal : null;
         }
         if (priority !== undefined) {
             updateData.priority = priority;
@@ -410,6 +430,7 @@ exports.updateDiscussion = async (req, res) => {
          .populate('supervisor', 'firstName lastName email profilePicture')
          .populate('visibleToUsers', 'firstName lastName email profilePicture')
          .populate('project', 'name')
+         .populate('module', 'name')
          .lean();
 
         res.status(200).json({ message: 'Discussion updated successfully', discussion: attachDiscussionPermissions(updatedDiscussion, req.user) });

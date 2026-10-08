@@ -476,6 +476,11 @@ module.exports = [
         description: "Create discussions"
     },
     {
+        key: "discussion.view_all",
+        module: "DISCUSSION",
+        description: "View all discussions and filter by creator"
+    },
+    {
         key: "announcement.manage",
         module: "ANNOUNCEMENT",
         description: "Create, publish, edit, and delete internal announcements"
