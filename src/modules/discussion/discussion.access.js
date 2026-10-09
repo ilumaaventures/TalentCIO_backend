@@ -36,12 +36,27 @@ const isSupervisor = (discussion, userId) => {
     return supervisors.some((s) => idsMatch(s?._id || s, userId));
 };
 
+const canViewAllDiscussions = (user) => {
+    if (!user) return false;
+    const permissions = user.permissions || [];
+    if (
+        permissions.includes('*') ||
+        permissions.includes('all') ||
+        permissions.includes('discussion.view_all') ||
+        permissions.includes('discussion.viewAll') ||
+        permissions.includes('discussion.read_all')
+    ) {
+        return true;
+    }
+    return isDiscussionAdmin(user);
+};
+
 const buildAccessibleDiscussionMatch = (companyId, user) => {
     const match = {
         companyId: toObjectId(companyId)
     };
 
-    if (isDiscussionAdmin(user)) {
+    if (canViewAllDiscussions(user)) {
         return match;
     }
 
@@ -59,7 +74,7 @@ const buildAccessibleDiscussionMatch = (companyId, user) => {
 
 const canAccessDiscussion = (discussion, user) => {
     if (!discussion || !user) return false;
-    if (isDiscussionAdmin(user)) return true;
+    if (canViewAllDiscussions(user)) return true;
 
     return (
         idsMatch(discussion.createdBy?._id || discussion.createdBy, user._id) ||
@@ -119,5 +134,6 @@ module.exports = {
     canChangeRestrictedDiscussionStatus,
     canDeleteDiscussion,
     canEditDiscussion,
+    canViewAllDiscussions,
     isDiscussionAdmin
 };

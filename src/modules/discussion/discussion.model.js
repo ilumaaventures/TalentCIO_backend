@@ -48,6 +48,11 @@ const discussionSchema = new mongoose.Schema({
         ref: 'Project',
         default: null
     },
+    module: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Module',
+        default: null
+    },
     priority: {
         type: String,
         enum: ['Urgent', 'High', 'Medium', 'Low'],
@@ -63,6 +68,7 @@ const discussionSchema = new mongoose.Schema({
 discussionSchema.index({ supervisor: 1, companyId: 1, createdAt: -1 });
 discussionSchema.index({ visibleToUsers: 1, companyId: 1, createdAt: -1 });
 discussionSchema.index({ participants: 1, companyId: 1, createdAt: -1 });
+discussionSchema.index({ module: 1, companyId: 1 });
 discussionSchema.index({ companyId: 1, isDeleted: 1 });
 
 discussionSchema.plugin(softDeletePlugin);
