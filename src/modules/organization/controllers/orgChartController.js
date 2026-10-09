@@ -5,23 +5,31 @@ const hierarchyService = require('../services/hierarchyService');
 
 const isGlobalOrgViewer = (user) => {
     const userRoles = (user?.roles || []).map((r) => (typeof r === 'string' ? r : r?.name));
+    const permissions = user?.permissions || [];
     return (
         userRoles.some((r) => ['Admin', 'Super Admin', 'System Admin'].includes(r))
-        || (user?.permissions || []).includes('org_chart.view')
-        || (user?.permissions || []).includes('*')
+        || permissions.includes('org_chart.view')
+        || permissions.includes('org.chart.view')
+        || permissions.includes('*')
         || Boolean(user?.hasAllPermissions)
     );
 };
 
 const canManageOrgChart = (user) => {
     const userRoles = (user?.roles || []).map((r) => (typeof r === 'string' ? r : r?.name));
+    const permissions = user?.permissions || [];
     return (
         userRoles.some((r) => ['Admin', 'Super Admin', 'System Admin'].includes(r))
-        || (user?.permissions || []).includes('org_chart.manage')
-        || (user?.permissions || []).includes('*')
+        || permissions.includes('org_chart.manage')
+        || permissions.includes('org.chart.manage')
+        || permissions.includes('*')
         || Boolean(user?.hasAllPermissions)
     );
 };
+
+const canViewOrgStats = (user) => (
+    isGlobalOrgViewer(user) || canManageOrgChart(user)
+);
 
 /**
  * Get organization tree/forest with optional filtering.
@@ -189,6 +197,14 @@ const updateReportingManager = async (req, res) => {
 const getOrgStats = async (req, res) => {
     try {
         const companyId = req.companyId || req.user?.companyId;
+
+        // Verify user has org_chart.view or org_chart.manage (or Admin)
+        if (!canViewOrgStats(req.user)) {
+            return res.status(403).json({
+                message: 'You do not have permission to view organization chart statistics.'
+            });
+        }
+
         const isGlobal = isGlobalOrgViewer(req.user);
 
         if (isGlobal) {

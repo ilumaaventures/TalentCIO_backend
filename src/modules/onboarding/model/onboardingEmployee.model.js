@@ -17,7 +17,9 @@ const documentSchema = new mongoose.Schema({
     requireLivePhoto: { type: Boolean, default: false }, // HR can require live camera capture instead of file upload
     livePhotoMetadata: {
         capturedAt: { type: Date },
-        address: { type: String, default: '' }
+        address: { type: String, default: '' },
+        latitude: { type: Number, default: null },
+        longitude: { type: Number, default: null }
     }
 }, { _id: true });
 
@@ -82,6 +84,7 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     workLocation: { type: String, default: '' },
     address: { type: String, default: '' },
     probationPeriod: { type: String, default: '' },
+    employmentType: { type: String, default: 'Full Time' },
 
     // --- Salary / Compensation ---
     salary: { type: mongoose.Schema.Types.Mixed, default: {} },

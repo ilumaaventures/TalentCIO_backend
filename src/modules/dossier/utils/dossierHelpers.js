@@ -437,6 +437,77 @@ const ensureTransferredBankDocument = async (profile, userId, companyId) => {
     return profile;
 };
 
+const ensureTransferredLivePhotoProfile = async (profile, targetUser, companyId) => {
+    if (!profile || !targetUser || !companyId) return profile;
+
+    if (targetUser.profilePicture && profile.personal?.photo) {
+        return profile;
+    }
+
+    try {
+        const onboardingEmployee = await OnboardingEmployee.findOne({
+            transferredToUserId: targetUser._id,
+            companyId
+        })
+            .select('documents')
+            .lean();
+
+        if (!onboardingEmployee || !Array.isArray(onboardingEmployee.documents)) {
+            return profile;
+        }
+
+        const livePhotoDoc = onboardingEmployee.documents.find(
+            doc => (doc.type === 'live_photo' || doc.requireLivePhoto) && doc.url
+        ) || onboardingEmployee.documents.find(
+            doc => doc.type === 'passport_photo' && doc.url
+        );
+
+        if (!livePhotoDoc || !livePhotoDoc.url) {
+            return profile;
+        }
+
+        let updatedProfile = false;
+
+        const meta = livePhotoDoc.livePhotoMetadata || {};
+        const lat = (meta.latitude !== undefined && meta.latitude !== null && meta.latitude !== '') ? Number(meta.latitude) : null;
+        const lng = (meta.longitude !== undefined && meta.longitude !== null && meta.longitude !== '') ? Number(meta.longitude) : null;
+        const capturedDate = meta.capturedAt ? new Date(meta.capturedAt) : (livePhotoDoc.uploadedAt || new Date());
+
+        const profilePictureMetadata = {
+            latitude: (lat !== null && !isNaN(lat)) ? lat : null,
+            longitude: (lng !== null && !isNaN(lng)) ? lng : null,
+            timestamp: isNaN(capturedDate.getTime()) ? new Date() : capturedDate,
+            address: String(meta.address || '').trim()
+        };
+
+        if (!targetUser.profilePicture) {
+            targetUser.profilePicture = livePhotoDoc.url;
+            targetUser.profilePictureMetadata = profilePictureMetadata;
+            await User.findByIdAndUpdate(targetUser._id, {
+                profilePicture: livePhotoDoc.url,
+                profilePictureMetadata: profilePictureMetadata
+            });
+        }
+
+        if (!profile.personal) {
+            profile.personal = {};
+        }
+
+        if (!profile.personal.photo) {
+            profile.personal.photo = livePhotoDoc.url;
+            updatedProfile = true;
+        }
+
+        if (updatedProfile) {
+            await profile.save();
+        }
+    } catch (err) {
+        console.error('[dossierHelpers] Error syncing transferred live photo:', err.message);
+    }
+
+    return profile;
+};
+
 const filterProfileFields = (profile, viewer, isSelf) => {
     let profileObj = profile.toObject();
     const roles = (viewer && Array.isArray(viewer.roles)) ? viewer.roles : [];
@@ -602,6 +673,7 @@ module.exports = {
     buildTransferredOnboardingCustomFiles,
     normalizeTransferredIdentityDocuments,
     ensureTransferredBankDocument,
+    ensureTransferredLivePhotoProfile,
     filterProfileFields,
     checkIsAdmin,
     hasPermission,

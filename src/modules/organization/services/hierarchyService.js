@@ -333,6 +333,12 @@ const getOrgTree = async (companyId, {
         }
     }
 
+    // If a specific rootUserId is requested and exists in the company (even if non-workforce e.g. isTotalWorkforce === false),
+    // ensure this root user is included so their specific subordinate branch can be built without falling back to company roots.
+    if (rootUserId && allUsersBasicMap.has(String(rootUserId))) {
+        targetUserIdsSet.add(String(rootUserId));
+    }
+
     const allUsers = await User.find({
         _id: { $in: Array.from(targetUserIdsSet) }
     })
@@ -441,9 +447,14 @@ const getOrgTree = async (companyId, {
 
     let tree = [];
 
-    if (rootUserId && userMap.has(String(rootUserId))) {
-        const rootNode = buildNode(userMap.get(String(rootUserId)));
-        if (rootNode) tree.push(rootNode);
+    if (rootUserId) {
+        const rootIdStr = String(rootUserId);
+        if (userMap.has(rootIdStr)) {
+            const rootNode = buildNode(userMap.get(rootIdStr));
+            if (rootNode) tree.push(rootNode);
+        }
+        // Critical: When rootUserId is provided (scoped view), NEVER fall back to natural roots!
+        // This ensures non-workforce users or non-global viewers never receive full company hierarchy by default.
     } else {
         // 1. Natural roots: users with no parent in parentMap
         for (const u of allUsers) {
@@ -512,8 +523,19 @@ const getOrgTree = async (companyId, {
         tree = tree.map(pruneTree).filter(Boolean);
     }
 
+    const countVisibleEmployees = (nodes) => {
+        let count = 0;
+        for (const node of nodes) {
+            count += 1;
+            if (Array.isArray(node.children) && node.children.length > 0) {
+                count += countVisibleEmployees(node.children);
+            }
+        }
+        return count;
+    };
+
     return {
-        totalEmployees: allUsers.length,
+        totalEmployees: rootUserId ? countVisibleEmployees(tree) : allUsers.length,
         rootCount: tree.length,
         tree
     };

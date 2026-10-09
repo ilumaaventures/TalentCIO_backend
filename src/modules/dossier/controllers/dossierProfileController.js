@@ -3,6 +3,7 @@ const User = require('../../user/user.model');
 const {
     normalizeTransferredIdentityDocuments,
     ensureTransferredBankDocument,
+    ensureTransferredLivePhotoProfile,
     normalizeProfileDocumentWorkflow,
     filterProfileFields,
     checkIsAdmin,
@@ -39,7 +40,7 @@ exports.getDossier = async (req, res) => {
             .select('+identity.aadhaarNumber +identity.panNumber +identity.passportNumber +compensation.ctc +compensation.bankDetails.accountNumber')
             .populate({
                 path: 'user',
-                select: 'firstName lastName email employeeCode roles department joiningDate employmentType workLocation',
+                select: 'firstName lastName email employeeCode roles department joiningDate employmentType workLocation profilePicture profilePictureMetadata',
                 populate: { path: 'roles', select: 'name' }
             })
             .populate('employment.businessUnit', 'name')
@@ -82,7 +83,7 @@ exports.getDossier = async (req, res) => {
             profile = await EmployeeProfile.findById(profile._id)
                 .populate({
                     path: 'user',
-                    select: 'firstName lastName email employeeCode roles department joiningDate employmentType workLocation',
+                    select: 'firstName lastName email employeeCode roles department joiningDate employmentType workLocation profilePicture profilePictureMetadata',
                     populate: { path: 'roles', select: 'name' }
                 })
                 .populate('employment.businessUnit', 'name')
@@ -151,6 +152,7 @@ exports.getDossier = async (req, res) => {
 
         profile = await normalizeTransferredIdentityDocuments(profile);
         profile = await ensureTransferredBankDocument(profile, userId, req.companyId);
+        profile = await ensureTransferredLivePhotoProfile(profile, targetUser, req.companyId);
         profile = await normalizeProfileDocumentWorkflow(profile);
 
         let filteredProfile = filterProfileFields(profile, req.user, isSelf);

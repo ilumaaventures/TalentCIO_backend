@@ -916,6 +916,49 @@ exports.getProjectBootstrap = async (req, res) => {
             assignedOnly: req.query.assignedOnly === 'true'
         });
 
+        const canReadClients = isAdminUser(req.user) || hasPermission(req.user, 'client.read');
+        const canReadBUs = isAdminUser(req.user) || hasPermission(req.user, 'business_unit.read');
+
+        // User Performance permissions:
+        // project.userperformance.view ONLY works when user has user.read permission
+        const canViewAllUserPerformance = isAdminUser(req.user) || (
+            hasPermission(req.user, 'project.userperformance.view') &&
+            hasPermission(req.user, 'user.read')
+        );
+        const canViewTeam = hasPermission(req.user, 'project.view_team');
+
+        // Direct reports for team performance tracking
+        const directReports = (canViewTeam || canViewAllUserPerformance)
+            ? await User.find({ reportingManagers: req.user._id, companyId: req.companyId, isDeleted: { $ne: true } }).select('_id').lean()
+            : [];
+        const teamUserIds = directReports.map(u => u._id.toString());
+        teamUserIds.push(req.user._id.toString());
+
+        let employeePromise;
+        if (canViewAllUserPerformance || canManageProjects) {
+            employeePromise = User.find({ companyId: req.companyId, isDeleted: { $ne: true } })
+                .select('firstName lastName email department profilePicture profilePhoto')
+                .sort({ firstName: 1, lastName: 1 })
+                .lean();
+        } else if (canViewTeam) {
+            employeePromise = User.find({
+                companyId: req.companyId,
+                _id: { $in: teamUserIds },
+                isDeleted: { $ne: true }
+            })
+                .select('firstName lastName email department profilePicture profilePhoto')
+                .sort({ firstName: 1, lastName: 1 })
+                .lean();
+        } else {
+            employeePromise = User.find({
+                companyId: req.companyId,
+                _id: req.user._id,
+                isDeleted: { $ne: true }
+            })
+                .select('firstName lastName email department profilePicture profilePhoto')
+                .lean();
+        }
+
         const [projects, clients, businessUnits, employees] = await Promise.all([
             Project.find(projectFilter)
                 .populate('client', 'name')
@@ -923,27 +966,29 @@ exports.getProjectBootstrap = async (req, res) => {
                 .populate('members', '_id')
                 .sort({ createdAt: -1 })
                 .lean(),
-            canManageProjects
+            (canReadClients || canManageProjects)
                 ? Client.find({ companyId: req.companyId })
                     .populate('businessUnit', 'name')
                     .sort({ name: 1 })
                     .lean()
                 : Promise.resolve([]),
-            canManageProjects
+            (canReadBUs || canManageProjects)
                 ? BusinessUnit.find({ companyId: req.companyId })
                     .populate('headOfUnit', 'firstName lastName')
                     .sort({ createdAt: -1 })
                     .lean()
                 : Promise.resolve([]),
-            canManageProjects
-                ? User.find({ companyId: req.companyId })
-                    .select('firstName lastName email')
-                    .sort({ firstName: 1, lastName: 1 })
-                    .lean()
-                : Promise.resolve([])
+            employeePromise
         ]);
 
-        res.json({ projects, clients, businessUnits, employees });
+        res.json({
+            projects,
+            clients,
+            businessUnits,
+            employees,
+            teamUserIds,
+            canViewAllUserPerformance: Boolean(canViewAllUserPerformance)
+        });
     } catch (error) {
         console.error('getProjectBootstrap error:', error);
         res.status(500).json({ message: 'Failed to fetch project bootstrap' });
