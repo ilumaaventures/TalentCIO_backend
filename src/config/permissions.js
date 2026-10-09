@@ -164,6 +164,11 @@ module.exports = [
         description: "View projects of direct reports"
     },
     {
+        key: "project.userperformance.view",
+        module: "PROJECT",
+        description: "View performance of all users (Note: requires user.read permission to take effect)"
+    },
+    {
         key: "project.hierarchy",
         module: "PROJECT",
         description: "View Project Hierarchy"

@@ -106,6 +106,9 @@ const updateRole = async (req, res) => {
             { $inc: { tokenVersion: 1 } }
         );
 
+        const { clearAllAuthUserCache } = require('../../common/middleware/authMiddleware');
+        clearAllAuthUserCache();
+
         // Return populated role for the frontend
         const populated = await Role.findById(updatedRole._id)
             .populate('permissions')

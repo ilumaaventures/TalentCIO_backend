@@ -466,17 +466,26 @@ const getEmployeePerformance = async (req, res) => {
         const companyId = new mongoose.Types.ObjectId(req.companyId);
         const range = req.query.range || '30d'; // 7d, 30d, 90d
 
-        // Check permission: Own profile, direct report, or Admin
+        // Check permission: Own profile, direct report (if project.view_team), or view all user performance
         const isSelf = String(req.user._id) === String(userId);
-        const isAdmin = isAdminOrManager(req.user) || (req.user.permissions || []).includes('project.read');
-        let isManager = false;
+        const userPermissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+        const hasAllPerms = req.user?.hasAllPermissions === true || userPermissions.includes('*') || userPermissions.includes('admin');
 
-        if (!isSelf && !isAdmin) {
-            const directReport = await User.findOne({ _id: userId, reportingManagers: req.user._id, companyId }).select('_id');
-            if (directReport) isManager = true;
+        // project.userperformance.view ONLY works when user has user.read permission
+        const canViewAllUserPerformance = isAdminOrManager(req.user) || (
+            hasAllPerms || (userPermissions.includes('project.userperformance.view') && userPermissions.includes('user.read'))
+        );
+
+        let isTeamMember = false;
+        if (!isSelf && !canViewAllUserPerformance) {
+            const canViewTeam = userPermissions.includes('project.view_team');
+            if (canViewTeam) {
+                const directReport = await User.findOne({ _id: userId, reportingManagers: req.user._id, companyId }).select('_id');
+                if (directReport) isTeamMember = true;
+            }
         }
 
-        if (!isSelf && !isAdmin && !isManager) {
+        if (!isSelf && !canViewAllUserPerformance && !isTeamMember) {
             return res.status(403).json({ message: 'Not authorized to view performance for this user' });
         }
 
