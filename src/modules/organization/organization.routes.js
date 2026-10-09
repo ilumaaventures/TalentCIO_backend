@@ -60,9 +60,9 @@ router.post('/designations/:id/restore', authorize('designation.delete'), restor
 
 // --- ORG CHART ---
 router.get('/org-chart', requireModule('organization'), getOrgChart);
-router.get('/org-chart/stats', requireModule('organization'), getOrgStats);
+router.get('/org-chart/stats', authorizeAny(['org_chart.view', 'org.chart.view', 'org_chart.manage', 'org.chart.manage']), requireModule('organization'), getOrgStats);
 router.get('/org-chart/:userId/reporting-line', requireModule('organization'), getEmployeeReportingLine);
-router.put('/org-chart/:userId/manager', authorize('org_chart.manage'), requireModule('organization'), updateReportingManager);
+router.put('/org-chart/:userId/manager', authorizeAny(['org_chart.manage', 'org.chart.manage']), requireModule('organization'), updateReportingManager);
 
 // --- BUSINESS UNITS ---
 router.get('/business-units', authorizeAny(['business_unit.read', 'business_unit.create', 'business_unit.update', 'department.create', 'department.update', 'user.create', 'user.update', 'project.read', 'client.read', 'client.create']), requireModule('businessUnits'), getBusinessUnits);

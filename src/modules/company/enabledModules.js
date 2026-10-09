@@ -86,7 +86,7 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('helpdesk.')) return enabled.has('helpdesk');
         if (key.startsWith('discussion.')) return enabled.has('meetingsOfMinutes');
         if (key.startsWith('business_unit.')) return enabled.has('businessUnits');
-        if (key.startsWith('org_chart.')) return enabled.has('organization');
+        if (key.startsWith('org_chart.') || key.startsWith('org.chart.')) return enabled.has('organization');
         if (key.startsWith('client.')) return enabled.has('clients');
         if (key.startsWith('project.') || key.startsWith('module.') || key.startsWith('task.')) return enabled.has('projects');
         if (key.startsWith('dossier.') || key.startsWith('employee.revision.')) return enabled.has('employeeDossier');
