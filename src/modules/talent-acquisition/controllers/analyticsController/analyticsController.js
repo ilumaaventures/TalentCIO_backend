@@ -307,7 +307,7 @@ exports.getGlobalAnalytics = async (req, res) => {
                 pInterviewing++;
             } else if (c.decision === 'Rejected' || c.phase2Decision === 'Rejected' || c.phase3Decision === 'Rejected' || c.status === 'Rejected') {
                 pRejected++;
-            } else if (c.decision === 'Shortlisted' || c.phase2Decision === 'Shortlisted') {
+            } else if (c.decision === 'Shortlisted' || c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected') {
                 pScreened++;
             } else {
                 pSourced++;
@@ -600,7 +600,7 @@ exports.getClientAnalytics = async (req, res) => {
         const totalSourced = candidates.length;
 
         const joinedCount = candidates.filter(c => c.status === 'Joined' || c.decision === 'Joined' || c.decision === 'Selected' || c.phase3Decision === 'Joined').length;
-        const phase2ShortlistedCount = candidates.filter(c => c.decision === 'Shortlisted' || c.phase2Decision === 'Shortlisted').length;
+        const phase2ShortlistedCount = candidates.filter(c => c.decision === 'Shortlisted' || c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected').length;
         const phase2InInterviewsCount = candidates.filter(c => {
             const status = String(c.status || '').toLowerCase();
             return status.includes('interview') || (Array.isArray(c.interviewRounds) && c.interviewRounds.length > 0);
