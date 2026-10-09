@@ -121,6 +121,35 @@ exports.transferToActiveEmployee = async (req, res) => {
 
         const userPassword = password || generateTempPassword();
 
+        const livePhotoDoc = (employee.documents || []).find(
+            doc => (doc.type === 'live_photo' || doc.requireLivePhoto) && doc.url
+        ) || (employee.documents || []).find(
+            doc => doc.type === 'passport_photo' && doc.url
+        );
+
+        let transferredProfilePicture = '';
+        let transferredProfilePictureMetadata = {
+            latitude: null,
+            longitude: null,
+            timestamp: null,
+            address: ''
+        };
+
+        if (livePhotoDoc) {
+            transferredProfilePicture = livePhotoDoc.url;
+            const meta = livePhotoDoc.livePhotoMetadata || {};
+            const lat = (meta.latitude !== undefined && meta.latitude !== null && meta.latitude !== '') ? Number(meta.latitude) : null;
+            const lng = (meta.longitude !== undefined && meta.longitude !== null && meta.longitude !== '') ? Number(meta.longitude) : null;
+            const capturedDate = meta.capturedAt ? new Date(meta.capturedAt) : (livePhotoDoc.uploadedAt || new Date());
+
+            transferredProfilePictureMetadata = {
+                latitude: (lat !== null && !isNaN(lat)) ? lat : null,
+                longitude: (lng !== null && !isNaN(lng)) ? lng : null,
+                timestamp: isNaN(capturedDate.getTime()) ? new Date() : capturedDate,
+                address: String(meta.address || '').trim()
+            };
+        }
+
         const newUser = await User.create({
             companyId: req.companyId,
             firstName: employee.firstName,
@@ -135,7 +164,9 @@ exports.transferToActiveEmployee = async (req, res) => {
                 ? employeeCode.trim()
                 : (typeof employee.tempEmployeeId === 'string' && employee.tempEmployeeId.trim() !== '' ? employee.tempEmployeeId.trim() : undefined),
             joiningDate: employee.joiningDate || new Date(),
-            isPasswordResetRequired: true
+            isPasswordResetRequired: true,
+            profilePicture: transferredProfilePicture,
+            profilePictureMetadata: transferredProfilePictureMetadata
         });
 
         const personalDetails = employee.personalDetails || {};
@@ -236,6 +267,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 gender: personalDetails.gender || null,
                 bloodGroup: personalDetails.bloodGroup || '',
                 nationality: 'Indian',
+                photo: transferredProfilePicture || '',
                 joiningDate: employee.joiningDate || new Date()
             },
             identity: {},

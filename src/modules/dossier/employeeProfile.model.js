@@ -65,7 +65,9 @@ const DocumentVersionSchema = new mongoose.Schema({
     archiveReason: String,
     livePhotoMetadata: {
         capturedAt: { type: Date },
-        address: { type: String, default: '' }
+        address: { type: String, default: '' },
+        latitude: { type: Number, default: null },
+        longitude: { type: Number, default: null }
     }
 }, { _id: false });
 
@@ -212,7 +214,9 @@ const employeeProfileSchema = new mongoose.Schema({
         isDeleted: { type: Boolean, default: false },
         livePhotoMetadata: {
             capturedAt: { type: Date },
-            address: { type: String, default: '' }
+            address: { type: String, default: '' },
+            latitude: { type: Number, default: null },
+            longitude: { type: Number, default: null }
         },
         versionHistory: [DocumentVersionSchema]
     }],

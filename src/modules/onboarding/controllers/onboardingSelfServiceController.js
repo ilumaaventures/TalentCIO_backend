@@ -351,10 +351,27 @@ exports.uploadDocument = async (req, res) => {
         doc.rejectionReason = '';
         doc.uploadedAt = new Date();
 
-        if (doc.type === 'live_photo') {
+        if (doc.type === 'live_photo' || doc.requireLivePhoto) {
+            const rawLat = req.body.latitude;
+            const rawLng = req.body.longitude;
+            const parsedLat = (rawLat !== undefined && rawLat !== null && rawLat !== '') ? parseFloat(rawLat) : null;
+            const parsedLng = (rawLng !== undefined && rawLng !== null && rawLng !== '') ? parseFloat(rawLng) : null;
+            const validLat = (parsedLat !== null && !isNaN(parsedLat) && parsedLat >= -90 && parsedLat <= 90) ? parsedLat : null;
+            const validLng = (parsedLng !== null && !isNaN(parsedLng) && parsedLng >= -180 && parsedLng <= 180) ? parsedLng : null;
+
+            const capturedAtDate = req.body.timestamp ? new Date(req.body.timestamp) : new Date();
+            const safeCapturedAt = isNaN(capturedAtDate.getTime()) ? new Date() : capturedAtDate;
+
+            let resolvedAddress = String(req.body.address || '').trim();
+            if (!resolvedAddress && validLat !== null && validLng !== null) {
+                resolvedAddress = `Lat: ${validLat.toFixed(5)}°, Lon: ${validLng.toFixed(5)}°`;
+            }
+
             doc.livePhotoMetadata = {
-                capturedAt: new Date(),
-                address: req.body.address || ''
+                capturedAt: safeCapturedAt,
+                address: resolvedAddress,
+                latitude: validLat,
+                longitude: validLng
             };
         }
 

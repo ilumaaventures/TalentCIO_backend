@@ -763,6 +763,46 @@ const getMyself = async (req, res) => {
 
         const dossierStatus = checkDossierCompleteness(dossierProfile || {});
 
+        if (!req.user.profilePicture) {
+            try {
+                const OnboardingEmployee = require('../onboarding/model/onboardingEmployee.model');
+                const obEmp = await OnboardingEmployee.findOne({
+                    transferredToUserId: req.user._id,
+                    companyId: effectiveCompanyId
+                }).select('documents').lean();
+
+                if (obEmp && Array.isArray(obEmp.documents)) {
+                    const photoDoc = obEmp.documents.find(
+                        doc => (doc.type === 'live_photo' || doc.requireLivePhoto) && doc.url
+                    ) || obEmp.documents.find(
+                        doc => doc.type === 'passport_photo' && doc.url
+                    );
+
+                    if (photoDoc && photoDoc.url) {
+                        const meta = photoDoc.livePhotoMetadata || {};
+                        const lat = (meta.latitude !== undefined && meta.latitude !== null && meta.latitude !== '') ? Number(meta.latitude) : null;
+                        const lng = (meta.longitude !== undefined && meta.longitude !== null && meta.longitude !== '') ? Number(meta.longitude) : null;
+                        const capturedDate = meta.capturedAt ? new Date(meta.capturedAt) : (photoDoc.uploadedAt || new Date());
+                        const profilePictureMetadata = {
+                            latitude: (lat !== null && !isNaN(lat)) ? lat : null,
+                            longitude: (lng !== null && !isNaN(lng)) ? lng : null,
+                            timestamp: isNaN(capturedDate.getTime()) ? new Date() : capturedDate,
+                            address: String(meta.address || '').trim()
+                        };
+
+                        req.user.profilePicture = photoDoc.url;
+                        req.user.profilePictureMetadata = profilePictureMetadata;
+                        await User.findByIdAndUpdate(req.user._id, {
+                            profilePicture: photoDoc.url,
+                            profilePictureMetadata: profilePictureMetadata
+                        });
+                    }
+                }
+            } catch (syncErr) {
+                console.error('[getMyself] Live photo sync error:', syncErr.message);
+            }
+        }
+
         res.json({
             // Core identity
             _id: req.user._id,
@@ -822,6 +862,46 @@ const getUserById = async (req, res) => {
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (!user.profilePicture) {
+            try {
+                const OnboardingEmployee = require('../onboarding/model/onboardingEmployee.model');
+                const obEmp = await OnboardingEmployee.findOne({
+                    transferredToUserId: user._id,
+                    companyId: req.companyId
+                }).select('documents').lean();
+
+                if (obEmp && Array.isArray(obEmp.documents)) {
+                    const photoDoc = obEmp.documents.find(
+                        doc => (doc.type === 'live_photo' || doc.requireLivePhoto) && doc.url
+                    ) || obEmp.documents.find(
+                        doc => doc.type === 'passport_photo' && doc.url
+                    );
+
+                    if (photoDoc && photoDoc.url) {
+                        const meta = photoDoc.livePhotoMetadata || {};
+                        const lat = (meta.latitude !== undefined && meta.latitude !== null && meta.latitude !== '') ? Number(meta.latitude) : null;
+                        const lng = (meta.longitude !== undefined && meta.longitude !== null && meta.longitude !== '') ? Number(meta.longitude) : null;
+                        const capturedDate = meta.capturedAt ? new Date(meta.capturedAt) : (photoDoc.uploadedAt || new Date());
+                        const profilePictureMetadata = {
+                            latitude: (lat !== null && !isNaN(lat)) ? lat : null,
+                            longitude: (lng !== null && !isNaN(lng)) ? lng : null,
+                            timestamp: isNaN(capturedDate.getTime()) ? new Date() : capturedDate,
+                            address: String(meta.address || '').trim()
+                        };
+
+                        user.profilePicture = photoDoc.url;
+                        user.profilePictureMetadata = profilePictureMetadata;
+                        await User.findByIdAndUpdate(user._id, {
+                            profilePicture: photoDoc.url,
+                            profilePictureMetadata: profilePictureMetadata
+                        });
+                    }
+                }
+            } catch (syncErr) {
+                console.error('[getUserById] Live photo sync error:', syncErr.message);
+            }
         }
 
         // Fetch direct reports to allow frontend checkbox pre-filling
