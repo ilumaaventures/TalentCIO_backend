@@ -68,7 +68,7 @@ router.delete('/users/:id', blockDuringImpersonation, authorize('user.delete'), 
 
 // Role Routes
 router.get('/roles/bootstrap', authorize('role.read'), getRoleBootstrap);
-router.get('/roles', authorize('role.read'), getRoles);
+router.get('/roles', authorize(['role.read', 'onboarding.complete', 'onboarding.manage', 'onboarding.view', 'user.read', 'employee.read']), getRoles);
 router.post('/roles', blockDuringImpersonation, authorize('role.create'), createRole);
 router.put('/roles/:id', blockDuringImpersonation, authorize('role.update'), updateRole); // Assuming role.update permission exists or re-using role.create
 router.get('/permissions', getPermissions); // Assuming basic auth is enough to view permissions structure

@@ -70,7 +70,7 @@ const uploadBufferToCloudinary = async (buffer, folder, filename) => {
 
 exports.transferToActiveEmployee = async (req, res) => {
     try {
-        const { roleId, employeeCode, password } = req.body || {};
+        const { roleId, employeeCode, password, employmentType } = req.body || {};
 
         const employee = await OnboardingEmployee.findOne({ _id: req.params.id, companyId: req.companyId });
         if (!employee) return res.status(404).json({ message: 'Onboarding employee not found' });
@@ -102,13 +102,22 @@ exports.transferToActiveEmployee = async (req, res) => {
         }
 
         let assignedRoleId = roleId;
-        if (!assignedRoleId) {
+        if (assignedRoleId) {
+            const roleExists = await Role.findOne({ _id: assignedRoleId, companyId: req.companyId });
+            if (!roleExists) {
+                return res.status(400).json({ message: 'Selected System Permission (role) does not exist.' });
+            }
+        } else {
             const defaultRole = await Role.findOne({ name: 'Employee', companyId: req.companyId });
             if (!defaultRole) {
                 return res.status(400).json({ message: 'No roleId provided and no default "Employee" role found. Please specify a role.' });
             }
             assignedRoleId = defaultRole._id;
         }
+
+        const chosenEmploymentType = (typeof employmentType === 'string' && employmentType.trim() !== '')
+            ? employmentType.trim()
+            : (employee.employmentType || 'Full Time');
 
         const userPassword = password || generateTempPassword();
 
@@ -121,7 +130,7 @@ exports.transferToActiveEmployee = async (req, res) => {
             roles: [assignedRoleId],
             department: employee.department || '',
             workLocation: employee.workLocation || '',
-            employmentType: 'Full Time',
+            employmentType: chosenEmploymentType,
             employeeCode: (typeof employeeCode === 'string' && employeeCode.trim() !== '')
                 ? employeeCode.trim()
                 : (typeof employee.tempEmployeeId === 'string' && employee.tempEmployeeId.trim() !== '' ? employee.tempEmployeeId.trim() : undefined),
@@ -257,7 +266,7 @@ exports.transferToActiveEmployee = async (req, res) => {
                 status: 'Active',
                 workLocation: normalizedEmploymentWorkLocation,
                 branch: employee.workLocation || '',
-                employmentType: 'Full Time'
+                employmentType: chosenEmploymentType
             },
             compensation: {
                 ctc: employee.salary?.annualCTC ? (parseFloat(employee.salary.annualCTC) / 12) : (employee.salary?.monthlyCTC ? parseFloat(employee.salary.monthlyCTC) : null),
@@ -281,6 +290,7 @@ exports.transferToActiveEmployee = async (req, res) => {
 
         employee.transferredToUserId = newUser._id;
         employee.status = 'Reviewed';
+        employee.employmentType = chosenEmploymentType;
         employee.auditLog.push({
             action: 'TRANSFERRED_TO_ACTIVE',
             details: `Transferred to active employee (User: ${newUser._id}) by ${req.user.firstName || 'Admin'}. Temporary Credentials - Email: ${newUser.email}, Password: ${userPassword}`

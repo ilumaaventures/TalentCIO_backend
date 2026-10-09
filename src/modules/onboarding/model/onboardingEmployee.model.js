@@ -82,6 +82,7 @@ const onboardingEmployeeSchema = new mongoose.Schema({
     workLocation: { type: String, default: '' },
     address: { type: String, default: '' },
     probationPeriod: { type: String, default: '' },
+    employmentType: { type: String, default: 'Full Time' },
 
     // --- Salary / Compensation ---
     salary: { type: mongoose.Schema.Types.Mixed, default: {} },
