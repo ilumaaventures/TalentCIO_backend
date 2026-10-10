@@ -801,13 +801,45 @@ exports.sendMassMailBulk = async (req, res) => {
 
 exports.getTAEmailHistory = async (req, res) => {
     try {
-        const { hiringRequestId, candidateId, status, page = 1, limit = 20 } = req.query;
+        const { hiringRequestId, candidateId, status, page = 1, limit = 20, type, recipientType, templateName, search } = req.query;
 
         const query = { companyId: req.companyId };
 
         if (hiringRequestId) query.hiringRequestId = hiringRequestId;
         if (candidateId) query.candidateId = candidateId;
-        if (status) query.status = status;
+        if (status && status !== 'All') query.status = status;
+        if (templateName && templateName !== 'All') query.templateName = templateName;
+
+        const targetType = type || recipientType;
+        if (targetType === 'client') {
+            query.$or = [
+                { recipientType: 'client' },
+                { templateName: { $regex: /Share Candidate Profile with Client|client/i } }
+            ];
+        } else if (targetType === 'candidate') {
+            query.recipientType = { $ne: 'client' };
+            query.templateName = { $not: { $regex: /Share Candidate Profile with Client/i } };
+        }
+
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            const searchConditions = [
+                { recipientName: searchRegex },
+                { recipientEmail: searchRegex },
+                { subject: searchRegex },
+                { templateName: searchRegex },
+                { hiringRequestTitle: searchRegex }
+            ];
+            if (query.$or) {
+                query.$and = [
+                    { $or: query.$or },
+                    { $or: searchConditions }
+                ];
+                delete query.$or;
+            } else {
+                query.$or = searchConditions;
+            }
+        }
 
         const pageNum = parseInt(page, 10) || 1;
         const limitNum = parseInt(limit, 10) || 20;
