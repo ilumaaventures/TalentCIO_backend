@@ -478,7 +478,7 @@ const getImportData = async (req, res, next) => {
     const limitNum = [50, 80, 100].includes(parsedLimit) ? parsedLimit : (parsedLimit > 0 ? parsedLimit : 50);
 
     const sortField = sortBy === 'date' ? 'date' : 'createdAt';
-    const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus leadSource source date createdAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks';
+    const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus leadSource source date createdAt updatedAt lastContactedAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks contacts';
     let findQuery = CrmImportData.find(query)
       .select(TABLE_FIELDS)
       .populate('importedByUserId', 'firstName lastName name email')
@@ -516,6 +516,19 @@ const getImportData = async (req, res, next) => {
         ? String(userDoc._id)
         : (r.importedByUserId ? String(r.importedByUserId) : null);
 
+      const hasStoredContacts = Array.isArray(r.contacts) && r.contacts.length > 0;
+      const contacts = hasStoredContacts
+        ? r.contacts
+        : ((r.contactPerson || r.mobileNo || r.emailId)
+          ? [{
+              contactPerson: r.contactPerson || '',
+              designation: r.designation || '',
+              mobileNo: r.mobileNo || '',
+              emailId: r.emailId || '',
+              isPrimary: true,
+            }]
+          : []);
+
       return {
         id: r.rowId || String(r._id),
         _id: r._id,
@@ -536,6 +549,14 @@ const getImportData = async (req, res, next) => {
         leadId: r.leadId || null,
         isDuplicate: Boolean(r.isDuplicate),
         duplicateReason: hasActiveLead ? '' : (r.duplicateReason || ''),
+        rating: r.rating || '',
+        contactPerson: r.contactPerson || '',
+        designation: r.designation || '',
+        mobileNo: r.mobileNo || '',
+        emailId: r.emailId || '',
+        address: r.address || '',
+        remarks: r.remarks || '',
+        contacts,
       };
     });
 
@@ -610,6 +631,24 @@ const syncImportData = async (req, res, next) => {
           }
         : {};
 
+      const contactsList = Array.isArray(item.contacts) && item.contacts.length > 0
+        ? item.contacts
+        : ((item.contactPerson || item.mobileNo || item.emailId)
+          ? [{
+              contactPerson: (item.contactPerson || '').trim(),
+              designation: (item.designation || '').trim(),
+              mobileNo: (item.mobileNo || '').trim(),
+              emailId: (item.emailId || '').trim(),
+              isPrimary: true,
+            }]
+          : []);
+
+      const primaryContact = contactsList.find((c) => c.isPrimary) || contactsList[0] || null;
+      const resolvedContactPerson = (item.contactPerson || primaryContact?.contactPerson || '').trim();
+      const resolvedDesignation = (item.designation || primaryContact?.designation || '').trim();
+      const resolvedMobile = (item.mobileNo || primaryContact?.mobileNo || mobileNo || '').trim();
+      const resolvedEmail = (item.emailId || primaryContact?.emailId || emailId || '').trim();
+
       const setFields = {
         companyId,
         rowId,
@@ -618,10 +657,11 @@ const syncImportData = async (req, res, next) => {
         industry: (item.industry || '').trim(),
         address: (item.address || '').trim(),
         rating: (item.rating || '').trim(),
-        contactPerson: (item.contactPerson || '').trim(),
-        designation: (item.designation || '').trim(),
-        mobileNo,
-        emailId,
+        contactPerson: resolvedContactPerson,
+        designation: resolvedDesignation,
+        mobileNo: resolvedMobile,
+        emailId: resolvedEmail,
+        contacts: contactsList,
         remarks: (item.remarks || '').trim(),
         date: item.date || new Date().toISOString(),
         status: (item.status || item.leadStatus || 'New').trim(),
@@ -1571,6 +1611,20 @@ const getImportDataById = async (req, res, next) => {
         rowObj.importedBy = actualUserName;
       }
       rowObj.importedByUserId = String(userDoc._id);
+    }
+
+    if (!Array.isArray(rowObj.contacts) || rowObj.contacts.length === 0) {
+      if (rowObj.contactPerson || rowObj.mobileNo || rowObj.emailId) {
+        rowObj.contacts = [{
+          contactPerson: rowObj.contactPerson || '',
+          designation: rowObj.designation || '',
+          mobileNo: rowObj.mobileNo || '',
+          emailId: rowObj.emailId || '',
+          isPrimary: true,
+        }];
+      } else {
+        rowObj.contacts = [];
+      }
     }
 
     res.json({
