@@ -19,6 +19,15 @@ const crmImportDataSchema = new mongoose.Schema(
     designation: { type: String, trim: true, default: '' },
     mobileNo: { type: String, trim: true, default: '' },
     emailId: { type: String, trim: true, default: '' },
+    contacts: [
+      {
+        contactPerson: { type: String, trim: true, default: '' },
+        designation: { type: String, trim: true, default: '' },
+        mobileNo: { type: String, trim: true, default: '' },
+        emailId: { type: String, trim: true, default: '' },
+        isPrimary: { type: Boolean, default: false },
+      },
+    ],
     remarks: { type: String, trim: true, default: '' },
     date: { type: String, default: () => new Date().toISOString() },
     // Status value (Interested, Not Interested, New, etc.)
