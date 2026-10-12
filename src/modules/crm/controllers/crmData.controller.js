@@ -529,20 +529,24 @@ const getImportData = async (req, res, next) => {
             }]
           : []);
 
-      return {
-        id: r.rowId || String(r._id),
-        _id: r._id,
-        sNo: r.sNo || '',
-        companyName: r.companyName || '',
-        industry: r.industry || '',
-        status: r.status || r.leadStatus || (hasActiveLead ? 'Converted to Lead' : 'New'),
-        date: r.date,
-        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : (r.date || null),
-        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : (r.lastContactedAt ? new Date(r.lastContactedAt).toISOString() : (r.date || null)),
-        lastContactedAt: r.lastContactedAt || null,
-        leadStatus: r.leadStatus || r.status || '',
-        source: r.leadSource || r.source || '',
-        leadSource: r.leadSource || r.source || '',
+        const resolvedSource = (r.source && r.source !== 'Excel Import' && r.source !== 'Website')
+          ? r.source
+          : (r.leadSource && r.leadSource !== 'Website' ? r.leadSource : (r.source || r.leadSource || ''));
+
+        return {
+          id: r.rowId || String(r._id),
+          _id: r._id,
+          sNo: r.sNo || '',
+          companyName: r.companyName || '',
+          industry: r.industry || '',
+          status: r.status || r.leadStatus || (hasActiveLead ? 'Converted to Lead' : 'New'),
+          date: r.date,
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : (r.date || null),
+          updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : (r.lastContactedAt ? new Date(r.lastContactedAt).toISOString() : (r.date || null)),
+          lastContactedAt: r.lastContactedAt || null,
+          leadStatus: r.leadStatus || r.status || '',
+          source: resolvedSource,
+          leadSource: resolvedSource,
         importedBy: finalImportedBy,
         importedByUserId: finalImportedByUserId,
         isConvertedToLead: hasActiveLead,
@@ -649,25 +653,29 @@ const syncImportData = async (req, res, next) => {
       const resolvedMobile = (item.mobileNo || primaryContact?.mobileNo || mobileNo || '').trim();
       const resolvedEmail = (item.emailId || primaryContact?.emailId || emailId || '').trim();
 
-      const setFields = {
-        companyId,
-        rowId,
-        sNo: item.sNo || '',
-        companyName,
-        industry: (item.industry || '').trim(),
-        address: (item.address || '').trim(),
-        rating: (item.rating || '').trim(),
-        contactPerson: resolvedContactPerson,
-        designation: resolvedDesignation,
-        mobileNo: resolvedMobile,
-        emailId: resolvedEmail,
-        contacts: contactsList,
-        remarks: (item.remarks || '').trim(),
-        date: item.date || new Date().toISOString(),
-        status: (item.status || item.leadStatus || 'New').trim(),
-        leadStatus: (item.status || item.leadStatus || 'New').trim(),
-        source: (item.source || item.leadSource || 'Website').trim(),
-        leadSource: (item.source || item.leadSource || 'Website').trim(),
+        const resolvedSyncSource = (item.source && item.source !== 'Website' && item.source !== 'Excel Import')
+          ? item.source
+          : (item.leadSource && item.leadSource !== 'Website' ? item.leadSource : (item.source || item.leadSource || 'Website'));
+
+        const setFields = {
+          companyId,
+          rowId,
+          sNo: item.sNo || '',
+          companyName,
+          industry: (item.industry || '').trim(),
+          address: (item.address || '').trim(),
+          rating: (item.rating || '').trim(),
+          contactPerson: resolvedContactPerson,
+          designation: resolvedDesignation,
+          mobileNo: resolvedMobile,
+          emailId: resolvedEmail,
+          contacts: contactsList,
+          remarks: (item.remarks || '').trim(),
+          date: item.date || new Date().toISOString(),
+          status: (item.status || item.leadStatus || 'New').trim(),
+          leadStatus: (item.status || item.leadStatus || 'New').trim(),
+          source: String(resolvedSyncSource).trim(),
+          leadSource: String(resolvedSyncSource).trim(),
         isConvertedToLead: Boolean(item.isConvertedToLead),
         leadId: item.leadId || null,
         isDuplicate: Boolean(item.isDuplicate),
@@ -1626,6 +1634,12 @@ const getImportDataById = async (req, res, next) => {
         rowObj.contacts = [];
       }
     }
+
+    const resolvedSingleSource = (rowObj.source && rowObj.source !== 'Excel Import' && rowObj.source !== 'Website')
+      ? rowObj.source
+      : (rowObj.leadSource && rowObj.leadSource !== 'Website' ? rowObj.leadSource : (rowObj.source || rowObj.leadSource || ''));
+    rowObj.source = resolvedSingleSource;
+    rowObj.leadSource = resolvedSingleSource;
 
     res.json({
       success: true,
