@@ -204,10 +204,10 @@ exports.getCandidateCardFilters = async (req, res) => {
             phase2Metrics: {
                 totalShortlisted: structuralPhase2Candidates.length,
                 shortlisted: structuralPhase2Candidates.filter((candidate) =>
-                    candidate?.phase2Decision === 'Shortlisted'
+                    candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected'
                 ).length,
                 totalScreened: structuralPhase2Candidates.filter((candidate) =>
-                    candidate?.phase2Decision === 'Shortlisted'
+                    candidate?.phase2Decision === 'Shortlisted' || candidate?.phase2Decision === 'Selected'
                 ).length,
                 selected: structuralPhase2Candidates.filter((candidate) =>
                     candidate?.phase2Decision === 'Selected'
@@ -335,10 +335,8 @@ exports.getCandidateInterviewDetails = async (req, res) => {
             } else if (targetPhase === 2) {
                 if (!isProfileSharedCandidate(c)) return false;
                 if (filterDecision !== 'All') {
-                    if (filterDecision === 'Shortlisted_Selected') {
+                    if (filterDecision === 'Shortlisted_Selected' || filterDecision === 'Shortlisted') {
                         if (c?.phase2Decision !== 'Shortlisted' && c?.phase2Decision !== 'Selected') return false;
-                    } else if (filterDecision === 'Shortlisted') {
-                        if (c?.phase2Decision !== 'Shortlisted') return false;
                     } else if ((c?.phase2Decision || 'None') !== filterDecision) return false;
                 }
             } else if (targetPhase === 3) {

@@ -104,7 +104,7 @@ const getCurrentTimesheet = async (req, res) => {
         let fullUser;
         try {
             fullUser = await User.findById(req.user._id)
-                .select('firstName lastName email employeeCode joiningDate attendanceMode')
+                .select('firstName lastName email employeeCode joiningDate attendanceMode customFlexibleOffDays')
                 .populate('reportingManagers', 'firstName lastName email')
                 .lean();
         } catch (err) {
@@ -459,7 +459,7 @@ const getUserTimesheet = async (req, res) => {
                 date: { $gte: start, $lte: end }
             }).select('date clockInIST clockOutIST clockIn clockOut duration attendanceMode maxWorkingHours').lean(),
             User.findOne({ _id: targetUserId, companyId: req.companyId })
-                .select('firstName lastName email employeeCode attendanceMode')
+                .select('firstName lastName email employeeCode attendanceMode customFlexibleOffDays joiningDate')
                 .populate('reportingManagers', 'firstName lastName email')
                 .lean()
         ]);

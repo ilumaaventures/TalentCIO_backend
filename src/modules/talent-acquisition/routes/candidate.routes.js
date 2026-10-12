@@ -119,6 +119,19 @@ router.patch('/:id/move-back-phase', protect, authorizeAny(candidateEditPermissi
 router.patch('/:id/phase3-decision', protect, authorizeAny(candidateDecisionPermissions), candidateController.updatePhase3Decision);
 router.post('/:id/transfer-to-onboarding', protect, authorizeAny(candidateTransferPermissions), candidateController.transferToOnboarding);
 
+// Share with Client (Phase 2 Only)
+const {
+    shareCandidateAttachmentUpload,
+    shareCandidateWithClient
+} = require('../controllers/taMailController/shareCandidateController');
+router.post(
+    '/:id/share-with-client',
+    protect,
+    authorizeAny([...candidateEditPermissions, 'ta.mass_mail', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all']),
+    shareCandidateAttachmentUpload.array('attachments', 10),
+    shareCandidateWithClient
+);
+
 // Current User's Scheduled Interviews
 router.get('/my/interviews', protect, authorizeAny(['ta.interview.evaluate', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all']), candidateController.getMyScheduledInterviews);
 

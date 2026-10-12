@@ -210,6 +210,16 @@ router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidate
 router.post('/transfer-candidates-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidatesBulk);
 router.post('/hiring-request/:id/send-mass-mail', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), uploadMassMailAttachments.array('attachments', 10), taController.sendMassMail);
 router.post('/send-mass-mail-bulk', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), uploadMassMailAttachments.array('attachments', 10), taController.sendMassMailBulk);
+
+// Share with Client (Phase 2 Only)
+const {
+    shareCandidateAttachmentUpload,
+    shareCandidateWithClient
+} = require('../controllers/taMailController/shareCandidateController');
+router.post('/candidate/:candidateId/share-with-client', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), shareCandidateAttachmentUpload.array('attachments', 10), shareCandidateWithClient);
+router.post('/candidates/:candidateId/share-with-client', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), shareCandidateAttachmentUpload.array('attachments', 10), shareCandidateWithClient);
+router.post('/hiring-request/:hiringRequestId/candidate/:candidateId/share-with-client', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.mass_mail', 'ta.edit']), shareCandidateAttachmentUpload.array('attachments', 10), shareCandidateWithClient);
+
 router.get('/email-history', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistory);
 router.get('/email-history/:id', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.getTAEmailHistoryById);
 router.get('/email-history/:id/attachment/:attachmentIndex', protect, authorizeAny(['ta.view', 'ta.manage', 'ta.candidate.manage.all', 'ta.candidate.manage.assigned', 'ta.mass_mail', 'ta.edit']), taController.downloadTAEmailAttachment);

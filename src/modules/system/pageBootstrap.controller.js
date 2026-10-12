@@ -224,7 +224,7 @@ const getTimesheetDocument = async ({ requestUser, companyId, targetUserId, peri
     const [timesheetRaw, fullUser, company] = await Promise.all([
         Timesheet.findOne({ user: targetUserId, month: periodId, companyId }).lean(),
         User.findOne({ _id: targetUserId, companyId })
-            .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode')
+            .select('firstName lastName email employeeCode joiningDate reportingManagers attendanceMode customFlexibleOffDays')
             .populate('reportingManagers', 'firstName lastName email')
             .lean(),
         Company.findById(companyId)
@@ -608,6 +608,7 @@ exports.getTimesheetBootstrap = async (req, res) => {
             holidays,
             approvedLeaves,
             weeklyOff: timesheet.weeklyOff || ['Sunday'],
+            customFlexibleOffDays: timesheet?.userDetails?.customFlexibleOffDays || timesheet?.user?.customFlexibleOffDays || [],
             usersList
         });
     } catch (error) {

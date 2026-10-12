@@ -59,6 +59,12 @@ const taEmailLogSchema = new mongoose.Schema({
         default: null,
         index: true
     },
+    recipientType: {
+        type: String,
+        enum: ['candidate', 'client', 'other'],
+        default: 'candidate',
+        index: true
+    },
     recipientName: {
         type: String,
         trim: true,

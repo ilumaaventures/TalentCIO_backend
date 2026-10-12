@@ -131,7 +131,7 @@ exports.getRequisitions = async (req, res) => {
 
             const sanitized = sanitizeRequisitionForClient(r);
             sanitized.totalCandidates = visibleCandidates.length;
-            sanitized.shortlistedCandidates = visibleCandidates.filter(c => c.phase2Decision === 'Shortlisted' || c.status === 'Shortlisted').length;
+            sanitized.shortlistedCandidates = visibleCandidates.filter(c => c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected' || c.status === 'Shortlisted').length;
             sanitized.interviewingCandidates = visibleCandidates.filter(c => c.status === 'Interview Scheduled' || c.status === 'In Interview').length;
             return sanitized;
         });
@@ -572,7 +572,7 @@ exports.getDashboard = async (req, res) => {
         return res.json({
             activeRequisitions: requisitions.filter(r => r.status === 'Approved').length,
             totalVisibleCandidates: visibleCandidates.length,
-            shortlistedCandidates: visibleCandidates.filter(c => c.phase2Decision === 'Shortlisted').length,
+            shortlistedCandidates: visibleCandidates.filter(c => c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected').length,
             upcomingInterviews
         });
     } catch (error) {

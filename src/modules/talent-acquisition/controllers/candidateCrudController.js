@@ -560,10 +560,8 @@ const getCandidatesByHiringRequest = async (req, res) => {
         const filterDecision = String(req.query.filterDecision || 'All').trim();
         if (filterDecision !== 'All') {
             if (targetPhase === 2) {
-                if (filterDecision === 'Shortlisted_Selected') {
+                if (filterDecision === 'Shortlisted_Selected' || filterDecision === 'Shortlisted') {
                     serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Shortlisted' || c.phase2Decision === 'Selected');
-                } else if (filterDecision === 'Shortlisted') {
-                    serializedCandidates = serializedCandidates.filter(c => c.phase2Decision === 'Shortlisted');
                 } else {
                     serializedCandidates = serializedCandidates.filter(c => (c.phase2Decision || 'None') === filterDecision);
                 }
