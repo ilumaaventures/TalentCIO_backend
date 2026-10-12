@@ -15,7 +15,8 @@ const {
     getPendingTimesheets,
 
     approveTimesheet,
-    updateEntry
+    updateEntry,
+    deleteEntry
 } = require('./timesheet.controller');
 const { getTimesheetBootstrap } = require('../system/pageBootstrap.controller');
 const { upload } = require('../../config/cloudinary');
@@ -28,6 +29,7 @@ router.get('/current', getCurrentTimesheet);
 router.get('/user/:userId', getUserTimesheet);
 router.post('/entry', dossierGate, addEntry);
 router.put('/entry/:entryId', dossierGate, updateEntry);
+router.delete('/entry/:entryId', dossierGate, deleteEntry);
 router.post('/submit', authorize('timesheet.submit'), dossierGate, submitTimesheet);
 router.get('/projects', getProjects);
 router.post('/projects', authorize('project.create'), createProject);

@@ -131,23 +131,40 @@ const updateWorkLog = async (req, res) => {
 // @route   DELETE /api/projects/worklogs/:id
 const deleteWorkLog = async (req, res) => {
     try {
-        const workLog = await WorkLog.findOne({ _id: req.params.id, user: req.user._id, companyId: req.companyId });
+        const workLog = await WorkLog.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
         if (!workLog) return res.status(404).json({ message: 'Work log not found' });
+
+        const owner = workLog.user;
+        const requestor = req.user;
+        const ownerId = (owner && owner._id) ? owner._id.toString() : (owner ? owner.toString() : '');
+
+        const isOwner = ownerId === requestor._id.toString();
+        const isManager = Boolean(owner?.reportingManagers?.some(m => m.toString() === requestor._id.toString()));
+        const isTrueAdmin = requestor.roles?.some(r => 
+            (typeof r === 'string' && r === 'Admin') || 
+            (typeof r === 'object' && r.name === 'Admin')
+        ) || requestor.permissions?.includes('*') || 
+          requestor.permissions?.includes('admin');
+        const canUpdateOthers = isTrueAdmin || requestor.permissions?.includes('timesheet.update_others');
+
+        if (!isOwner && !isManager && !canUpdateOthers) {
+            return res.status(403).json({ message: 'Not authorized to delete this work log' });
+        }
 
         // Check if Timesheet is locked (Submitted/Approved)
         const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
         const periodId = getTimesheetPeriodIdForDate(workLog.date, cycle);
-        const timesheet = await Timesheet.findOne({ user: req.user._id, month: periodId, companyId: req.companyId });
+        const timesheet = await Timesheet.findOne({ user: ownerId, month: periodId, companyId: req.companyId });
 
         if (timesheet && (timesheet.status === 'SUBMITTED' || timesheet.status === 'APPROVED')) {
-            return res.status(400).json({ message: 'Cannot delete logs for a submitted timesheet' });
+            return res.status(400).json({ message: 'Cannot delete logs for a submitted or approved timesheet' });
         }
 
         await workLog.softDelete(req.user._id);
 
         res.json({ message: 'Work log moved to bin' });
     } catch (error) {
-        console.error(error);
+        console.error('[WorkLogController] deleteWorkLog error:', error);
         res.status(500).json({ message: 'Server Error' });
     }
 };

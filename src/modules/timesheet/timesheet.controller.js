@@ -814,6 +814,51 @@ const updateEntry = async (req, res) => {
     }
 };
 
+// @desc    Delete Timesheet Entry (WorkLog)
+// @route   DELETE /api/timesheet/entry/:entryId
+// @access  Private
+const deleteEntry = async (req, res) => {
+    try {
+        const workLog = await WorkLog.findOne({ _id: req.params.entryId, companyId: req.companyId }).populate('user');
+
+        if (!workLog) {
+            return res.status(404).json({ message: 'Entry (WorkLog) not found' });
+        }
+
+        const owner = workLog.user;
+        const requestor = req.user;
+        const ownerId = (owner && owner._id) ? owner._id.toString() : (owner ? owner.toString() : '');
+
+        const isOwner = ownerId === requestor._id.toString();
+        const isManager = Boolean(owner?.reportingManagers?.some(m => m.toString() === requestor._id.toString()));
+        const isTrueAdmin = requestor.roles?.some(r => 
+            (typeof r === 'string' && r === 'Admin') || 
+            (typeof r === 'object' && r.name === 'Admin')
+        ) || requestor.permissions?.includes('*') || 
+          requestor.permissions?.includes('admin');
+        const canUpdateOthers = isTrueAdmin || requestor.permissions?.includes('timesheet.update_others');
+
+        if (!isOwner && !isManager && !canUpdateOthers) {
+            return res.status(403).json({ message: 'Not authorized to delete this work log' });
+        }
+
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const periodId = getTimesheetPeriodIdForDate(workLog.date, cycle);
+        const timesheet = await Timesheet.findOne({ user: ownerId, month: periodId, companyId: req.companyId });
+
+        if (timesheet && (timesheet.status === 'SUBMITTED' || timesheet.status === 'APPROVED')) {
+            return res.status(400).json({ message: 'Cannot delete entries for a submitted or approved timesheet' });
+        }
+
+        await workLog.softDelete(req.user._id);
+
+        res.json({ message: 'Work log deleted successfully', entryId: req.params.entryId });
+    } catch (error) {
+        console.error('[TimesheetController] deleteEntry error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
     populateWorkLogHierarchy,
     mapWorkLogToTimesheetEntry,
@@ -821,6 +866,7 @@ module.exports = {
     getUserTimesheet,
     addEntry,
     updateEntry,
+    deleteEntry,
     submitTimesheet,
     getProjects,
     createProject,
