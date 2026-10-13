@@ -1036,6 +1036,7 @@ exports.getRoleBootstrap = async (req, res) => {
                 else if (curr.key.startsWith('dossier.') || curr.key.startsWith('employee.revision.') || groupName === 'DOSSIER') groupName = 'EMPLOYEE DOSSIER';
                 else if (curr.key.startsWith('leave.')) groupName = 'LEAVES';
                 else if (curr.key.startsWith('crm.')) groupName = 'SALES CRM';
+                else if (curr.key.startsWith('pms.') || curr.key.startsWith('performance.') || groupName === 'PERFORMANCE') groupName = 'PERFORMANCE MANAGEMENT';
 
                 if (!acc[groupName]) acc[groupName] = [];
                 acc[groupName].push(curr);

@@ -255,6 +255,37 @@ const syncPermissions = async () => {
             }
         }
 
+        // Assign PMS permissions to Admin, HR, Manager, and Employee roles
+        const allPmsPerms = await Permission.find({ key: { $regex: /^pms\./ } }).select('_id');
+        if (allPmsPerms.length > 0) {
+            const pmsIds = allPmsPerms.map(p => p._id);
+            await assignPermissionsToAdminRoles(pmsIds);
+            await assignPermissionsToRolesByName(['HR Admin', 'HR Manager'], pmsIds);
+
+            // Assign simplified reporting manager permissions to Manager role
+            const managerPerms = await Permission.find({
+                key: { $in: [
+                    'pms.manage.team',
+                    'pms.view.only',
+                    'pms.manager_review.submit',
+                    'pms.continuous_feedback.use',
+                    'pms.feedback_360.manage',
+                    'pms.goal.create',
+                    'pms.self_review.submit',
+                    'pms.view'
+                ] }
+            }).select('_id');
+            if (managerPerms.length > 0) {
+                await assignPermissionsToRolesByName(['Manager'], managerPerms.map(p => p._id));
+            }
+
+            // Assign view.only to Employee and general roles
+            const employeeViewPerm = await Permission.findOne({ key: 'pms.view.only' }).select('_id');
+            if (employeeViewPerm) {
+                await assignPermissionsToRolesByName(['Employee', 'User'], [employeeViewPerm._id]);
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);

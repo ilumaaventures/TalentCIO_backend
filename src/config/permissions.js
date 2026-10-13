@@ -949,6 +949,125 @@ module.exports = [
         key: "crm.admin",
         module: "CRM",
         description: "Full administration: CRM settings, custom fields, audit logs, and configurations"
+    },
+
+    // ==========================================
+    // PERFORMANCE MANAGEMENT SYSTEM (PMS)
+    // ==========================================
+    {
+        key: "pms.view",
+        module: "PERFORMANCE",
+        description: "View PMS Dashboard, team performance, and appraisals"
+    },
+    {
+        key: "pms.cycle.manage",
+        module: "PERFORMANCE",
+        description: "Create, edit, activate, close, and reopen performance cycles"
+    },
+    {
+        key: "pms.kra.manage",
+        module: "PERFORMANCE",
+        description: "Create, edit, and assign KRA templates and weightages"
+    },
+    {
+        key: "pms.kpi.manage",
+        module: "PERFORMANCE",
+        description: "Configure KPI definitions, target rules, and verify achievements"
+    },
+    {
+        key: "pms.goal.create",
+        module: "PERFORMANCE",
+        description: "Set and update individual and team goals"
+    },
+    {
+        key: "pms.goal.approve",
+        module: "PERFORMANCE",
+        description: "Approve or reject employee goals"
+    },
+    {
+        key: "pms.self_review.submit",
+        module: "PERFORMANCE",
+        description: "Submit self-appraisals and evidence"
+    },
+    {
+        key: "pms.manager_review.submit",
+        module: "PERFORMANCE",
+        description: "Complete and submit manager evaluations and ratings"
+    },
+    {
+        key: "pms.feedback_360.manage",
+        module: "PERFORMANCE",
+        description: "Nominate, approve, and collect 360-degree peer feedback"
+    },
+    {
+        key: "pms.calibration.manage",
+        module: "PERFORMANCE",
+        description: "Access calibration session, moderate ratings, and adjust scores"
+    },
+    {
+        key: "pms.ratings.publish",
+        module: "PERFORMANCE",
+        description: "Publish final performance appraisals to employees"
+    },
+    {
+        key: "pms.pip.manage",
+        module: "PERFORMANCE",
+        description: "Initiate and track Performance Improvement Plans (PIP)"
+    },
+    {
+        key: "pms.dev_plan.manage",
+        module: "PERFORMANCE",
+        description: "Create and track Employee Development Plans"
+    },
+    {
+        key: "pms.continuous_feedback.use",
+        module: "PERFORMANCE",
+        description: "Give and receive continuous feedback and schedule 1-on-1s"
+    },
+    {
+        key: "pms.reports.view",
+        module: "PERFORMANCE",
+        description: "View performance analytics and export reports"
+    },
+    {
+        key: "pms.department_head.review",
+        module: "PERFORMANCE",
+        description: "Review and approve appraisals as Department Head"
+    },
+    {
+        key: "pms.hr.evaluate",
+        module: "PERFORMANCE",
+        description: "Evaluate, calibrate, and approve appraisals as HR"
+    },
+    {
+        key: "pms.approval.final",
+        module: "PERFORMANCE",
+        description: "Perform final approval before rating publication"
+    },
+    {
+        key: "pms.admin",
+        module: "PERFORMANCE",
+        description: "Full PMS administration: settings, rating scales, and audit trail"
+    },
+    {
+        key: "pms.view.all",
+        module: "PERFORMANCE",
+        description: "View all users, team evaluations, feedback, and ratings across the entire company"
+    },
+    {
+        key: "pms.can.edit.all",
+        module: "PERFORMANCE",
+        description: "Full management: give feedback & ratings to any user, calibrate scores, and configure approval workflows"
+    },
+    {
+        key: "pms.manage.team",
+        module: "PERFORMANCE",
+        description: "Manage team: evaluate direct reports, give feedback and ratings to team members"
+    },
+    {
+        key: "pms.view.only",
+        module: "PERFORMANCE",
+        description: "View own performance: view own ratings, feedback, assigned KRAs/KPIs, and kudos"
     }
 ];
 

@@ -25,7 +25,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'organization', label: 'Organization Structure', icon: 'Network' },
     { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' },
     { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' },
-    { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' }
+    { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' },
+    { id: 'performance', label: 'Performance Management', icon: 'Award' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -51,6 +52,13 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add('mySpace');
     }
 
+    if (normalizedIds.has('pms')) {
+        normalizedIds.add('performance');
+    }
+    if (normalizedIds.has('performance')) {
+        normalizedIds.add('pms');
+    }
+
     return Array.from(normalizedIds);
 };
 
@@ -67,6 +75,10 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
 
     if (targetModuleId === 'leave' || targetModuleId === 'leaves') {
         return normalizedIds.includes('leaves') || normalizedIds.includes('leave');
+    }
+
+    if (targetModuleId === 'pms' || targetModuleId === 'performance') {
+        return normalizedIds.includes('performance') || normalizedIds.includes('pms');
     }
 
     return normalizedIds.includes(targetModuleId);
@@ -100,6 +112,7 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('my_space.') || key.startsWith('ess.')) return enabled.has('mySpace');
         if (key.startsWith('crm.')) return enabled.has('crm');
         if (key.startsWith('client_portal.')) return enabled.has('clientPortal');
+        if (key.startsWith('pms.') || key.startsWith('performance.')) return enabled.has('performance') || enabled.has('pms');
 
         return true;
     });
