@@ -126,6 +126,10 @@ const handleUserError = (error, res, fallbackMessage = 'Server Error') => {
         }
         return res.status(400).json({ message: 'Duplicate record already exists.' });
     }
+    if (error?.name === 'ValidationError') {
+        const firstMessage = Object.values(error.errors || {})[0]?.message || error.message;
+        return res.status(400).json({ message: firstMessage || 'Validation failed.' });
+    }
     return res.status(500).json({ message: fallbackMessage });
 };
 
@@ -500,7 +504,10 @@ const updateUser = async (req, res) => {
         }
 
         // Resolve and update Primary Reporting Manager
-        const directManager = managerId !== undefined ? managerId : primaryManagerId;
+        const directManagerRaw = managerId !== undefined ? managerId : primaryManagerId;
+        const directManager = (directManagerRaw && typeof directManagerRaw === 'object' && directManagerRaw._id)
+            ? String(directManagerRaw._id)
+            : directManagerRaw;
         if (directManager !== undefined) {
             if (directManager && mongoose.Types.ObjectId.isValid(directManager)) {
                 user.reportingManagers = [directManager];
@@ -508,7 +515,9 @@ const updateUser = async (req, res) => {
                 user.reportingManagers = [];
             }
         } else if (Array.isArray(reportingManagers)) {
-            user.reportingManagers = reportingManagers.filter(id => mongoose.Types.ObjectId.isValid(id));
+            user.reportingManagers = reportingManagers
+                .map(m => (m && typeof m === 'object' && m._id ? m._id : m))
+                .filter(id => id && mongoose.Types.ObjectId.isValid(id));
         }
 
         if (Object.prototype.hasOwnProperty.call(req.body, 'workLocation')) {
@@ -545,7 +554,7 @@ const updateUser = async (req, res) => {
 
         await user.save();
 
-        // Sync to EmployeeProfile
+        // Sync to EmployeeProfile & Salary Details
         try {
             let desigTitle = designation || '';
             if (user.designationRef) {
@@ -553,47 +562,58 @@ const updateUser = async (req, res) => {
                 if (dDoc) desigTitle = dDoc.title;
             }
 
-            await EmployeeProfile.updateOne(
-                { user: user._id, companyId: req.companyId },
-                {
-                    $set: {
-                        'personal.firstName': user.firstName,
-                        'personal.lastName': user.lastName || '',
-                        'personal.fullName': `${user.firstName} ${user.lastName || ''}`.trim(),
-                        'personal.joiningDate': user.joiningDate,
-                        'contact.workEmail': user.email,
-                        'employment.department': user.department || '',
-                        'employment.departmentRef': user.departmentRef || null,
-                        'employment.designation': desigTitle || '',
-                        'employment.designationRef': user.designationRef || null,
-                        'employment.reportingManager': user.reportingManagers?.[0] || null,
-                        'employment.workLocation': user.workLocation || '',
-                        'employment.employmentType': user.employmentType || 'Full Time',
-                        'employment.joiningDate': user.joiningDate
-                    }
-                }
-            );
-        } catch (profileSyncErr) {
-            console.error('Error syncing User updates to EmployeeProfile:', profileSyncErr);
-        }
+            const profileSetFields = {
+                'personal.firstName': user.firstName,
+                'personal.lastName': user.lastName || '',
+                'personal.fullName': `${user.firstName} ${user.lastName || ''}`.trim(),
+                'personal.joiningDate': user.joiningDate,
+                'contact.workEmail': user.email,
+                'employment.department': user.department || '',
+                'employment.departmentRef': user.departmentRef || null,
+                'employment.designation': desigTitle || '',
+                'employment.designationRef': user.designationRef || null,
+                'employment.reportingManager': user.reportingManagers?.[0] || null,
+                'employment.workLocation': user.workLocation || '',
+                'employment.employmentType': user.employmentType || 'Full Time',
+                'employment.joiningDate': user.joiningDate
+            };
 
-        if (salary) {
             let profile = await EmployeeProfile.findOne({ user: user._id, companyId: req.companyId });
-            const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
-            
-            const calculatedSalary = { ...salary };
-            let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
-            let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
-            if (annualCTC > 0) {
-                monthlyCTC = Math.round(annualCTC / 12);
-            } else if (monthlyCTC > 0) {
-                annualCTC = monthlyCTC * 12;
+
+            if (salary) {
+                const config = await PayrollConfig.findOne({ companyId: req.companyId }) || new PayrollConfig({ companyId: req.companyId });
+                
+                const calculatedSalary = { ...salary };
+                let annualCTC = parseFloat(String(calculatedSalary.annualCTC || '').replace(/[^0-9.]/g, '')) || 0;
+                let monthlyCTC = parseFloat(String(calculatedSalary.monthlyCTC || '').replace(/[^0-9.]/g, '')) || 0;
+                if (annualCTC > 0) {
+                    monthlyCTC = Math.round(annualCTC / 12);
+                } else if (monthlyCTC > 0) {
+                    annualCTC = monthlyCTC * 12;
+                }
+
+                processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
+
+                const newCTC = calculatedSalary.annualCTC ? parseFloat(calculatedSalary.annualCTC) / 12 : null;
+                profileSetFields['compensation.ctc'] = newCTC;
+                profileSetFields['compensation.payType'] = calculatedSalary.payType || 'salaried';
+
+                const existingBreakup = profile?.compensation?.salaryBreakup instanceof Map
+                    ? Object.fromEntries(profile.compensation.salaryBreakup)
+                    : (profile?.compensation?.salaryBreakup && typeof profile.compensation.salaryBreakup === 'object'
+                        ? profile.compensation.salaryBreakup
+                        : {});
+                const newBreakup = { ...existingBreakup, ...calculatedSalary };
+                profileSetFields['compensation.salaryBreakup'] = newBreakup;
             }
 
-            processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
-
-            if (!profile) {
-                profile = new EmployeeProfile({
+            if (profile) {
+                await EmployeeProfile.updateOne(
+                    { _id: profile._id },
+                    { $set: profileSetFields }
+                );
+            } else {
+                profile = await EmployeeProfile.create({
                     user: user._id,
                     companyId: req.companyId,
                     personal: {
@@ -606,51 +626,52 @@ const updateUser = async (req, res) => {
                         workEmail: user.email
                     },
                     employment: {
-                        designation: '',
+                        designation: desigTitle || '',
+                        designationRef: user.designationRef || null,
                         department: user.department || '',
+                        departmentRef: user.departmentRef || null,
+                        reportingManager: user.reportingManagers?.[0] || null,
                         joiningDate: user.joiningDate || new Date(),
                         status: 'Active',
                         workLocation: user.workLocation || '',
                         employmentType: user.employmentType || 'Full Time'
+                    },
+                    compensation: {
+                        ctc: profileSetFields['compensation.ctc'] || null,
+                        payType: profileSetFields['compensation.payType'] || 'salaried',
+                        salaryBreakup: profileSetFields['compensation.salaryBreakup'] || {}
                     }
                 });
             }
 
-            // Use targeted set() calls with dot-notation paths so we ONLY update
-            // ctc and salaryBreakup — never touch bankDetails or other fields,
-            // which avoids the "Cast to Object failed for undefined" error on bankDetails.
-            const newCTC = calculatedSalary.annualCTC ? parseFloat(calculatedSalary.annualCTC) / 12 : null;
-            profile.set('compensation.ctc', newCTC);
-            profile.set('compensation.payType', calculatedSalary.payType || 'salaried');
-
-            // Build a clean plain-object breakup (no Mongoose internal $ keys).
-            const existingBreakup = profile.compensation?.salaryBreakup instanceof Map
-                ? Object.fromEntries(profile.compensation.salaryBreakup)
-                : {};
-            const newBreakup = { ...existingBreakup, ...calculatedSalary };
-            profile.set('compensation.salaryBreakup', newBreakup);
-
-            await profile.save();
-
-            if (!user.employeeProfile) {
+            if (!user.employeeProfile && profile?._id) {
                 user.employeeProfile = profile._id;
-                await user.save();
+                await User.updateOne({ _id: user._id }, { $set: { employeeProfile: profile._id } });
             }
+        } catch (profileSyncErr) {
+            console.error('Error syncing User updates to EmployeeProfile:', profileSyncErr);
         }
 
         // Handle Direct Reports (Assign subordinates)
         if (directReports && Array.isArray(directReports)) {
+            const validDirectReportIds = directReports
+                .map(r => (typeof r === 'object' && r?._id ? r._id : r))
+                .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+                .map(id => new mongoose.Types.ObjectId(id));
+
             // 1. Remove this user from reportingManagers of users who are NO LONGER direct reports
             await User.updateMany(
-                { reportingManagers: user._id, _id: { $nin: directReports } },
+                { companyId: req.companyId, reportingManagers: user._id, _id: { $nin: validDirectReportIds } },
                 { $pull: { reportingManagers: user._id } }
             );
 
             // 2. Add this user to reportingManagers of users who ARE direct reports
-            await User.updateMany(
-                { _id: { $in: directReports } },
-                { $addToSet: { reportingManagers: user._id } }
-            );
+            if (validDirectReportIds.length > 0) {
+                await User.updateMany(
+                    { companyId: req.companyId, _id: { $in: validDirectReportIds } },
+                    { $addToSet: { reportingManagers: user._id } }
+                );
+            }
         }
 
         void dispatchEmployeeWebhook({

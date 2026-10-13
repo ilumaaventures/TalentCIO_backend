@@ -82,8 +82,8 @@ const employeeProfileSchema = new mongoose.Schema({
         lastName: String,
         fullName: String,
         dob: Date,
-        gender: { type: String, enum: ['Male', 'Female', 'Other', 'Prefer not to say'] },
-        maritalStatus: { type: String, enum: ['Single', 'Married', 'Divorced', 'Widowed'] },
+        gender: { type: String, default: '' },
+        maritalStatus: { type: String, default: '' },
         dateOfMarriage: Date,
         bloodGroup: String,
         nationality: String,
@@ -129,7 +129,7 @@ const employeeProfileSchema = new mongoose.Schema({
         motherName: String,
         motherDob: Date,
         motherOccupation: String,
-        parentsMaritalStatus: { type: String, enum: ['Single', 'Married', 'Divorced', 'Widowed', 'Separated'] },
+        parentsMaritalStatus: { type: String, default: '' },
         totalSiblings: Number,
         spouseName: String,
         spouseDob: Date,
@@ -146,12 +146,11 @@ const employeeProfileSchema = new mongoose.Schema({
         reportingManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         joiningDate: Date,
         confirmationDate: Date,
-        status: { type: String, enum: ['Active', 'On Notice', 'Terminated', 'Resigned', 'Retired'] },
+        status: { type: String, default: 'Active' },
         workLocation: { type: String },
         branch: String,
         employmentType: {
             type: String,
-            enum: ['Full Time', 'Part Time', 'Contract', 'Intern', 'Consultant', 'Freelance', 'Probation'],
             default: 'Full Time'
         }
     },
