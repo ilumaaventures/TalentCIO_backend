@@ -23,7 +23,7 @@ const pmsGoalSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   scope: {
     type: String,
-    enum: ['individual', 'team', 'department', 'strategic'],
+    enum: ['individual', 'team', 'department', 'strategic', 'company'],
     default: 'individual',
   },
   parentGoalId: {

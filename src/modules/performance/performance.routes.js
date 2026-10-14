@@ -16,6 +16,7 @@ const {
   getCycle,
   createCycle,
   updateCycle,
+  deleteCycle,
   changeCycleStatus,
   reopenCycle,
   syncCycleParticipants,
@@ -119,6 +120,7 @@ router.get('/cycles', listCycles);
 router.get('/cycles/:id', getCycle);
 router.post('/cycles', createCycle);
 router.put('/cycles/:id', updateCycle);
+router.delete('/cycles/:id', deleteCycle);
 router.patch('/cycles/:id/status', changeCycleStatus);
 router.post('/cycles/:id/reopen', reopenCycle);
 router.post('/cycles/:id/sync-participants', syncCycleParticipants);

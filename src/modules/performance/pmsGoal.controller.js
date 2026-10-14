@@ -19,25 +19,35 @@ const listGoals = async (req, res) => {
     const filter = { companyId };
     if (req.query.cycleId) filter.cycleId = req.query.cycleId;
     const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
-    if (!isHrOrAdmin) {
-      if (req.query.scope === 'my_team') {
+    if (req.query.scope === 'company' || req.query.scope === 'company_goals') {
+      filter.scope = { $in: ['company', 'strategic'] };
+    } else if (req.query.scope === 'my_team' || req.query.scope === 'team' || req.query.scope === 'team_goals') {
+      if (!isHrOrAdmin) {
         const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
-        filter.employeeId = { $in: reportIds };
-      } else if (!req.query.scope || req.query.scope === 'self' || req.query.employeeId === String(req.user._id)) {
+        filter.$or = [
+          { employeeId: { $in: reportIds } },
+          { scope: 'team' },
+        ];
+      } else {
+        filter.scope = 'team';
+      }
+    } else if (req.query.scope === 'self' || req.query.scope === 'my_goals' || req.query.scope === 'individual') {
+      filter.employeeId = req.user._id;
+      filter.scope = { $nin: ['team', 'company', 'strategic'] };
+    } else if (!isHrOrAdmin) {
+      if (!req.query.scope || req.query.employeeId === String(req.user._id)) {
         filter.employeeId = req.user._id;
       } else {
         const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
         const isReport = directReports.some((d) => String(d._id) === String(req.query.employeeId));
-        if (!isReport) {
-          filter.employeeId = req.user._id;
-        }
+        filter.employeeId = isReport ? req.query.employeeId : req.user._id;
       }
     } else if (req.query.employeeId) {
       filter.employeeId = req.query.employeeId;
+    } else if (req.query.scope) {
+      filter.scope = req.query.scope;
     }
-
-    if (req.query.scope && isHrOrAdmin) filter.scope = req.query.scope;
     if (req.query.status) filter.status = req.query.status;
     if (req.query.parentGoalId) filter.parentGoalId = req.query.parentGoalId;
     if (req.query.search) {

@@ -36,6 +36,12 @@ const pmsKraSchema = new mongoose.Schema({
   },
   measurementMethod: { type: String, default: '' },
   targetDefinition: { type: String, default: '' },
+  assignmentType: {
+    type: String,
+    enum: ['by_role', 'by_department', 'by_employee', 'kra_library'],
+    default: 'by_role',
+    index: true,
+  },
   isTemplate: { type: Boolean, default: false },
   isMandatory: { type: Boolean, default: false },
   status: {

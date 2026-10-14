@@ -18,7 +18,44 @@ const listKras = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const filter = { companyId };
-    if (req.query.isTemplate !== undefined) {
+    const subTab = req.query.assignmentType || req.query.subTab;
+    if (subTab) {
+      if (subTab === 'kra_library') {
+        filter.$or = [
+          { assignmentType: 'kra_library' },
+          { isTemplate: true, assignmentType: { $exists: false } },
+        ];
+      } else if (subTab === 'by_department') {
+        filter.$or = [
+          { assignmentType: 'by_department' },
+          {
+            assignmentType: { $exists: false },
+            applicableDepartments: { $exists: true, $not: { $size: 0 } },
+            isTemplate: { $ne: true },
+          },
+        ];
+      } else if (subTab === 'by_employee') {
+        filter.$or = [
+          { assignmentType: 'by_employee' },
+          {
+            assignmentType: { $exists: false },
+            applicableEmployees: { $exists: true, $not: { $size: 0 } },
+          },
+        ];
+      } else if (subTab === 'by_role') {
+        filter.$or = [
+          { assignmentType: 'by_role' },
+          {
+            assignmentType: { $exists: false },
+            applicableDepartments: { $size: 0 },
+            applicableEmployees: { $size: 0 },
+            isTemplate: { $ne: true },
+          },
+          // Legacy seeded KRAs with isTemplate: true but no explicit assignmentType
+          { assignmentType: { $exists: false } },
+        ];
+      }
+    } else if (req.query.isTemplate !== undefined) {
       filter.isTemplate = req.query.isTemplate === 'true';
     }
     if (req.query.category) filter.category = req.query.category;
@@ -94,17 +131,22 @@ const createKra = async (req, res) => {
       category,
       applicableDepartments,
       applicableDesignations,
+      applicableEmployees,
       weightage,
       measurementMethod,
       targetDefinition,
       isTemplate,
       isMandatory,
       cycleId,
+      assignmentType,
     } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, message: 'KRA name is required' });
     }
+
+    const effectiveAssignmentType = assignmentType || (isTemplate ? 'kra_library' : 'by_role');
+    const effectiveIsTemplate = effectiveAssignmentType === 'kra_library' ? true : Boolean(isTemplate);
 
     const kra = await PmsKra.create({
       companyId: req.companyId,
@@ -114,10 +156,12 @@ const createKra = async (req, res) => {
       category: category || 'Productivity & Delivery',
       applicableDepartments: applicableDepartments || [],
       applicableDesignations: applicableDesignations || [],
+      applicableEmployees: applicableEmployees || [],
       weightage: Number(weightage) || 20,
       measurementMethod,
       targetDefinition,
-      isTemplate: Boolean(isTemplate),
+      assignmentType: effectiveAssignmentType,
+      isTemplate: effectiveIsTemplate,
       isMandatory: Boolean(isMandatory),
       cycleId: cycleId || null,
       createdBy: req.user._id,
@@ -159,17 +203,24 @@ const updateKra = async (req, res) => {
       'category',
       'applicableDepartments',
       'applicableDesignations',
+      'applicableEmployees',
       'weightage',
       'measurementMethod',
       'targetDefinition',
       'isTemplate',
       'isMandatory',
       'status',
+      'assignmentType',
     ];
 
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) kra[field] = req.body[field];
     });
+
+    if (req.body.assignmentType) {
+      kra.assignmentType = req.body.assignmentType;
+      kra.isTemplate = req.body.assignmentType === 'kra_library';
+    }
 
     kra.updatedBy = req.user._id;
     await kra.save();
