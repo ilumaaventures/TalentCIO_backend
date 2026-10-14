@@ -18,7 +18,44 @@ const listKras = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const filter = { companyId };
-    if (req.query.isTemplate !== undefined) {
+    const subTab = req.query.assignmentType || req.query.subTab;
+    if (subTab) {
+      if (subTab === 'kra_library') {
+        filter.$or = [
+          { assignmentType: 'kra_library' },
+          { isTemplate: true, assignmentType: { $exists: false } },
+        ];
+      } else if (subTab === 'by_department') {
+        filter.$or = [
+          { assignmentType: 'by_department' },
+          {
+            assignmentType: { $exists: false },
+            applicableDepartments: { $exists: true, $not: { $size: 0 } },
+            isTemplate: { $ne: true },
+          },
+        ];
+      } else if (subTab === 'by_employee') {
+        filter.$or = [
+          { assignmentType: 'by_employee' },
+          {
+            assignmentType: { $exists: false },
+            applicableEmployees: { $exists: true, $not: { $size: 0 } },
+          },
+        ];
+      } else if (subTab === 'by_role') {
+        filter.$or = [
+          { assignmentType: 'by_role' },
+          {
+            assignmentType: { $exists: false },
+            applicableDepartments: { $size: 0 },
+            applicableEmployees: { $size: 0 },
+            isTemplate: { $ne: true },
+          },
+          // Legacy seeded KRAs with isTemplate: true but no explicit assignmentType
+          { assignmentType: { $exists: false } },
+        ];
+      }
+    } else if (req.query.isTemplate !== undefined) {
       filter.isTemplate = req.query.isTemplate === 'true';
     }
     if (req.query.category) filter.category = req.query.category;
@@ -94,17 +131,22 @@ const createKra = async (req, res) => {
       category,
       applicableDepartments,
       applicableDesignations,
+      applicableEmployees,
       weightage,
       measurementMethod,
       targetDefinition,
       isTemplate,
       isMandatory,
       cycleId,
+      assignmentType,
     } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, message: 'KRA name is required' });
     }
+
+    const effectiveAssignmentType = assignmentType || (isTemplate ? 'kra_library' : 'by_role');
+    const effectiveIsTemplate = effectiveAssignmentType === 'kra_library' ? true : Boolean(isTemplate);
 
     const kra = await PmsKra.create({
       companyId: req.companyId,
@@ -114,10 +156,12 @@ const createKra = async (req, res) => {
       category: category || 'Productivity & Delivery',
       applicableDepartments: applicableDepartments || [],
       applicableDesignations: applicableDesignations || [],
+      applicableEmployees: applicableEmployees || [],
       weightage: Number(weightage) || 20,
       measurementMethod,
       targetDefinition,
-      isTemplate: Boolean(isTemplate),
+      assignmentType: effectiveAssignmentType,
+      isTemplate: effectiveIsTemplate,
       isMandatory: Boolean(isMandatory),
       cycleId: cycleId || null,
       createdBy: req.user._id,
@@ -159,17 +203,24 @@ const updateKra = async (req, res) => {
       'category',
       'applicableDepartments',
       'applicableDesignations',
+      'applicableEmployees',
       'weightage',
       'measurementMethod',
       'targetDefinition',
       'isTemplate',
       'isMandatory',
       'status',
+      'assignmentType',
     ];
 
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) kra[field] = req.body[field];
     });
+
+    if (req.body.assignmentType) {
+      kra.assignmentType = req.body.assignmentType;
+      kra.isTemplate = req.body.assignmentType === 'kra_library';
+    }
 
     kra.updatedBy = req.user._id;
     await kra.save();
@@ -237,13 +288,25 @@ const listKpis = async (req, res) => {
     const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
     if (!isHrOrAdmin) {
       if (req.query.scope === 'my_team') {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
         filter.employeeId = { $in: reportIds };
       } else if (!req.query.scope || req.query.scope === 'self' || req.query.employeeId === String(req.user._id)) {
         filter.employeeId = req.user._id;
       } else {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const isReport = directReports.some((d) => String(d._id) === String(req.query.employeeId));
         if (!isReport) {
           filter.employeeId = req.user._id;
@@ -260,16 +323,26 @@ const listKpis = async (req, res) => {
       filter.name = { $regex: req.query.search.trim(), $options: 'i' };
     }
 
-    const [kpis, total] = await Promise.all([
+    const [rawKpis, total] = await Promise.all([
       PmsKpi.find(filter)
         .populate('kraId', 'name category weightage')
-        .populate('employeeId', 'firstName lastName email profilePicture')
+        .populate({
+          path: 'employeeId',
+          match: {
+            isActive: true,
+            isDeleted: { $ne: true },
+            status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+          },
+          select: 'firstName lastName email profilePicture',
+        })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       PmsKpi.countDocuments(filter),
     ]);
+
+    const kpis = rawKpis.filter((k) => k.scope !== 'individual' || k.employeeId != null);
 
     return res.status(200).json({
       success: true,

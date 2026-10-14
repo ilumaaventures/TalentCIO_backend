@@ -98,11 +98,23 @@ const getCycle = async (req, res) => {
     const { id } = req.params;
     const cycle = await PmsCycle.findOne({ _id: id, companyId: req.companyId })
       .populate('createdBy', 'firstName lastName email')
-      .populate('applicableEmployees', 'firstName lastName email department designationRef profilePicture')
+      .populate({
+        path: 'applicableEmployees',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName email department designationRef profilePicture',
+      })
       .lean();
 
     if (!cycle) {
       return res.status(404).json({ success: false, message: 'Performance cycle not found' });
+    }
+
+    if (Array.isArray(cycle.applicableEmployees)) {
+      cycle.applicableEmployees = cycle.applicableEmployees.filter(Boolean);
     }
 
     // Aggregate progress
@@ -172,7 +184,7 @@ const createCycle = async (req, res) => {
     let normalizedCycleType = 'annual';
     if (cycleType) {
       const lower = String(cycleType).toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_');
-      if (['annual', 'half_yearly', 'quarterly', 'probationary', 'custom'].includes(lower)) {
+      if (['annual', 'half_yearly', 'quarterly', 'monthly', 'probationary', 'custom'].includes(lower)) {
         normalizedCycleType = lower;
       }
     }
@@ -197,7 +209,12 @@ const createCycle = async (req, res) => {
 
     // Auto-generate participant appraisals for eligible active employees
     try {
-      const query = { companyId: req.companyId, status: { $nin: ['deleted', 'inactive'] } };
+      const query = {
+        companyId: req.companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      };
       if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
         query._id = { $in: cycle.applicableEmployees };
       } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {
@@ -269,6 +286,7 @@ const updateCycle = async (req, res) => {
       'code',
       'description',
       'cycleType',
+      'status',
       'startDate',
       'endDate',
       'timeline',
@@ -300,6 +318,37 @@ const updateCycle = async (req, res) => {
   } catch (err) {
     console.error('[PMS updateCycle Error]:', err);
     return res.status(500).json({ success: false, message: 'Failed to update cycle' });
+  }
+};
+
+/**
+ * @desc Delete performance cycle
+ * @route DELETE /api/performance/cycles/:id
+ */
+const deleteCycle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cycle = await PmsCycle.findOneAndDelete({ _id: id, companyId: req.companyId });
+    if (!cycle) {
+      return res.status(404).json({ success: false, message: 'Performance cycle not found' });
+    }
+
+    // Clean up associated cycle appraisals
+    await PmsAppraisal.deleteMany({ cycleId: id, companyId: req.companyId });
+
+    await logPmsAudit({
+      companyId: req.companyId,
+      userId: req.user._id,
+      action: 'CYCLE_DELETED',
+      entityType: 'PmsCycle',
+      entityId: cycle._id,
+      entityName: cycle.name,
+    });
+
+    return res.status(200).json({ success: true, message: 'Performance cycle deleted successfully' });
+  } catch (err) {
+    console.error('[PMS deleteCycle Error]:', err);
+    return res.status(500).json({ success: false, message: 'Failed to delete performance cycle' });
   }
 };
 
@@ -337,7 +386,12 @@ const changeCycleStatus = async (req, res) => {
 
     // Auto-generate appraisals for applicable employees if transitioning into self_review or in_progress
     if (['in_progress', 'self_review', 'goal_setting'].includes(status)) {
-      let query = { companyId: req.companyId, isActive: true };
+      let query = {
+        companyId: req.companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      };
       if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
         query._id = { $in: cycle.applicableEmployees };
       } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {
@@ -455,7 +509,12 @@ const syncCycleParticipants = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Cannot sync participants on a closed cycle' });
     }
 
-    let query = { companyId: req.companyId, isActive: true };
+    let query = {
+      companyId: req.companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    };
     if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
       query._id = { $in: cycle.applicableEmployees };
     } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {
@@ -541,6 +600,7 @@ module.exports = {
   getCycle,
   createCycle,
   updateCycle,
+  deleteCycle,
   changeCycleStatus,
   reopenCycle,
   syncCycleParticipants,

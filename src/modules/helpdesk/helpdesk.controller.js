@@ -131,11 +131,11 @@ exports.getQueryTypes = async (req, res) => {
     try {
         const types = await QueryType.find({ companyId: req.companyId })
             .populate('assignedRole', 'name')
-            .populate('assignedPerson', 'firstName lastName email')
+            .populate('assignedPerson', 'firstName lastName email isActive isDeleted')
             .populate('escalationRole', 'name')
-            .populate('escalationPerson', 'firstName lastName email')
+            .populate('escalationPerson', 'firstName lastName email isActive isDeleted')
             .populate('escalationLevels.escalationRole', 'name')
-            .populate('escalationLevels.escalationPerson', 'firstName lastName email')
+            .populate('escalationLevels.escalationPerson', 'firstName lastName email isActive isDeleted')
             .sort({ name: 1 })
             .lean();
         res.status(200).json({ success: true, data: types });

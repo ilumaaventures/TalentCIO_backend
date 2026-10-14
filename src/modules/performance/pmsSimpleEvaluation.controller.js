@@ -88,7 +88,9 @@ const ensureDefaultCycleAndParticipants = async (companyId, adminUserId) => {
   // 3. Ensure every active employee has an appraisal record in the active cycle
   const activeUsers = await User.find({
     companyId,
-    status: { $nin: ['deleted', 'inactive', 'terminated'] },
+    isActive: true,
+    isDeleted: { $ne: true },
+    status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
   }).select('_id reportingManagers').lean();
 
   const existingAppraisals = await PmsAppraisal.find({
@@ -150,17 +152,24 @@ const getEvaluations = async (req, res) => {
 
     const { scope = 'default', search = '', department = '', status = '' } = req.query;
 
-    // Build user filter
-    let userMatch = { companyId, status: { $nin: ['deleted', 'inactive', 'terminated'] } };
+    // Build user filter - strictly active non-deleted users
+    let userMatch = {
+      companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    };
 
-    // Find who reports to this user
+    // Find who reports to this user (strictly active direct reports)
     const directReports = await User.find({
       companyId,
       $or: [
         { reportingManagers: userId },
         { reportingManagers: new mongoose.Types.ObjectId(userId) },
       ],
-      status: { $nin: ['deleted', 'inactive', 'terminated'] },
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
     }).select('_id').lean();
 
     const directReportIds = directReports.map((d) => String(d._id));
@@ -177,7 +186,12 @@ const getEvaluations = async (req, res) => {
       userMatch._id = { $in: directReportIds };
     } else if (scope === 'managers') {
       // Find all users who are reporting managers to someone
-      const allReportingManagers = await User.distinct('reportingManagers', { companyId });
+      const allReportingManagers = await User.distinct('reportingManagers', {
+        companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      });
       userMatch._id = { $in: allReportingManagers.filter(Boolean) };
     } else if (scope === 'all') {
       if (!isAdmin && !isHr) {
@@ -337,10 +351,15 @@ const submitReview = async (req, res) => {
     const isAdmin = isUserAdminOrSuper(req.user) || req.user?.permissions?.includes('pms.can.edit.all');
     const isHr = isUserHr(req.user) || req.user?.permissions?.includes('pms.view.all');
 
-    // Verify reporting manager relationship
-    const targetUser = await User.findById(targetUserId).select('reportingManagers firstName lastName email').lean();
+    // Verify reporting manager relationship and employee active status
+    const targetUser = await User.findOne({
+      _id: targetUserId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    }).select('reportingManagers firstName lastName email').lean();
     if (!targetUser) {
-      return res.status(404).json({ success: false, message: 'Target employee not found' });
+      return res.status(404).json({ success: false, message: 'Target active employee not found or is inactive' });
     }
 
     const isDirectManager = (targetUser.reportingManagers || []).some(
