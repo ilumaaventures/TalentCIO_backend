@@ -158,7 +158,7 @@ exports.getDossier = async (req, res) => {
         let filteredProfile = filterProfileFields(profile, req.user, isSelf);
 
         if (isSelf || checkIsAdmin(req.user) || hasPermission(req.user, 'dossier.approve')) {
-            filteredProfile.pendingUpdates = profile.pendingUpdates || null;
+            filteredProfile.pendingUpdates = filteredProfile.pendingUpdates || null;
         } else {
             delete filteredProfile.pendingUpdates;
         }

@@ -230,7 +230,7 @@ const getDashboardStats = async (req, res) => {
                 clockOut: record.clockOut,
                 attendanceMode: record.attendanceMode || 'clock_in_out',
                 status: record.status || 'PRESENT',
-                location: record.location || record.clockOutLocation || (user.workLocation ? { name: user.workLocation } : null),
+                location: record.location || record.clockOutLocation || null,
                 clockOutLocation: record.clockOutLocation || null
             });
             return acc;

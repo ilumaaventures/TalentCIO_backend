@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Attendance = require('../model/attendance.model');
 const User = require('../../user/user.model');
 const Company = require('../../company/company.model');
@@ -10,7 +11,10 @@ const { buildTimesheetPeriodRange, toLocalTimezoneRep } = require('../../timeshe
 
 exports.getTeamAttendanceReport = async (req, res) => {
     try {
-        const { year, month, date } = req.query;
+        const year = req.query.year || req.body?.year;
+        const month = req.query.month || req.body?.month;
+        const date = req.query.date || req.body?.date;
+        const userIds = req.query.userIds || req.body?.userIds;
         
         const canViewAll = req.user.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
@@ -20,6 +24,19 @@ exports.getTeamAttendanceReport = async (req, res) => {
         let userFilter = { companyId: req.companyId, isActive: true };
         if (!canViewAll) {
             userFilter.reportingManagers = req.user._id;
+        }
+
+        if (userIds) {
+            let requestedIds = typeof userIds === 'string'
+                ? (userIds.includes(',') ? userIds.split(',').map(s => s.trim()) : [userIds.trim()])
+                : (Array.isArray(userIds) ? userIds : [userIds]);
+            const validIds = requestedIds
+                .map(id => (typeof id === 'object' && id?._id ? id._id : id))
+                .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+                .map(id => new mongoose.Types.ObjectId(id));
+            if (validIds.length > 0) {
+                userFilter._id = { $in: validIds };
+            }
         }
 
         const teamMembers = await User.find(userFilter).select('_id firstName lastName employeeCode designation profileImage joiningDate dateOfLeaving flexWeeklyOffCount customFlexibleOffDays roles employmentType').lean();

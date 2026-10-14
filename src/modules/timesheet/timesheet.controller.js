@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Timesheet = require('./timesheet.model');
 const Project = require('../project/project.model');
 const User = require('../../modules/user/user.model');
@@ -859,11 +860,114 @@ const deleteEntry = async (req, res) => {
     }
 };
 
+// @desc    Get Team / Bulk Timesheet Report for selected users or whole team
+// @route   ALL /api/timesheet/team-report
+// @access  Private
+const getTeamTimesheetReport = async (req, res) => {
+    try {
+        const cycle = req.company?.settings?.timesheet?.approvalCycle || 'Monthly';
+        const requestedMonth = req.body?.month || req.query?.month || getTimesheetPeriodIdForDate(new Date(), cycle);
+        const requestedUserIds = Array.isArray(req.body?.userIds)
+            ? req.body.userIds
+            : (req.query?.userIds ? req.query.userIds.split(',').map(s => s.trim()).filter(Boolean) : null);
+
+        if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+        const isAdmin = req.user.roles?.some(r =>
+            (typeof r === 'string' && r === 'Admin') ||
+            (typeof r === 'object' && r.name === 'Admin')
+        ) || req.user.permissions?.includes('*') ||
+             req.user.permissions?.includes('timesheet.view') ||
+             req.user.permissions?.includes('timesheet.update_others') ||
+             req.user.permissions?.includes('attendance.view') ||
+             req.user.permissions?.includes('attendance.view_all') ||
+             req.user.permissions?.includes('user.read');
+
+        let userFilter = { companyId: req.companyId, isDeleted: { $ne: true } };
+
+        if (requestedUserIds && requestedUserIds.length > 0) {
+            const validIds = requestedUserIds
+                .map(id => (typeof id === 'object' && id?._id ? id._id : id))
+                .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+                .map(id => new mongoose.Types.ObjectId(id));
+
+            if (!isAdmin) {
+                userFilter.$and = [
+                    { _id: { $in: validIds } },
+                    { $or: [{ reportingManagers: req.user._id }, { _id: req.user._id }] }
+                ];
+            } else {
+                userFilter._id = { $in: validIds };
+            }
+        } else {
+            if (!isAdmin) {
+                userFilter.$or = [{ reportingManagers: req.user._id }, { _id: req.user._id }];
+            }
+        }
+
+        const teamMembers = await User.find(userFilter)
+            .select('_id firstName lastName email employeeCode department departmentRef designationRef joiningDate dateOfLeaving customFlexibleOffDays attendanceMode')
+            .populate('reportingManagers', 'firstName lastName email')
+            .populate('departmentRef', 'name code')
+            .populate('designationRef', 'title level')
+            .sort({ firstName: 1, lastName: 1 })
+            .lean();
+
+        const memberIds = teamMembers.map(m => m._id);
+        const { start, end } = buildTimesheetPeriodRange(requestedMonth, cycle);
+
+        const [workLogs, timesheets] = await Promise.all([
+            populateWorkLogHierarchy(WorkLog.find({
+                user: { $in: memberIds },
+                companyId: req.companyId,
+                date: { $gte: start, $lte: end }
+            })).sort({ date: 1 }).lean(),
+            Timesheet.find({
+                user: { $in: memberIds },
+                month: requestedMonth,
+                companyId: req.companyId
+            }).lean()
+        ]);
+
+        const workLogsByUser = {};
+        memberIds.forEach(id => {
+            workLogsByUser[id.toString()] = [];
+        });
+
+        workLogs.forEach(log => {
+            const uId = log.user ? log.user.toString() : '';
+            if (workLogsByUser[uId]) {
+                workLogsByUser[uId].push(mapWorkLogToTimesheetEntry(log));
+            }
+        });
+
+        const timesheetMap = {};
+        timesheets.forEach(ts => {
+            const uId = ts.user ? ts.user.toString() : '';
+            timesheetMap[uId] = ts;
+        });
+
+        res.json({
+            month: requestedMonth,
+            cycle,
+            startDate: start,
+            endDate: end,
+            teamMembers,
+            timesheets: timesheetMap,
+            workLogsByUser
+        });
+    } catch (error) {
+        console.error('getTeamTimesheetReport Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
     populateWorkLogHierarchy,
     mapWorkLogToTimesheetEntry,
     getCurrentTimesheet,
     getUserTimesheet,
+    getTeamTimesheetReport,
     addEntry,
     updateEntry,
     deleteEntry,

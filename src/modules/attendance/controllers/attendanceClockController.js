@@ -31,19 +31,20 @@ exports.getTodayStatus = async (req, res) => {
 };
 
 const parseReqLocation = (body) => {
-    if (body.location && typeof body.location.lat === 'number' && typeof body.location.lng === 'number') {
-        return {
-            lat: Number(body.location.lat),
-            lng: Number(body.location.lng),
-            accuracy: body.location.accuracy != null ? Number(body.location.accuracy) : undefined
-        };
-    }
-    if (body.latitude != null && body.longitude != null && !Number.isNaN(Number(body.latitude)) && !Number.isNaN(Number(body.longitude))) {
-        return {
-            lat: Number(body.latitude),
-            lng: Number(body.longitude),
-            accuracy: body.accuracy != null ? Number(body.accuracy) : undefined
-        };
+    const rawLat = body?.location?.lat ?? body?.latitude;
+    const rawLng = body?.location?.lng ?? body?.longitude;
+    const rawAccuracy = body?.location?.accuracy ?? body?.accuracy;
+
+    if (rawLat != null && rawLng != null) {
+        const lat = Number(rawLat);
+        const lng = Number(rawLng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            return {
+                lat,
+                lng,
+                accuracy: rawAccuracy != null && Number.isFinite(Number(rawAccuracy)) ? Number(rawAccuracy) : undefined
+            };
+        }
     }
     return null;
 };
@@ -56,6 +57,12 @@ exports.clockIn = async (req, res) => {
         const today = getStartOfDayIST();
         const now = new Date();
         const locData = parseReqLocation(req.body);
+
+        if (!locData) {
+            return res.status(400).json({
+                message: 'Location data (latitude and longitude) is required for clock-in. Please ensure device location and browser permissions are enabled.'
+            });
+        }
 
         const periodEditability = await ensureTimesheetPeriodEditable({
             company,
@@ -90,9 +97,6 @@ exports.clockIn = async (req, res) => {
         }
 
         if (attSettings.geofencing?.enabled) {
-            if (!locData) {
-                return res.status(400).json({ message: 'Location data (latitude and longitude) is required for clock-in.' });
-            }
             const { latitude: officeLat, longitude: officeLng, radiusMeters } = attSettings.geofencing;
             const distance = calculateDistance(locData.lat, locData.lng, officeLat, officeLng);
             if (distance > radiusMeters) {
@@ -124,9 +128,7 @@ exports.clockIn = async (req, res) => {
         attendance.clockIn = now;
         attendance.clockInIST = getISTTime(now);
         attendance.status = 'PRESENT';
-        if (locData) {
-            attendance.location = locData;
-        }
+        attendance.location = locData;
         applyPolicyMetadata(attendance, policy);
 
         await attendance.save();
@@ -144,6 +146,12 @@ exports.clockOut = async (req, res) => {
         const today = getStartOfDayIST();
         const now = new Date();
         const locData = parseReqLocation(req.body);
+
+        if (!locData) {
+            return res.status(400).json({
+                message: 'Location data (latitude and longitude) is required for clock-out. Please ensure device location and browser permissions are enabled.'
+            });
+        }
 
         const periodEditability = await ensureTimesheetPeriodEditable({
             company,
@@ -164,9 +172,6 @@ exports.clockOut = async (req, res) => {
         }
 
         if (attSettings.geofencing?.enabled) {
-            if (!locData) {
-                return res.status(400).json({ message: 'Location data (latitude and longitude) is required for clock-out.' });
-            }
             const { latitude: officeLat, longitude: officeLng, radiusMeters } = attSettings.geofencing;
             const distance = calculateDistance(locData.lat, locData.lng, officeLat, officeLng);
             if (distance > radiusMeters) {

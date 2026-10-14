@@ -7,6 +7,7 @@ const { dossierGate } = require('../../common/middleware/dossierGate');
 const { 
     getCurrentTimesheet, 
     getUserTimesheet,
+    getTeamTimesheetReport,
     addEntry, 
 
     submitTimesheet,
@@ -25,6 +26,8 @@ router.use(protect);
 router.use(requireModule(['timesheet', 'attendance']));
 
 router.get('/bootstrap', getTimesheetBootstrap);
+router.get('/team-report', getTeamTimesheetReport);
+router.post('/team-report', getTeamTimesheetReport);
 router.get('/current', getCurrentTimesheet);
 router.get('/user/:userId', getUserTimesheet);
 router.post('/entry', dossierGate, addEntry);
