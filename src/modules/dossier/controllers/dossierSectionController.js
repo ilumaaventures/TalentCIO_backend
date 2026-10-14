@@ -338,7 +338,7 @@ exports.updateSection = async (req, res) => {
             if (section === 'compensation') {
                 if (updates && typeof updates === 'object') {
                     const compKeys = Object.keys(updates);
-                    const allowedKeys = ['bankDetails', 'uanNumber'];
+                    const allowedKeys = ['bankDetails', 'uanNumber', 'isUanApplicable'];
                     const hasDisallowed = compKeys.some(k => !allowedKeys.includes(k));
                     if (hasDisallowed) {
                         return res.status(403).json({ message: 'You are not authorized to modify sensitive salary/compensation details. Contact HR.' });

@@ -508,8 +508,21 @@ const ensureTransferredLivePhotoProfile = async (profile, targetUser, companyId)
     return profile;
 };
 
+const stripSalaryDetails = (comp) => {
+    if (!comp || typeof comp !== 'object') return comp;
+    const sanitized = { ...comp };
+    delete sanitized.ctc;
+    delete sanitized.payType;
+    delete sanitized.hourlyRate;
+    delete sanitized.hoursWorked;
+    delete sanitized.salaryBreakup;
+    delete sanitized.salaryRevisions;
+    delete sanitized.payrollHistory;
+    return sanitized;
+};
+
 const filterProfileFields = (profile, viewer, isSelf) => {
-    let profileObj = profile.toObject();
+    let profileObj = profile.toObject ? profile.toObject() : JSON.parse(JSON.stringify(profile));
     const roles = (viewer && Array.isArray(viewer.roles)) ? viewer.roles : [];
     const isAdmin = roles.some(r => r && (r.name === 'Admin' || r.name === 'Super Admin'));
 
@@ -520,27 +533,6 @@ const filterProfileFields = (profile, viewer, isSelf) => {
             role.permissions && role.permissions.some(p => p.key === key)
         );
     };
-
-    const canViewDossier = isAdmin || viewerHasPermission('dossier.view') || viewerHasPermission('dossier.view.sensitive') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
-
-    if (!canViewDossier && !isSelf) {
-        delete profileObj.compensation;
-        delete profileObj.identity;
-        delete profileObj.family; delete profileObj.contact; delete profileObj.documents; delete profileObj.hris; delete profileObj.skills;
-        delete profileObj.pendingUpdates;
-    } else {
-        if (isSelf) {
-            const canViewSelfSalary = isAdmin || viewerHasPermission('payroll.salary.view.self') || viewerHasPermission('payroll.payslip.view') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
-            if (!canViewSelfSalary) {
-                delete profileObj.compensation;
-            }
-        } else {
-            const canViewOtherSalary = isAdmin || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
-            if (!canViewOtherSalary) {
-                delete profileObj.compensation;
-            }
-        }
-    }
 
     if (profileObj.compensation && profileObj.compensation.salaryBreakup) {
         if (profileObj.compensation.salaryBreakup instanceof Map) {
@@ -558,6 +550,38 @@ const filterProfileFields = (profile, viewer, isSelf) => {
             profileObj.pendingUpdates.compensation.salaryBreakup = Object.fromEntries(pb);
         } else if (typeof pb.get === 'function') {
             profileObj.pendingUpdates.compensation.salaryBreakup = Object.fromEntries(pb);
+        }
+    }
+
+    const canViewDossier = isAdmin || viewerHasPermission('dossier.view') || viewerHasPermission('dossier.view.sensitive') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+
+    if (!canViewDossier && !isSelf) {
+        delete profileObj.compensation;
+        delete profileObj.identity;
+        delete profileObj.family; delete profileObj.contact; delete profileObj.documents; delete profileObj.hris; delete profileObj.skills;
+        delete profileObj.pendingUpdates;
+    } else {
+        // Protect salary/compensation details specifically without wiping out Bank Account & UAN Details
+        if (isSelf) {
+            const canViewSelfSalary = isAdmin || viewerHasPermission('payroll.salary.view.self') || viewerHasPermission('payroll.payslip.view') || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+            if (!canViewSelfSalary) {
+                if (profileObj.compensation) {
+                    profileObj.compensation = stripSalaryDetails(profileObj.compensation);
+                }
+                if (profileObj.pendingUpdates && profileObj.pendingUpdates.compensation) {
+                    profileObj.pendingUpdates.compensation = stripSalaryDetails(profileObj.pendingUpdates.compensation);
+                }
+            }
+        } else {
+            const canViewOtherSalary = isAdmin || viewerHasPermission('payroll.salary.view') || viewerHasPermission('payroll.salary.manage');
+            if (!canViewOtherSalary) {
+                if (profileObj.compensation) {
+                    profileObj.compensation = stripSalaryDetails(profileObj.compensation);
+                }
+                if (profileObj.pendingUpdates && profileObj.pendingUpdates.compensation) {
+                    profileObj.pendingUpdates.compensation = stripSalaryDetails(profileObj.pendingUpdates.compensation);
+                }
+            }
         }
     }
 
