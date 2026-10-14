@@ -52,7 +52,13 @@ const getDashboardMetrics = async (req, res) => {
 
     // Server-side scope isolation: non-admin/HR users only see their direct reports or self
     if (!isAdmin && !isHr && !hasAnalyticsPerm) {
-      const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+      const directReports = await User.find({
+        reportingManagers: req.user._id,
+        companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      }).select('_id').lean();
       const reportIds = directReports.map((d) => d._id);
       if (reportIds.length > 0) {
         appraisalMatch.employeeId = { $in: reportIds };
@@ -83,7 +89,9 @@ const getDashboardMetrics = async (req, res) => {
 
     const totalCompanyEmployees = await User.countDocuments({
       companyId,
-      status: { $nin: ['deleted', 'inactive'] },
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
     });
 
     const completionRate = totalReviews > 0 ? Math.round((published / totalReviews) * 100) : 0;
@@ -144,20 +152,32 @@ const getDashboardMetrics = async (req, res) => {
     const notStartedGoals = Math.max(0, totalGoals - (achievedGoals + onTrackGoals + atRiskGoals));
     const goalAchievedPercent = totalGoals > 0 ? Math.round((achievedGoals / totalGoals) * 100) : 0;
 
-    // 5. Top performers from real appraisals (fallback to real company users)
+    // 5. Top performers from real appraisals (strictly active employees)
     let topPerformers = await PmsAppraisal.find({
       ...appraisalMatch,
       'scores.calculatedFinalScore': { $gt: 0 },
     })
-      .populate('employeeId', 'firstName lastName name department designation profilePicture email employeeId')
+      .populate({
+        path: 'employeeId',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName name department designation profilePicture email employeeId',
+      })
       .sort({ 'scores.calculatedFinalScore': -1 })
-      .limit(5)
+      .limit(10)
       .lean();
+
+    topPerformers = topPerformers.filter((p) => p.employeeId != null).slice(0, 5);
 
     if (topPerformers.length === 0) {
       const sampleUsers = await User.find({
         companyId,
-        status: { $nin: ['deleted', 'inactive'] },
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
       })
         .select('firstName lastName name department designation profilePicture email employeeId')
         .limit(4)
@@ -267,7 +287,13 @@ const exportAppraisalsExcel = async (req, res) => {
 
     // Scope check: If not admin/HR, user can only export their direct reports
     if (!isAdmin && !isHr && !hasReportsPerm) {
-      const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+      const directReports = await User.find({
+        reportingManagers: req.user._id,
+        companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      }).select('_id').lean();
       const reportIds = directReports.map((d) => d._id);
       if (reportIds.length === 0) {
         return res.status(403).json({ success: false, message: 'Unauthorized: You do not have permission to export organizational appraisal records.' });
@@ -275,12 +301,22 @@ const exportAppraisalsExcel = async (req, res) => {
       filter.employeeId = { $in: reportIds };
     }
 
-    const appraisals = await PmsAppraisal.find(filter)
+    const rawAppraisals = await PmsAppraisal.find(filter)
       .populate('cycleId', 'name')
-      .populate('employeeId', 'firstName lastName email department employeeCode')
+      .populate({
+        path: 'employeeId',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName email department employeeCode',
+      })
       .populate('managerId', 'firstName lastName')
       .sort({ createdAt: -1 })
       .lean();
+
+    const appraisals = rawAppraisals.filter((a) => a.employeeId != null);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'TalentCIO PMS';

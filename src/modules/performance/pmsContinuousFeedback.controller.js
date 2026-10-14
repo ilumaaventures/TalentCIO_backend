@@ -34,13 +34,31 @@ const listFeedbacks = async (req, res) => {
       filter.$or = [{ fromUser: userId }, { toUser: userId }];
     }
 
-    const items = await PmsContinuousFeedback.find(filter)
-      .populate('fromUser', 'firstName lastName profilePicture department designationRef')
-      .populate('toUser', 'firstName lastName profilePicture department designationRef')
+    const rawItems = await PmsContinuousFeedback.find(filter)
+      .populate({
+        path: 'fromUser',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName profilePicture department designationRef',
+      })
+      .populate({
+        path: 'toUser',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName profilePicture department designationRef',
+      })
       .populate('meetingDetails.actionItems.owner', 'firstName lastName')
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
+
+    const items = rawItems.filter((i) => i.fromUser != null && i.toUser != null);
 
     return res.status(200).json({ success: true, data: items });
   } catch (err) {

@@ -98,11 +98,23 @@ const getCycle = async (req, res) => {
     const { id } = req.params;
     const cycle = await PmsCycle.findOne({ _id: id, companyId: req.companyId })
       .populate('createdBy', 'firstName lastName email')
-      .populate('applicableEmployees', 'firstName lastName email department designationRef profilePicture')
+      .populate({
+        path: 'applicableEmployees',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName email department designationRef profilePicture',
+      })
       .lean();
 
     if (!cycle) {
       return res.status(404).json({ success: false, message: 'Performance cycle not found' });
+    }
+
+    if (Array.isArray(cycle.applicableEmployees)) {
+      cycle.applicableEmployees = cycle.applicableEmployees.filter(Boolean);
     }
 
     // Aggregate progress
@@ -197,7 +209,12 @@ const createCycle = async (req, res) => {
 
     // Auto-generate participant appraisals for eligible active employees
     try {
-      const query = { companyId: req.companyId, status: { $nin: ['deleted', 'inactive'] } };
+      const query = {
+        companyId: req.companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      };
       if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
         query._id = { $in: cycle.applicableEmployees };
       } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {
@@ -369,7 +386,12 @@ const changeCycleStatus = async (req, res) => {
 
     // Auto-generate appraisals for applicable employees if transitioning into self_review or in_progress
     if (['in_progress', 'self_review', 'goal_setting'].includes(status)) {
-      let query = { companyId: req.companyId, isActive: true };
+      let query = {
+        companyId: req.companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+      };
       if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
         query._id = { $in: cycle.applicableEmployees };
       } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {
@@ -487,7 +509,12 @@ const syncCycleParticipants = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Cannot sync participants on a closed cycle' });
     }
 
-    let query = { companyId: req.companyId, isActive: true };
+    let query = {
+      companyId: req.companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    };
     if (cycle.applicableEmployees && cycle.applicableEmployees.length > 0) {
       query._id = { $in: cycle.applicableEmployees };
     } else if (cycle.applicableDepartments && cycle.applicableDepartments.length > 0) {

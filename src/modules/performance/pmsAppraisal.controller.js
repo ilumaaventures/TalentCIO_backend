@@ -41,13 +41,16 @@ const listAppraisals = async (req, res) => {
       filter.employeeId = req.user._id;
     } else if (requestedScope === 'my_team') {
       const userObjId = mongoose.Types.ObjectId.isValid(req.user._id) ? new mongoose.Types.ObjectId(req.user._id) : req.user._id;
-      // Find employees reporting to this user
+      // Find employees reporting to this user (strictly active)
       const directReports = await User.find({
         $or: [
           { reportingManagers: req.user._id },
           { reportingManagers: userObjId },
         ],
         companyId,
+        isActive: true,
+        isDeleted: { $ne: true },
+        status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
       }).select('_id').lean();
       const reportIds = directReports.map((d) => d._id);
       filter.$or = [
@@ -58,10 +61,16 @@ const listAppraisals = async (req, res) => {
         { 'delegation.isDelegated': true, 'delegation.delegatedTo': userObjId },
       ];
     } else if (requestedScope === 'department') {
-      // Find employees in the department where the user is head
+      // Find employees in the department where the user is head (strictly active)
       const dept = await Department.findOne({ head: req.user._id, companyId }).select('_id').lean();
       if (dept) {
-        const deptEmployees = await User.find({ departmentRef: dept._id, companyId }).select('_id').lean();
+        const deptEmployees = await User.find({
+          departmentRef: dept._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         filter.employeeId = { $in: deptEmployees.map((e) => e._id) };
       } else if (!isHr) {
         // Not a dept head, fall back to own records
@@ -91,7 +100,15 @@ const listAppraisals = async (req, res) => {
     const [appraisals, total] = await Promise.all([
       PmsAppraisal.find(filter)
         .populate('cycleId', 'name cycleType startDate endDate status settings')
-        .populate('employeeId', 'firstName lastName email department departmentRef profilePicture employeeCode')
+        .populate({
+          path: 'employeeId',
+          match: {
+            isActive: true,
+            isDeleted: { $ne: true },
+            status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+          },
+          select: 'firstName lastName email department departmentRef profilePicture employeeCode',
+        })
         .populate('managerId', 'firstName lastName email profilePicture')
         .populate('departmentHeadEvaluation.evaluatedBy', 'firstName lastName')
         .populate('hrEvaluation.evaluatedBy', 'firstName lastName')
@@ -107,8 +124,11 @@ const listAppraisals = async (req, res) => {
     const setting = await PmsSetting.findOne({ companyId }).lean();
     const minResponses = setting?.continuousFeedbackSettings?.minResponsesForDisclosure || 3;
 
+    // Filter out appraisals belonging to inactive / deleted users
+    const activeAppraisals = appraisals.filter((app) => app.employeeId != null);
+
     // Sanitize records (masking unpublished final ratings & anonymous reviewers)
-    const sanitized = appraisals.map((app) =>
+    const sanitized = activeAppraisals.map((app) =>
       sanitizeAppraisalForUser({
         appraisal: app,
         user: req.user,
@@ -122,7 +142,7 @@ const listAppraisals = async (req, res) => {
       pagination: {
         page,
         limit,
-        total,
+        total: activeAppraisals.length,
         pages: Math.ceil(total / limit),
       },
     });

@@ -15,7 +15,13 @@ const listPips = async (req, res) => {
 
     if (!isHrOrAdmin) {
       if (req.query.scope === 'my_team') {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
         filter.$or = [{ managerId: req.user._id }, { employeeId: { $in: reportIds } }];
       } else {
@@ -26,12 +32,22 @@ const listPips = async (req, res) => {
     }
     if (req.query.status) filter.status = req.query.status;
 
-    const pips = await PmsPip.find(filter)
-      .populate('employeeId', 'firstName lastName email department profilePicture')
+    const rawPips = await PmsPip.find(filter)
+      .populate({
+        path: 'employeeId',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName email department profilePicture',
+      })
       .populate('managerId', 'firstName lastName')
       .populate('initiatedBy', 'firstName lastName')
       .sort({ createdAt: -1 })
       .lean();
+
+    const pips = rawPips.filter((p) => p.employeeId != null);
 
     return res.status(200).json({ success: true, data: pips });
   } catch (err) {
@@ -164,7 +180,13 @@ const listDevPlans = async (req, res) => {
 
     if (!isHrOrAdmin) {
       if (req.query.scope === 'my_team') {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
         filter.$or = [{ managerId: req.user._id }, { employeeId: { $in: reportIds } }];
       } else {
@@ -174,11 +196,21 @@ const listDevPlans = async (req, res) => {
       filter.employeeId = req.query.employeeId;
     }
 
-    const plans = await PmsDevelopmentPlan.find(filter)
-      .populate('employeeId', 'firstName lastName email department profilePicture')
+    const rawPlans = await PmsDevelopmentPlan.find(filter)
+      .populate({
+        path: 'employeeId',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName email department profilePicture',
+      })
       .populate('managerId', 'firstName lastName')
       .sort({ createdAt: -1 })
       .lean();
+
+    const plans = rawPlans.filter((p) => p.employeeId != null);
 
     return res.status(200).json({ success: true, data: plans });
   } catch (err) {

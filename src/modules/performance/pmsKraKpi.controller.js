@@ -288,13 +288,25 @@ const listKpis = async (req, res) => {
     const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
     if (!isHrOrAdmin) {
       if (req.query.scope === 'my_team') {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
         filter.employeeId = { $in: reportIds };
       } else if (!req.query.scope || req.query.scope === 'self' || req.query.employeeId === String(req.user._id)) {
         filter.employeeId = req.user._id;
       } else {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const isReport = directReports.some((d) => String(d._id) === String(req.query.employeeId));
         if (!isReport) {
           filter.employeeId = req.user._id;
@@ -311,16 +323,26 @@ const listKpis = async (req, res) => {
       filter.name = { $regex: req.query.search.trim(), $options: 'i' };
     }
 
-    const [kpis, total] = await Promise.all([
+    const [rawKpis, total] = await Promise.all([
       PmsKpi.find(filter)
         .populate('kraId', 'name category weightage')
-        .populate('employeeId', 'firstName lastName email profilePicture')
+        .populate({
+          path: 'employeeId',
+          match: {
+            isActive: true,
+            isDeleted: { $ne: true },
+            status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+          },
+          select: 'firstName lastName email profilePicture',
+        })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       PmsKpi.countDocuments(filter),
     ]);
+
+    const kpis = rawKpis.filter((k) => k.scope !== 'individual' || k.employeeId != null);
 
     return res.status(200).json({
       success: true,

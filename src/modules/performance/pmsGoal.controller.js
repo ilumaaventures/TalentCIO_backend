@@ -23,7 +23,13 @@ const listGoals = async (req, res) => {
       filter.scope = { $in: ['company', 'strategic'] };
     } else if (req.query.scope === 'my_team' || req.query.scope === 'team' || req.query.scope === 'team_goals') {
       if (!isHrOrAdmin) {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const reportIds = directReports.map((d) => d._id);
         filter.$or = [
           { employeeId: { $in: reportIds } },
@@ -39,7 +45,13 @@ const listGoals = async (req, res) => {
       if (!req.query.scope || req.query.employeeId === String(req.user._id)) {
         filter.employeeId = req.user._id;
       } else {
-        const directReports = await User.find({ reportingManagers: req.user._id, companyId }).select('_id').lean();
+        const directReports = await User.find({
+          reportingManagers: req.user._id,
+          companyId,
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        }).select('_id').lean();
         const isReport = directReports.some((d) => String(d._id) === String(req.query.employeeId));
         filter.employeeId = isReport ? req.query.employeeId : req.user._id;
       }
@@ -54,9 +66,17 @@ const listGoals = async (req, res) => {
       filter.title = { $regex: req.query.search.trim(), $options: 'i' };
     }
 
-    const [goals, total] = await Promise.all([
+    const [rawGoals, total] = await Promise.all([
       PmsGoal.find(filter)
-        .populate('employeeId', 'firstName lastName email profilePicture department')
+        .populate({
+          path: 'employeeId',
+          match: {
+            isActive: true,
+            isDeleted: { $ne: true },
+            status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+          },
+          select: 'firstName lastName email profilePicture department',
+        })
         .populate('parentGoalId', 'title scope')
         .populate('linkedKraId', 'name category')
         .populate('linkedKpiId', 'name targetValue actualValue')
@@ -67,12 +87,16 @@ const listGoals = async (req, res) => {
       PmsGoal.countDocuments(filter),
     ]);
 
+    // Exclude individual goals whose owners are inactive/deleted
+    const goals = rawGoals.filter((g) => g.scope !== 'individual' || g.employeeId != null);
+
     return res.status(200).json({
       success: true,
       data: goals,
       pagination: {
         page,
         limit,
+        total: goals.length,
         total,
         pages: Math.ceil(total / limit),
       },
@@ -93,10 +117,20 @@ const getGoalTree = async (req, res) => {
     const filter = { companyId: req.companyId };
     if (cycleId) filter.cycleId = cycleId;
 
-    const allGoals = await PmsGoal.find(filter)
-      .populate('employeeId', 'firstName lastName profilePicture department')
+    const rawGoals = await PmsGoal.find(filter)
+      .populate({
+        path: 'employeeId',
+        match: {
+          isActive: true,
+          isDeleted: { $ne: true },
+          status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+        },
+        select: 'firstName lastName profilePicture department',
+      })
       .populate('linkedKraId', 'name')
       .lean();
+
+    const allGoals = rawGoals.filter((g) => g.scope !== 'individual' || g.employeeId != null);
 
     // Map parent-child hierarchy
     const goalMap = new Map();
