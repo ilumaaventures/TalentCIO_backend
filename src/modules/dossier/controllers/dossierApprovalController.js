@@ -148,15 +148,13 @@ exports.rejectHRIS = async (req, res) => {
         }
 
         const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
-
         if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
         profile.hris.status = 'Rejected';
         profile.hris.rejectionReason = reason;
+        profile.hris.isDeclared = false;
         profile.hris.approvedBy = null;
         profile.hris.approvalDate = null;
-
-        profile.pendingUpdates = null;
 
         await profile.save();
 

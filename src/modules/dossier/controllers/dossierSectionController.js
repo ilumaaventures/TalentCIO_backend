@@ -244,6 +244,7 @@ exports.submitHRIS = async (req, res) => {
                     profile.hris.submittedAt = new Date();
                     profile.hris.declarationDate = new Date();
                     profile.hris.status = 'Pending Approval';
+                    profile.hris.rejectionReason = null;
                 } else {
                     profile.hris.status = 'Draft';
                     profile.hris.isDeclared = false;
