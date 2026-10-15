@@ -43,7 +43,19 @@ const getDashboardMetrics = async (req, res) => {
       effectiveCycleId = activeCycle?._id || null;
     }
 
-    const appraisalMatch = { companyId: new mongoose.Types.ObjectId(companyId) };
+    // Fetch strictly active, non-deleted employees for the company
+    const activeCompanyEmployees = await User.find({
+      companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    }).select('_id').lean();
+    const activeEmployeeIds = activeCompanyEmployees.map((e) => e._id);
+
+    const appraisalMatch = {
+      companyId: new mongoose.Types.ObjectId(companyId),
+      employeeId: { $in: activeEmployeeIds },
+    };
     if (effectiveCycleId) appraisalMatch.cycleId = new mongoose.Types.ObjectId(effectiveCycleId);
 
     const isAdmin = isUserAdminOrSuper(req.user);
@@ -67,7 +79,7 @@ const getDashboardMetrics = async (req, res) => {
       }
     }
 
-    // 1. Appraisal status counts
+    // 1. Appraisal status counts (only for active employees)
     const statusCounts = await PmsAppraisal.aggregate([
       { $match: appraisalMatch },
       { $group: { _id: '$status', count: { $sum: 1 } } },
@@ -87,12 +99,7 @@ const getDashboardMetrics = async (req, res) => {
       if (s._id === 'calibration_pending') calibrationPending += s.count;
     });
 
-    const totalCompanyEmployees = await User.countDocuments({
-      companyId,
-      isActive: true,
-      isDeleted: { $ne: true },
-      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
-    });
+    const totalCompanyEmployees = activeCompanyEmployees.length;
 
     const completionRate = totalReviews > 0 ? Math.round((published / totalReviews) * 100) : 0;
 

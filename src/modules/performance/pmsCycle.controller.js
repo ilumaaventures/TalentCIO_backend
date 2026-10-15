@@ -60,10 +60,18 @@ const listCycles = async (req, res) => {
       total = await PmsCycle.countDocuments(filter);
     }
 
-    // Attach brief summary counts
+    // Attach brief summary counts (strictly for active employees)
     const cycleIds = cycles.map((c) => c._id);
+    const activeEmployees = await User.find({
+      companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    }).select('_id').lean();
+    const activeEmployeeIds = activeEmployees.map((e) => e._id);
+
     const appraisalCounts = await PmsAppraisal.aggregate([
-      { $match: { cycleId: { $in: cycleIds } } },
+      { $match: { cycleId: { $in: cycleIds }, employeeId: { $in: activeEmployeeIds } } },
       { $group: { _id: '$cycleId', totalAppraisals: { $sum: 1 }, published: { $sum: { $cond: [{ $eq: ['$status', 'published'] }, 1, 0] } } } },
     ]);
     const countsMap = new Map(appraisalCounts.map((a) => [String(a._id), a]));
@@ -117,9 +125,17 @@ const getCycle = async (req, res) => {
       cycle.applicableEmployees = cycle.applicableEmployees.filter(Boolean);
     }
 
-    // Aggregate progress
+    // Aggregate progress (strictly for active employees)
+    const activeEmployeesForCycle = await User.find({
+      companyId: req.companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    }).select('_id').lean();
+    const activeCycleEmpIds = activeEmployeesForCycle.map((e) => e._id);
+
     const statusAgg = await PmsAppraisal.aggregate([
-      { $match: { cycleId: new mongoose.Types.ObjectId(id) } },
+      { $match: { cycleId: new mongoose.Types.ObjectId(id), employeeId: { $in: activeCycleEmpIds } } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
 

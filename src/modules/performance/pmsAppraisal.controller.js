@@ -97,6 +97,24 @@ const listAppraisals = async (req, res) => {
       filter.employeeId = req.query.employeeId;
     }
 
+    // Ensure all appraisal listings strictly match active, non-deleted employees
+    const activeCompanyEmps = await User.find({
+      companyId,
+      isActive: true,
+      isDeleted: { $ne: true },
+      status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
+    }).select('_id').lean();
+    const activeCompEmpIds = activeCompanyEmps.map((e) => e._id);
+
+    if (filter.employeeId) {
+      if (filter.employeeId.$in) {
+        const allowedSet = new Set(activeCompEmpIds.map(String));
+        filter.employeeId.$in = filter.employeeId.$in.filter((id) => allowedSet.has(String(id)));
+      }
+    } else {
+      filter.employeeId = { $in: activeCompEmpIds };
+    }
+
     const [appraisals, total] = await Promise.all([
       PmsAppraisal.find(filter)
         .populate('cycleId', 'name cycleType startDate endDate status settings')
