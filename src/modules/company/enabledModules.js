@@ -26,7 +26,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'mySpace', label: 'My Space', icon: 'LayoutGrid' },
     { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' },
     { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' },
-    { id: 'performance', label: 'Performance Management', icon: 'Award' }
+    { id: 'performance', label: 'Performance Management', icon: 'Award' },
+    { id: 'talentCard', label: 'Talent Card', icon: 'Award' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -59,6 +60,10 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add('pms');
     }
 
+    if (normalizedIds.has('talentcard')) {
+        normalizedIds.add('talentCard');
+    }
+
     return Array.from(normalizedIds);
 };
 
@@ -79,6 +84,10 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
 
     if (targetModuleId === 'pms' || targetModuleId === 'performance') {
         return normalizedIds.includes('performance') || normalizedIds.includes('pms');
+    }
+
+    if (targetModuleId === 'talentCard' || targetModuleId === 'talentcard') {
+        return normalizedIds.includes('talentCard') || normalizedIds.includes('talentcard');
     }
 
     return normalizedIds.includes(targetModuleId);
@@ -113,6 +122,7 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('crm.')) return enabled.has('crm');
         if (key.startsWith('client_portal.')) return enabled.has('clientPortal');
         if (key.startsWith('pms.') || key.startsWith('performance.')) return enabled.has('performance') || enabled.has('pms');
+        if (key.startsWith('talent_card.') || key.startsWith('talentcard.') || key.startsWith('talent.')) return enabled.has('talentCard') || enabled.has('talentcard');
 
         return true;
     });
