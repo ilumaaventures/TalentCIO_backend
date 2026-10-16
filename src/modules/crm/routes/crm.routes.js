@@ -160,4 +160,11 @@ router.get('/data/rep-activities', authorize(['crm.leads.read', 'crm.data.import
 router.get('/data/export/:entityType', authorize(['crm.data.export', 'crm.admin']), dataController.exportData);
 router.post('/data/merge', authorize(['crm.data.merge', 'crm.admin']), dataController.mergeDuplicates);
 
+// --- Excel Files Storage & History ---
+router.post('/data/excel-files', authorize(['crm.data.import', 'crm.leads.create', 'crm.admin']), dataController.saveExcelFile);
+router.get('/data/excel-files', authorize(['crm.data.import', 'crm.leads.read', 'crm.admin']), dataController.getExcelFiles);
+router.get('/data/excel-files/:id', authorize(['crm.data.import', 'crm.leads.read', 'crm.admin']), dataController.getExcelFileById);
+router.delete('/data/excel-files/:id', authorize(['crm.data.import', 'crm.admin']), dataController.deleteExcelFile);
+
 module.exports = router;
+

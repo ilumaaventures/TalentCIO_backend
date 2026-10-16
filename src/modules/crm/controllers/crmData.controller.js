@@ -7,6 +7,7 @@ const CrmContact = require('../models/crmContact.model');
 const CrmAccount = require('../models/crmAccount.model');
 const CrmActivity = require('../models/crmActivity.model');
 const CrmFollowUp = require('../models/crmFollowUp.model');
+const CrmExcelFile = require('../models/crmExcelFile.model');
 const { logCrmAudit } = require('../utils/crmAudit');
 const {
   canViewAllImportData,
@@ -1682,6 +1683,174 @@ const updateImportDataStatus = async (req, res, next) => {
   }
 };
 
+// @desc Save uploaded/imported Excel file record
+// @route POST /api/crm/data/excel-files
+const saveExcelFile = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const {
+      fileName,
+      fileSize,
+      fileSizeBytes,
+      totalRowsFetched,
+      totalCompanies,
+      newCount,
+      updateCount,
+      duplicateCount,
+      importMode,
+      fileData,
+    } = req.body;
+
+    if (!fileName) {
+      return res.status(400).json({ success: false, message: 'File name is required' });
+    }
+
+    const displayName = getUserDisplayName(req.user);
+
+    // Prevent duplicate entries if confirmed multiple times within 30 seconds
+    const recentDuplicate = await CrmExcelFile.findOne({
+      companyId,
+      fileName,
+      totalRowsFetched: Number(totalRowsFetched) || 0,
+      isDeleted: false,
+      createdAt: { $gte: new Date(Date.now() - 30000) },
+    }).lean();
+
+    if (recentDuplicate) {
+      return res.status(200).json({
+        success: true,
+        message: 'Excel file already stored',
+        data: recentDuplicate,
+      });
+    }
+
+    const excelFile = await CrmExcelFile.create({
+      companyId,
+      fileName,
+      fileSize: fileSize || '',
+      fileSizeBytes: fileSizeBytes || 0,
+      totalRowsFetched: Number(totalRowsFetched) || 0,
+      totalCompanies: Number(totalCompanies) || 0,
+      newCount: Number(newCount) || 0,
+      updateCount: Number(updateCount) || 0,
+      duplicateCount: Number(duplicateCount) || 0,
+      importMode: importMode || 'all',
+      importedBy: displayName,
+      importedByUserId: req.user?._id || null,
+      status: 'Imported',
+      fileData: fileData || '',
+    });
+
+    logCrmAudit({
+      companyId,
+      userId: req.user?._id,
+      userName: displayName,
+      action: 'upload',
+      entityType: 'lead',
+      entityId: excelFile._id,
+      entityTitle: fileName,
+      description: `Imported Excel file "${fileName}" (${totalRowsFetched || 0} rows fetched, ${newCount || 0} new, ${updateCount || 0} updated)`,
+      ipAddress: req.ip,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Excel file stored successfully',
+      data: excelFile,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Get stored Excel files with pagination and search
+// @route GET /api/crm/data/excel-files
+const getExcelFiles = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+    const search = req.query.search ? String(req.query.search).trim() : '';
+
+    const query = { companyId, isDeleted: false };
+    if (search) {
+      query.$or = [
+        { fileName: { $regex: search, $options: 'i' } },
+        { importedBy: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const total = await CrmExcelFile.countDocuments(query);
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    // Projection excludes heavy fileData for list view to keep responses fast
+    const files = await CrmExcelFile.find(query)
+      .select('-fileData')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    res.json({
+      success: true,
+      data: files,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Get single Excel file with data for download
+// @route GET /api/crm/data/excel-files/:id
+const getExcelFileById = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { id } = req.params;
+
+    const file = await CrmExcelFile.findOne({ _id: id, companyId, isDeleted: false }).lean();
+    if (!file) {
+      return res.status(404).json({ success: false, message: 'Excel file record not found' });
+    }
+
+    res.json({
+      success: true,
+      data: file,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Delete stored Excel file
+// @route DELETE /api/crm/data/excel-files/:id
+const deleteExcelFile = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { id } = req.params;
+
+    const file = await CrmExcelFile.findOne({ _id: id, companyId });
+    if (!file) {
+      return res.status(404).json({ success: false, message: 'Excel file record not found' });
+    }
+
+    file.isDeleted = true;
+    await file.save();
+
+    res.json({
+      success: true,
+      message: 'Excel file record deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   importData,
   exportData,
@@ -1695,4 +1864,8 @@ module.exports = {
   scheduleImportDataFollowUp,
   getRepPerformanceSummary,
   getRepActivities,
+  saveExcelFile,
+  getExcelFiles,
+  getExcelFileById,
+  deleteExcelFile,
 };
