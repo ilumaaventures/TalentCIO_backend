@@ -480,7 +480,7 @@ const getImportData = async (req, res, next) => {
     const limitNum = [50, 80, 100].includes(parsedLimit) ? parsedLimit : (parsedLimit > 0 ? parsedLimit : 50);
 
     const sortField = sortBy === 'date' ? 'date' : 'createdAt';
-    const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus leadSource source date createdAt updatedAt lastContactedAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks contacts';
+    const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus statusHistory leadSource source date createdAt updatedAt lastContactedAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks contacts';
     let findQuery = CrmImportData.find(query)
       .select(TABLE_FIELDS)
       .populate('importedByUserId', 'firstName lastName name email')
@@ -564,6 +564,7 @@ const getImportData = async (req, res, next) => {
         gstin: r.gstin || '',
         remarks: r.remarks || '',
         contacts,
+        statusHistory: r.statusHistory || [],
       };
     });
 
@@ -1205,6 +1206,31 @@ const getRepPerformanceSummary = async (req, res, next) => {
 
     const convertedRows = await CrmImportData.countDocuments(convertedConds);
 
+    // Prospects with actual status changes (excluding untouched initial status)
+    const statusChangeConds = {
+      companyId,
+      statusHistory: {
+        $elemMatch: {
+          previousStatus: { $exists: true, $ne: '' },
+        },
+      },
+    };
+    if (!canViewAll) {
+      const myId = req.user?._id;
+      const myName = getUserDisplayName(req.user);
+      const orConds = [];
+      if (myId) orConds.push({ importedByUserId: myId });
+      if (myName) orConds.push({ importedBy: new RegExp(`^${myName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+      statusChangeConds.$and = [
+        { statusHistory: statusChangeConds.statusHistory },
+        { $or: orConds },
+      ];
+      delete statusChangeConds.statusHistory;
+    } else if (userId && userId !== 'all') {
+      statusChangeConds.importedByUserId = userId;
+    }
+    const statusChangesCount = await CrmImportData.countDocuments(statusChangeConds);
+
     // Fetch follow-ups in date range
     const followUpQuery = {
       companyId,
@@ -1343,6 +1369,7 @@ const getRepPerformanceSummary = async (req, res, next) => {
           positiveRate,
           callbacks: callbacks.length,
           convertedRows,
+          statusChangesCount,
         },
         leaderboard,
         followUps,
@@ -1661,7 +1688,7 @@ const updateImportDataStatus = async (req, res, next) => {
   try {
     const companyId = getTenantId(req);
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, note = '' } = req.body;
 
     if (!status) {
       return res.status(400).json({ success: false, message: 'Status is required' });
@@ -1673,14 +1700,65 @@ const updateImportDataStatus = async (req, res, next) => {
     }
 
     const trimmedStatus = String(status).trim();
+    const oldStatus = row.status || row.leadStatus || 'New';
     row.status = trimmedStatus;
     row.leadStatus = trimmedStatus;
+
+    if (!Array.isArray(row.statusHistory)) {
+      row.statusHistory = [];
+    }
+
+    const displayName = getUserDisplayName(req.user) || 'User';
+
+    // If statusHistory is empty and this is the first change from oldStatus, record baseline
+    if (row.statusHistory.length === 0 && oldStatus && oldStatus !== trimmedStatus) {
+      row.statusHistory.push({
+        status: oldStatus,
+        previousStatus: '',
+        changedAt: row.createdAt || row.date || new Date(),
+        changedBy: row.importedBy || 'Initial Import',
+        note: 'Initial status on import',
+      });
+    }
+
+    row.statusHistory.push({
+      status: trimmedStatus,
+      previousStatus: oldStatus,
+      changedAt: new Date(),
+      changedBy: displayName,
+      changedByUserId: req.user?._id || null,
+      note: note ? String(note).trim() : '',
+    });
+
     await row.save();
+
+    // Also log an activity entry so it shows in Timeline
+    try {
+      await CrmActivity.create({
+        companyId,
+        importDataId: row._id,
+        leadId: row.leadId || null,
+        type: 'task',
+        subject: `Status changed to ${trimmedStatus}`,
+        description: `Status changed from "${oldStatus}" to "${trimmedStatus}"${note ? `. Note: ${note}` : ''}`,
+        performedBy: req.user?._id || null,
+        performedByName: displayName,
+        performedAt: new Date(),
+        outcome: trimmedStatus,
+      });
+    } catch (actErr) {
+      console.warn('Failed to log status change activity:', actErr.message);
+    }
 
     res.json({
       success: true,
       message: 'Status updated successfully',
-      data: { id: row.rowId || String(row._id), status: trimmedStatus },
+      data: {
+        id: row.rowId || String(row._id),
+        status: trimmedStatus,
+        leadStatus: trimmedStatus,
+        statusHistory: row.statusHistory,
+      },
     });
   } catch (error) {
     next(error);
