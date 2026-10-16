@@ -388,6 +388,7 @@ const getImportData = async (req, res, next) => {
       andConditions.push({
         $or: [
           { companyName: regex },
+          { gstin: regex },
           { contactPerson: regex },
           { emailId: regex },
           { mobileNo: regex },
@@ -560,6 +561,7 @@ const getImportData = async (req, res, next) => {
         mobileNo: r.mobileNo || '',
         emailId: r.emailId || '',
         address: r.address || '',
+        gstin: r.gstin || '',
         remarks: r.remarks || '',
         contacts,
       };
@@ -621,6 +623,7 @@ const syncImportData = async (req, res, next) => {
       if (rowId) {
         contentFilter.rowId = rowId;
       } else {
+        if (item.gstin) contentFilter.gstin = String(item.gstin).trim().toUpperCase();
         if (companyName) contentFilter.companyName = companyName;
         if (mobileNo) contentFilter.mobileNo = mobileNo;
         if (emailId) contentFilter.emailId = emailId;
@@ -663,6 +666,7 @@ const syncImportData = async (req, res, next) => {
         rowId,
         sNo: item.sNo || '',
         companyName,
+        gstin: (item.gstin || '').trim().toUpperCase(),
         industry: (item.industry || '').trim(),
         address: (item.address || '').trim(),
         rating: (item.rating || '').trim(),
