@@ -34,6 +34,16 @@ const crmImportDataSchema = new mongoose.Schema(
     // Status value (Interested, Not Interested, New, etc.)
     status: { type: String, trim: true, default: 'New' },
     leadStatus: { type: String, trim: true, default: 'New' },
+    statusHistory: [
+      {
+        status: { type: String, trim: true, required: true },
+        previousStatus: { type: String, trim: true, default: '' },
+        changedAt: { type: Date, default: Date.now },
+        changedBy: { type: String, trim: true, default: '' },
+        changedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        note: { type: String, trim: true, default: '' },
+      },
+    ],
     // Source column from Excel (LinkedIn, Cold Call, Referral, etc.)
     leadSource: { type: String, trim: true, default: '' },
     isConvertedToLead: { type: Boolean, default: false },
