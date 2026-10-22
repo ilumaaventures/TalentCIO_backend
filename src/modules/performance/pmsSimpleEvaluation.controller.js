@@ -10,8 +10,131 @@ const { logPmsAudit } = require('./services/pmsAudit.service');
 const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
 
 /**
- * Ensures a company has an active appraisal cycle, default KRAs, and participant appraisals
+ * Resolves applicable KRAs for a user based on department, designation, employee assignment,
+ * and falls back cleanly without leaking other departments' KRAs or library templates.
  */
+const getApplicableKrasForUser = (user, allKras = [], existingRatings = []) => {
+  const userDeptAliases = new Set();
+  if (user?.department && typeof user.department === 'string') {
+    userDeptAliases.add(user.department.trim().toLowerCase());
+  }
+  if (user?.departmentRef) {
+    if (typeof user.departmentRef === 'string') {
+      userDeptAliases.add(user.departmentRef.trim().toLowerCase());
+    } else if (user.departmentRef.name) {
+      userDeptAliases.add(String(user.departmentRef.name).trim().toLowerCase());
+    }
+    if (user.departmentRef._id) {
+      userDeptAliases.add(String(user.departmentRef._id).trim().toLowerCase());
+    }
+  }
+
+  const userDesigAliases = new Set();
+  if (user?.designation && typeof user.designation === 'string') {
+    userDesigAliases.add(user.designation.trim().toLowerCase());
+  }
+  if (user?.designationRef) {
+    if (typeof user.designationRef === 'string') {
+      userDesigAliases.add(user.designationRef.trim().toLowerCase());
+    } else if (user.designationRef.name) {
+      userDesigAliases.add(String(user.designationRef.name).trim().toLowerCase());
+    }
+    if (user.designationRef._id) {
+      userDesigAliases.add(String(user.designationRef._id).trim().toLowerCase());
+    }
+  }
+
+  const userIdStr = String(user?._id || '');
+
+  // 1. Employee-specific KRAs
+  const employeeSpecificKras = allKras.filter((k) => {
+    const hasEmps = Array.isArray(k.applicableEmployees) && k.applicableEmployees.length > 0;
+    if (k.assignmentType === 'by_employee' || hasEmps) {
+      return (k.applicableEmployees || []).some((id) => String(id?._id || id) === userIdStr);
+    }
+    return false;
+  });
+
+  // 2. Department-specific KRAs
+  const departmentSpecificKras = allKras.filter((k) => {
+    const hasDepts = Array.isArray(k.applicableDepartments) && k.applicableDepartments.length > 0;
+    if (k.assignmentType === 'by_department' || hasDepts) {
+      if (!hasDepts) return false;
+      return k.applicableDepartments.some((d) => {
+        if (!d) return false;
+        return userDeptAliases.has(String(d).trim().toLowerCase());
+      });
+    }
+    return false;
+  });
+
+  // 3. Designation-specific KRAs
+  const designationSpecificKras = allKras.filter((k) => {
+    const hasDesigs = Array.isArray(k.applicableDesignations) && k.applicableDesignations.length > 0;
+    if (hasDesigs) {
+      return k.applicableDesignations.some((d) => {
+        if (!d) return false;
+        return userDesigAliases.has(String(d).trim().toLowerCase());
+      });
+    }
+    return false;
+  });
+
+  // 4. Organization-wide active role KRAs (not department-bound, not employee-bound, not library templates)
+  const companyWideRoleKras = allKras.filter((k) => {
+    const hasDepts = Array.isArray(k.applicableDepartments) && k.applicableDepartments.length > 0;
+    const hasEmps = Array.isArray(k.applicableEmployees) && k.applicableEmployees.length > 0;
+    const hasDesigs = Array.isArray(k.applicableDesignations) && k.applicableDesignations.length > 0;
+    const isLibrary = k.assignmentType === 'kra_library' || Boolean(k.isTemplate);
+    return k.assignmentType === 'by_role' && !hasDepts && !hasEmps && !hasDesigs && !isLibrary;
+  });
+
+  // Collect targeted matches
+  const matched = [];
+  const addedIds = new Set();
+
+  [...employeeSpecificKras, ...departmentSpecificKras, ...designationSpecificKras, ...companyWideRoleKras].forEach((k) => {
+    const idStr = String(k._id);
+    if (!addedIds.has(idStr)) {
+      addedIds.add(idStr);
+      matched.push(k);
+    }
+  });
+
+  // If no specific department or role KRAs exist for this user's department,
+  // fall back to default library templates, but strictly exclude other departments' KRAs!
+  if (matched.length === 0) {
+    allKras.forEach((k) => {
+      const hasDepts = Array.isArray(k.applicableDepartments) && k.applicableDepartments.length > 0;
+      const hasEmps = Array.isArray(k.applicableEmployees) && k.applicableEmployees.length > 0;
+      // Never leak KRAs configured for another department or another employee
+      if (hasDepts || hasEmps) return;
+      const idStr = String(k._id);
+      if (!addedIds.has(idStr)) {
+        addedIds.add(idStr);
+        matched.push(k);
+      }
+    });
+  }
+
+  // Preserve any KRA that was already evaluated in this appraisal review
+  if (Array.isArray(existingRatings) && existingRatings.length > 0) {
+    const ratedKraIds = existingRatings.map((r) => String(r.kraId?._id || r.kraId));
+    allKras.forEach((k) => {
+      const idStr = String(k._id);
+      if (ratedKraIds.includes(idStr) && !addedIds.has(idStr)) {
+        addedIds.add(idStr);
+        matched.push(k);
+      }
+    });
+  }
+
+  return matched;
+};
+
+/**
+ * Ensures a company has an active appraisal cycle, default KRAs, and participant appraisals
+ *///@
 const ensureDefaultCycleAndParticipants = async (companyId, adminUserId) => {
   if (!companyId) return null;
 
@@ -76,6 +199,7 @@ const ensureDefaultCycleAndParticipants = async (companyId, adminUserId) => {
         await PmsKra.create({
           companyId,
           cycleId: activeCycle._id,
+          assignmentType: 'kra_library',
           ...item,
           createdBy: adminUserId || null,
         });
@@ -238,8 +362,13 @@ const getEvaluations = async (req, res) => {
     ]);
     const kudosMap = new Map(kudosCounts.map((k) => [String(k._id), k.count]));
 
-    // Fetch KRAs
-    const kras = await PmsKra.find({ companyId }).select('name weightage category').lean();
+    // Fetch active KRAs with full scoping metadata
+    const allKras = await PmsKra.find({
+      companyId,
+      status: { $ne: 'inactive' },
+    })
+      .select('name weightage category description applicableDepartments applicableDesignations applicableEmployees assignmentType isTemplate')
+      .lean();
 
     // Map into clean evaluation cards
     const evaluations = users.map((u) => {
@@ -248,6 +377,12 @@ const getEvaluations = async (req, res) => {
 
       const isUserAManager = users.some((other) =>
         other.reportingManagers?.some((rm) => String(rm._id || rm) === String(u._id))
+      );
+
+      const applicableKras = getApplicableKrasForUser(
+        u,
+        allKras,
+        appraisal.managerAppraisal?.kraRatings
       );
 
       return {
@@ -293,7 +428,7 @@ const getEvaluations = async (req, res) => {
           finalScore: appraisal.scores?.calculatedFinalScore || appraisal.finalApproval?.finalRating || appraisal.managerAppraisal?.managerRating || 0,
           ratingBand: appraisal.scores?.ratingBand || (appraisal.managerAppraisal?.managerRating ? 'Evaluated' : 'Pending Review'),
         },
-        kras: kras.map((k) => {
+        kras: applicableKras.map((k) => {
           const rated = (appraisal.managerAppraisal?.kraRatings || []).find(
             (r) => String(r.kraId?._id || r.kraId) === String(k._id)
           );
@@ -302,8 +437,9 @@ const getEvaluations = async (req, res) => {
             name: k.name,
             weightage: k.weightage,
             category: k.category,
-            score: rated?.managerRating || null,
-            comments: rated?.managerComments || '',
+            score: rated?.managerRating || rated?.score || 4,
+            comments: rated?.managerComments || rated?.comments || '',
+            applicableDepartments: k.applicableDepartments || [],
           };
         }),
         kudosCount: kudosMap.get(String(u._id)) || 0,
@@ -543,8 +679,23 @@ const getMyScorecard = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(10)
         .lean(),
-      PmsKra.find({ companyId }).select('name weightage category description').lean(),
+      PmsKra.find({ companyId, status: { $ne: 'inactive' } })
+        .select('name weightage category description applicableDepartments applicableDesignations applicableEmployees assignmentType isTemplate')
+        .lean(),
     ]);
+
+    const fullUser = await User.findById(userId)
+      .populate('departmentRef', 'name')
+      .populate('designationRef', 'name')
+      .select('department departmentRef designation designationRef')
+      .lean();
+    const userToMatch = fullUser || req.user;
+
+    const applicableKras = getApplicableKrasForUser(
+      userToMatch,
+      kras,
+      appraisal?.managerAppraisal?.kraRatings
+    );
 
     const mgr = req.user.reportingManagers?.[0];
 
@@ -570,13 +721,13 @@ const getMyScorecard = async (req, res) => {
           adminRating: appraisal?.finalApproval?.finalRating || null,
           adminComments: appraisal?.finalApproval?.comments || '',
         },
-        kras: kras.map((k) => {
+        kras: applicableKras.map((k) => {
           const rated = (appraisal?.managerAppraisal?.kraRatings || []).find(
             (r) => String(r.kraId?._id || r.kraId) === String(k._id)
           );
           return {
             ...k,
-            score: rated?.managerRating || null,
+            score: rated?.managerRating || rated?.score || null,
             comments: rated?.managerComments || '',
           };
         }),
