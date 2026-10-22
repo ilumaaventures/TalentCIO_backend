@@ -6,6 +6,10 @@ const { calculateKpiAchievement } = require('./services/pmsScoring.service');
 const { logPmsAudit } = require('./services/pmsAudit.service');
 const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
 
+const canManageKras = (user) => {
+  return isUserAdminOrSuper(user) || isUserHr(user) || user?.permissions?.includes('pms.kra.manage');
+};
+
 /**
  * @desc List KRAs with pagination & filters
  * @route GET /api/performance/kras
@@ -124,6 +128,9 @@ const listKras = async (req, res) => {
  */
 const createKra = async (req, res) => {
   try {
+    if (!canManageKras(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to create KRAs' });
+    }
     const {
       name,
       code,
@@ -190,6 +197,9 @@ const createKra = async (req, res) => {
  */
 const updateKra = async (req, res) => {
   try {
+    if (!canManageKras(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to update KRAs' });
+    }
     const { id } = req.params;
     const kra = await PmsKra.findOne({ _id: id, companyId: req.companyId });
     if (!kra) {
@@ -248,6 +258,9 @@ const updateKra = async (req, res) => {
  */
 const deleteKra = async (req, res) => {
   try {
+    if (!canManageKras(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to delete KRAs' });
+    }
     const { id } = req.params;
     const kra = await PmsKra.findOneAndDelete({ _id: id, companyId: req.companyId });
     if (!kra) {
@@ -547,6 +560,15 @@ const verifyKpi = async (req, res) => {
     // Separation of duties: cannot verify own KPI
     if (String(kpi.employeeId) === String(req.user._id)) {
       return res.status(403).json({ success: false, message: 'Separation of duties: You cannot verify your own KPI.' });
+    }
+
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+    if (!isHrOrAdmin && kpi.employeeId) {
+      const emp = await User.findById(kpi.employeeId).select('reportingManagers').lean();
+      const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+      if (!isManager) {
+        return res.status(403).json({ success: false, message: 'Forbidden: Only reporting managers, HR, or Admins can verify KPIs.' });
+      }
     }
 
     kpi.status = status || 'verified';

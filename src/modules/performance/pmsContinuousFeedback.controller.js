@@ -1,6 +1,8 @@
 const PmsContinuousFeedback = require('./models/pmsContinuousFeedback.model');
+const User = require('../user/user.model');
 const { logPmsAudit } = require('./services/pmsAudit.service');
 const { sendPmsNotification } = require('./services/pmsNotification.service');
+const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
 
 /**
  * @desc List feedback entries & 1-on-1 meetings
@@ -13,6 +15,8 @@ const listFeedbacks = async (req, res) => {
 
     const filter = { companyId };
     if (type) filter.feedbackType = type;
+
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user) || req.user?.permissions?.includes('pms.view.all');
 
     if (tab === 'received') {
       filter.toUser = req.user._id;
@@ -31,7 +35,24 @@ const listFeedbacks = async (req, res) => {
     }
 
     if (userId) {
-      filter.$or = [{ fromUser: userId }, { toUser: userId }];
+      const isTargetSelf = String(userId) === String(req.user._id);
+      let isTargetDirectReport = false;
+      if (!isHrOrAdmin && !isTargetSelf) {
+        const directReport = await User.findOne({
+          _id: userId,
+          reportingManagers: req.user._id,
+          companyId,
+        }).select('_id').lean();
+        isTargetDirectReport = Boolean(directReport);
+      }
+
+      if (isHrOrAdmin || isTargetSelf || isTargetDirectReport) {
+        filter.$or = [{ fromUser: userId }, { toUser: userId }];
+      } else {
+        // Unprivileged third party can only see public feedback involving that user
+        filter.visibility = 'public';
+        filter.$or = [{ fromUser: userId }, { toUser: userId }];
+      }
     }
 
     const rawItems = await PmsContinuousFeedback.find(filter)

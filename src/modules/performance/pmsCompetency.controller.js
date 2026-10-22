@@ -1,5 +1,10 @@
 const PmsCompetency = require('./models/pmsCompetency.model');
 const { logPmsAudit } = require('./services/pmsAudit.service');
+const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
+
+const canManageCompetencies = (user) => {
+  return isUserAdminOrSuper(user) || isUserHr(user) || user?.permissions?.includes('pms.admin');
+};
 
 /**
  * @desc List competencies with filters & pagination
@@ -33,6 +38,9 @@ const listCompetencies = async (req, res) => {
  */
 const createCompetency = async (req, res) => {
   try {
+    if (!canManageCompetencies(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to create competencies' });
+    }
     const {
       name,
       code,
@@ -88,6 +96,9 @@ const createCompetency = async (req, res) => {
  */
 const updateCompetency = async (req, res) => {
   try {
+    if (!canManageCompetencies(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to update competencies' });
+    }
     const { id } = req.params;
     const competency = await PmsCompetency.findOne({ _id: id, companyId: req.companyId });
     if (!competency) {
@@ -128,6 +139,9 @@ const updateCompetency = async (req, res) => {
  */
 const deleteCompetency = async (req, res) => {
   try {
+    if (!canManageCompetencies(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to delete competencies' });
+    }
     const { id } = req.params;
     const competency = await PmsCompetency.findOneAndDelete({ _id: id, companyId: req.companyId });
     if (!competency) {
