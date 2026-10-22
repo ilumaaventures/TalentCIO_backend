@@ -59,11 +59,14 @@ const getDashboardMetrics = async (req, res) => {
     if (effectiveCycleId) appraisalMatch.cycleId = new mongoose.Types.ObjectId(effectiveCycleId);
 
     const isAdmin = isUserAdminOrSuper(req.user);
-    const isHr = isUserHr(req.user);
+    const isHr = isUserHr(req.user) || req.user?.permissions?.includes('pms.view.all');
     const hasAnalyticsPerm = req.user?.permissions?.includes('pms.analytics.view');
+    const isPrivileged = isAdmin || isHr || hasAnalyticsPerm;
+
+    let scopedEmployeeCount = 1;
 
     // Server-side scope isolation: non-admin/HR users only see their direct reports or self
-    if (!isAdmin && !isHr && !hasAnalyticsPerm) {
+    if (!isPrivileged) {
       const directReports = await User.find({
         reportingManagers: req.user._id,
         companyId,
@@ -74,12 +77,16 @@ const getDashboardMetrics = async (req, res) => {
       const reportIds = directReports.map((d) => d._id);
       if (reportIds.length > 0) {
         appraisalMatch.employeeId = { $in: reportIds };
+        scopedEmployeeCount = reportIds.length;
       } else {
         appraisalMatch.employeeId = new mongoose.Types.ObjectId(req.user._id);
+        scopedEmployeeCount = 1;
       }
+    } else {
+      scopedEmployeeCount = activeCompanyEmployees.length;
     }
 
-    // 1. Appraisal status counts (only for active employees)
+    // 1. Appraisal status counts (only for active employees in scope)
     const statusCounts = await PmsAppraisal.aggregate([
       { $match: appraisalMatch },
       { $group: { _id: '$status', count: { $sum: 1 } } },
@@ -99,7 +106,7 @@ const getDashboardMetrics = async (req, res) => {
       if (s._id === 'calibration_pending') calibrationPending += s.count;
     });
 
-    const totalCompanyEmployees = activeCompanyEmployees.length;
+    const totalEmployeesInScope = isPrivileged ? activeCompanyEmployees.length : (scopedEmployeeCount || totalReviews || 1);
 
     const completionRate = totalReviews > 0 ? Math.round((published / totalReviews) * 100) : 0;
 
@@ -220,7 +227,7 @@ const getDashboardMetrics = async (req, res) => {
         activeCycle: activeCycle ? { _id: activeCycle._id, name: activeCycle.name, status: activeCycle.status } : null,
         cycles: cyclesList,
         summary: {
-          totalEmployees: totalCompanyEmployees || totalReviews,
+          totalEmployees: totalEmployeesInScope,
           totalReviews,
           published,
           pendingReviews: Math.max(0, totalReviews - published),

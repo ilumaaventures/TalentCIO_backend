@@ -4,6 +4,11 @@ const PmsAppraisal = require('./models/pmsAppraisal.model');
 const User = require('../user/user.model');
 const { logPmsAudit } = require('./services/pmsAudit.service');
 const { sendPmsNotification } = require('./services/pmsNotification.service');
+const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
+
+const canManageCycles = (user) => {
+  return isUserAdminOrSuper(user) || isUserHr(user) || user?.permissions?.includes('pms.cycle.manage');
+};
 
 // Valid status lifecycle order
 const LIFECYCLE_ORDER = [
@@ -174,6 +179,9 @@ const getCycle = async (req, res) => {
  */
 const createCycle = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to create performance cycles' });
+    }
     const {
       name,
       code,
@@ -287,6 +295,9 @@ const createCycle = async (req, res) => {
  */
 const updateCycle = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to update performance cycles' });
+    }
     const { id } = req.params;
     const cycle = await PmsCycle.findOne({ _id: id, companyId: req.companyId });
     if (!cycle) {
@@ -343,6 +354,9 @@ const updateCycle = async (req, res) => {
  */
 const deleteCycle = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to delete performance cycles' });
+    }
     const { id } = req.params;
     const cycle = await PmsCycle.findOneAndDelete({ _id: id, companyId: req.companyId });
     if (!cycle) {
@@ -374,6 +388,9 @@ const deleteCycle = async (req, res) => {
  */
 const changeCycleStatus = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to change cycle status' });
+    }
     const { id } = req.params;
     const { status } = req.body;
 
@@ -469,6 +486,9 @@ const changeCycleStatus = async (req, res) => {
  */
 const reopenCycle = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to reopen performance cycles' });
+    }
     const { id } = req.params;
     const { reason, targetStatus } = req.body;
 
@@ -515,6 +535,9 @@ const reopenCycle = async (req, res) => {
  */
 const syncCycleParticipants = async (req, res) => {
   try {
+    if (!canManageCycles(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to sync cycle participants' });
+    }
     const { id } = req.params;
     const cycle = await PmsCycle.findOne({ _id: id, companyId: req.companyId });
     if (!cycle) {

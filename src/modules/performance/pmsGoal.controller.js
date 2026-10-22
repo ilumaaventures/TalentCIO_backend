@@ -182,7 +182,26 @@ const createGoal = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Cycle and Title are required' });
     }
 
-    const assignedEmployee = employeeId || req.user._id;
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+
+    // If setting company or strategic scope, only HR or Admin can do so
+    if (['company', 'strategic'].includes(scope) && !isHrOrAdmin) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Only HR or Admins can create company-wide or strategic goals.' });
+    }
+
+    let assignedEmployee = req.user._id;
+    if (employeeId && String(employeeId) !== String(req.user._id)) {
+      if (isHrOrAdmin) {
+        assignedEmployee = employeeId;
+      } else {
+        const emp = await User.findById(employeeId).select('reportingManagers').lean();
+        const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+        if (!isManager) {
+          return res.status(403).json({ success: false, message: 'Forbidden: You can only assign goals to yourself or your direct reports.' });
+        }
+        assignedEmployee = employeeId;
+      }
+    }
 
     const goal = await PmsGoal.create({
       companyId: req.companyId,
@@ -230,6 +249,16 @@ const updateGoal = async (req, res) => {
     const goal = await PmsGoal.findOne({ _id: id, companyId: req.companyId });
     if (!goal) {
       return res.status(404).json({ success: false, message: 'Goal not found' });
+    }
+
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+    const isOwner = String(goal.employeeId) === String(req.user._id);
+    if (!isHrOrAdmin && !isOwner) {
+      const emp = await User.findById(goal.employeeId).select('reportingManagers').lean();
+      const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+      if (!isManager) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You cannot modify another employee\'s goal.' });
+      }
     }
 
     const fields = [
@@ -287,6 +316,16 @@ const checkInGoal = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Goal not found' });
     }
 
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+    const isOwner = String(goal.employeeId) === String(req.user._id);
+    if (!isHrOrAdmin && !isOwner) {
+      const emp = await User.findById(goal.employeeId).select('reportingManagers').lean();
+      const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+      if (!isManager) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You cannot check in on another employee\'s goal.' });
+      }
+    }
+
     // Update key results if provided
     if (Array.isArray(keyResultsUpdates)) {
       keyResultsUpdates.forEach((upd, idx) => {
@@ -342,6 +381,15 @@ const approveOrRejectGoal = async (req, res) => {
     // Separation of duties: cannot approve own goal
     if (String(goal.employeeId) === String(req.user._id)) {
       return res.status(403).json({ success: false, message: 'Separation of duties: You cannot approve your own goal.' });
+    }
+
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+    if (!isHrOrAdmin) {
+      const emp = await User.findById(goal.employeeId).select('reportingManagers').lean();
+      const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+      if (!isManager) {
+        return res.status(403).json({ success: false, message: 'Forbidden: Only reporting managers, HR, or Admins can approve or reject goals.' });
+      }
     }
 
     const isApprove = action === 'approve';

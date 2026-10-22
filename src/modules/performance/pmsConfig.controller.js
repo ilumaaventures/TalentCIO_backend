@@ -1,7 +1,7 @@
 const PmsSetting = require('./models/pmsSetting.model');
 const { DEFAULT_RATING_BANDS_5 } = require('./services/pmsScoring.service');
 const { logPmsAudit } = require('./services/pmsAudit.service');
-const { DEFAULT_WORKFLOW_STAGES } = require('./services/pmsWorkflow.service');
+const { DEFAULT_WORKFLOW_STAGES, isUserAdminOrSuper } = require('./services/pmsWorkflow.service');
 
 /**
  * @desc Get company PMS settings (creates defaults if missing)
@@ -77,6 +77,10 @@ const getPmsSettings = async (req, res) => {
  */
 const updatePmsSettings = async (req, res) => {
   try {
+    if (!isUserAdminOrSuper(req.user) && !req.user?.permissions?.includes('pms.admin')) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions to update PMS settings' });
+    }
+
     const { ratingScales, defaultWeightageModel, bellCurveTargetDistribution, continuousFeedbackSettings, approvalWorkflow } = req.body;
 
     const companyId = req.companyId || req.user?.companyId;
