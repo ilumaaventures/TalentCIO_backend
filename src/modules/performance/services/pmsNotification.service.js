@@ -8,7 +8,7 @@ const NotificationService = require('../../../services/notificationService');
 const sendPmsNotification = async (req, options = {}) => {
   try {
     const io = req?.app?.get('io') || null;
-    const companyId = req?.companyId || options.companyId;
+    const companyId = req?.companyId || req?.user?.companyId || options.companyId;
 
     if (!companyId || !options.userId) return;
 

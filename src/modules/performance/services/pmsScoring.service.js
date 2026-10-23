@@ -13,16 +13,72 @@ const DEFAULT_RATING_BANDS_5 = [
 
 /**
  * Calculates KPI achievement percentage & score
+ * Handles Boolean KPIs, zero-target lower-is-better vs higher-is-better, and validates inputs.
  * @param {Object} kpi
- * @returns {{ achievementPercent: number, calculatedScore: number }}
+ * @returns {{ achievementPercent: number|null, calculatedScore: number|null, isValid: boolean, isBoolean?: boolean, reason?: string }}
  */
 function calculateKpiAchievement(kpi) {
-  const target = Number(kpi?.targetValue || 0);
-  const actual = Number(kpi?.actualValue || 0);
-  const direction = kpi?.measurementDirection || 'higher_is_better';
+  if (!kpi || typeof kpi !== 'object') {
+    return { achievementPercent: null, calculatedScore: null, isValid: false, reason: 'Missing KPI data' };
+  }
 
-  if (!target || target === 0) {
-    return { achievementPercent: 0, calculatedScore: 0 };
+  const measurementType = kpi.measurementType || 'numeric';
+  const direction = kpi.measurementDirection || 'higher_is_better';
+
+  // Handle Boolean / Yes-No KPIs
+  if (measurementType === 'yes_no') {
+    const rawActual = kpi.actualValue;
+    if (rawActual === undefined || rawActual === null || rawActual === '') {
+      return { achievementPercent: null, calculatedScore: null, isValid: false, reason: 'Actual value not provided for Boolean KPI' };
+    }
+    const isAchieved =
+      rawActual === true ||
+      rawActual === 1 ||
+      String(rawActual).trim().toLowerCase() === 'yes' ||
+      String(rawActual).trim().toLowerCase() === 'true' ||
+      String(rawActual).trim() === '1';
+
+    const achievementPercent = isAchieved ? 100 : 0;
+    const calculatedScore = isAchieved ? 5 : 1;
+    return {
+      achievementPercent,
+      calculatedScore,
+      isValid: true,
+      isBoolean: true,
+    };
+  }
+
+  const target = kpi.targetValue !== undefined && kpi.targetValue !== null ? Number(kpi.targetValue) : null;
+  const actual = kpi.actualValue !== undefined && kpi.actualValue !== null ? Number(kpi.actualValue) : null;
+
+  if (target === null || isNaN(target)) {
+    return { achievementPercent: null, calculatedScore: null, isValid: false, reason: 'Target value is invalid or missing' };
+  }
+
+  if (actual === null || isNaN(actual)) {
+    return { achievementPercent: null, calculatedScore: null, isValid: false, reason: 'Actual value is invalid or missing' };
+  }
+
+  // Handle zero-target
+  if (target === 0) {
+    if (direction === 'lower_is_better') {
+      // 0 defects/downtime target: 0 actual is 100% achievement (score 5), >0 is 0% achievement (score 1)
+      const achievementPercent = actual <= 0 ? 100 : 0;
+      const calculatedScore = actual <= 0 ? 5 : 1;
+      return { achievementPercent, calculatedScore, isValid: true };
+    }
+    // For higher_is_better or target_range, a target of 0 has no meaningful target
+    // Do not blindly assign a minimum score of 1 when the KPI is invalid or has no meaningful target
+    return {
+      achievementPercent: null,
+      calculatedScore: null,
+      isValid: false,
+      reason: 'Zero target is invalid for higher_is_better or range-based measurement',
+    };
+  }
+
+  if (target < 0) {
+    return { achievementPercent: null, calculatedScore: null, isValid: false, reason: 'Target cannot be negative' };
   }
 
   let achievementPercent = 0;
@@ -30,15 +86,14 @@ function calculateKpiAchievement(kpi) {
   if (direction === 'higher_is_better') {
     achievementPercent = (actual / target) * 100;
   } else if (direction === 'lower_is_better') {
-    // If target is 10 and actual is 5 -> 200% achievement; if target is 10 and actual is 20 -> 50%
     if (actual <= 0) {
       achievementPercent = 100;
     } else {
       achievementPercent = (target / actual) * 100;
     }
   } else if (direction === 'target_range') {
-    const min = Number(kpi?.acceptableRangeMin ?? target * 0.9);
-    const max = Number(kpi?.acceptableRangeMax ?? target * 1.1);
+    const min = Number(kpi.acceptableRangeMin ?? target * 0.9);
+    const max = Number(kpi.acceptableRangeMax ?? target * 1.1);
     if (actual >= min && actual <= max) {
       achievementPercent = 100;
     } else if (actual < min) {
@@ -58,18 +113,29 @@ function calculateKpiAchievement(kpi) {
   return {
     achievementPercent,
     calculatedScore,
+    isValid: true,
   };
 }
 
 /**
  * Calculates weighted sum of an array of rated items
- * @param {Array<{ weightage?: number, rating?: number, score?: number }>} items
+ * Distinguishes unassigned sections from assigned sections with missing ratings.
+ * @param {Array<{ weightage?: number, rating?: number, managerRating?: number, selfRating?: number, score?: number }>} items
  * @param {number} scaleMax (default 5)
- * @returns {{ weightedScore: number, averageScore: number, normalizedPercent: number }}
+ * @returns {{ hasItems: boolean, itemCount: number, ratedCount: number, isComplete: boolean, missingRatingsCount: number, weightedScore: number, averageScore: number, normalizedPercent: number }}
  */
 function calculateWeightedSectionScore(items = [], scaleMax = 5) {
-  if (!items || items.length === 0) {
-    return { weightedScore: 0, averageScore: 0, normalizedPercent: 0 };
+  if (!Array.isArray(items) || items.length === 0) {
+    return {
+      hasItems: false,
+      itemCount: 0,
+      ratedCount: 0,
+      isComplete: true,
+      missingRatingsCount: 0,
+      weightedScore: 0,
+      averageScore: 0,
+      normalizedPercent: 0,
+    };
   }
 
   let totalWeight = 0;
@@ -78,8 +144,9 @@ function calculateWeightedSectionScore(items = [], scaleMax = 5) {
   let validCount = 0;
 
   items.forEach((item) => {
-    const score = Number(item.rating ?? item.managerRating ?? item.selfRating ?? item.score ?? 0);
-    const weight = Number(item.weightage || 0);
+    const rawScore = item?.rating ?? item?.managerRating ?? item?.selfRating ?? item?.score;
+    const score = Number(rawScore || 0);
+    const weight = Number(item?.weightage || 0);
 
     if (score > 0) {
       validCount += 1;
@@ -91,9 +158,9 @@ function calculateWeightedSectionScore(items = [], scaleMax = 5) {
     }
   });
 
+  const isComplete = validCount === items.length;
   const averageScore = validCount > 0 ? Math.round((simpleSum / validCount) * 100) / 100 : 0;
 
-  // If weights didn't sum to 100, normalize by total weight
   let finalWeighted = averageScore;
   if (totalWeight > 0) {
     finalWeighted = Math.round((weightedSum * (100 / totalWeight)) * 100) / 100;
@@ -102,6 +169,11 @@ function calculateWeightedSectionScore(items = [], scaleMax = 5) {
   const normalizedPercent = Math.round(((finalWeighted / scaleMax) * 100) * 100) / 100;
 
   return {
+    hasItems: true,
+    itemCount: items.length,
+    ratedCount: validCount,
+    isComplete,
+    missingRatingsCount: items.length - validCount,
     weightedScore: finalWeighted,
     averageScore,
     normalizedPercent,
@@ -128,6 +200,8 @@ function mapPercentToRatingBand(percentage, customBands = null) {
 
 /**
  * Calculates the overall consolidated performance score for an appraisal
+ * Normalizes dynamically only across sections that have assigned items.
+ * If assigned items are missing required ratings, marks appraisal incomplete.
  * @param {Object} params
  * @param {Object} params.appraisal
  * @param {Object} params.cycleSettings
@@ -148,6 +222,18 @@ function computeConsolidatedAppraisalScore({ appraisal, cycleSettings = {}, cust
   const goalResult = calculateWeightedSectionScore(mgr.goalRatings || []);
   const compResult = calculateWeightedSectionScore(mgr.competencyRatings || []);
 
+  // Check completeness: if a section has items, all items must be rated
+  const incompleteSections = [];
+  if (kraResult.hasItems && !kraResult.isComplete) incompleteSections.push('KRA');
+  if (kpiResult.hasItems && !kpiResult.isComplete) incompleteSections.push('KPI');
+  if (goalResult.hasItems && !goalResult.isComplete) incompleteSections.push('Goals');
+  if (compResult.hasItems && !compResult.isComplete) incompleteSections.push('Competencies');
+
+  const isIncomplete = incompleteSections.length > 0;
+  const incompleteReason = isIncomplete
+    ? `Required ratings are missing for assigned items in: ${incompleteSections.join(', ')}`
+    : null;
+
   // Calculate peer score if available
   const peerList = appraisal?.peerReviews?.filter((p) => p.status === 'submitted') || [];
   let peerAvg = 0;
@@ -165,24 +251,41 @@ function computeConsolidatedAppraisalScore({ appraisal, cycleSettings = {}, cust
     if (peerRatingCount > 0) peerAvg = Math.round((peerSum / peerRatingCount) * 100) / 100;
   }
 
-  // Active section weights normalization
+  // Active section weights dynamic normalization (only include sections that have assigned items)
   const wKra = weights.kraWeight || 0;
   const wKpi = weights.kpiWeight || 0;
   const wGoal = weights.goalWeight || 0;
   const wComp = weights.competencyWeight || 0;
-  const sumWeights = wKra + wKpi + wGoal + wComp || 100;
 
-  // Weighted calculation (0 - 5 scale)
-  const finalScoreRaw =
-    (kraResult.weightedScore * wKra +
-      kpiResult.weightedScore * wKpi +
-      goalResult.weightedScore * wGoal +
-      compResult.weightedScore * wComp) /
-    sumWeights;
+  const activeSumWeights =
+    (kraResult.hasItems ? wKra : 0) +
+    (kpiResult.hasItems ? wKpi : 0) +
+    (goalResult.hasItems ? wGoal : 0) +
+    (compResult.hasItems ? wComp : 0);
 
-  const finalScore5 = Math.round(finalScoreRaw * 100) / 100;
-  const normalizedScore = Math.max(0, Math.min(100, Math.round((finalScore5 / 5) * 10000) / 100));
-  const ratingBand = mapPercentToRatingBand(normalizedScore, customBands);
+  let finalScore5 = null;
+  let normalizedScore = null;
+  let ratingBand = 'No Assigned Items';
+
+  if (isIncomplete) {
+    ratingBand = 'Incomplete / Pending Evaluation';
+  } else if (activeSumWeights === 0) {
+    finalScore5 = 0;
+    normalizedScore = 0;
+    ratingBand = 'No Assigned Items';
+  } else {
+    // Weighted calculation normalized by active sections
+    const weightedSum =
+      (kraResult.hasItems ? kraResult.weightedScore * wKra : 0) +
+      (kpiResult.hasItems ? kpiResult.weightedScore * wKpi : 0) +
+      (goalResult.hasItems ? goalResult.weightedScore * wGoal : 0) +
+      (compResult.hasItems ? compResult.weightedScore * wComp : 0);
+
+    const finalScoreRaw = weightedSum / activeSumWeights;
+    finalScore5 = Math.round(finalScoreRaw * 100) / 100;
+    normalizedScore = Math.max(0, Math.min(100, Math.round((finalScore5 / 5) * 10000) / 100));
+    ratingBand = mapPercentToRatingBand(normalizedScore, customBands);
+  }
 
   // Self score preview
   const self = appraisal?.selfAppraisal || {};
@@ -190,17 +293,39 @@ function computeConsolidatedAppraisalScore({ appraisal, cycleSettings = {}, cust
   const selfKpi = calculateWeightedSectionScore(self.kpiRatings || []);
   const selfGoal = calculateWeightedSectionScore(self.goalRatings || []);
   const selfComp = calculateWeightedSectionScore(self.competencyRatings || []);
-  const selfOverallScore =
-    Math.round(
-      ((selfKra.weightedScore * wKra +
-        selfKpi.weightedScore * wKpi +
-        selfGoal.weightedScore * wGoal +
-        selfComp.weightedScore * wComp) /
-        sumWeights) *
-        100
-    ) / 100;
+
+  const selfActiveSumWeights =
+    (selfKra.hasItems ? wKra : 0) +
+    (selfKpi.hasItems ? wKpi : 0) +
+    (selfGoal.hasItems ? wGoal : 0) +
+    (selfComp.hasItems ? wComp : 0);
+
+  const selfIncomplete =
+    (selfKra.hasItems && !selfKra.isComplete) ||
+    (selfKpi.hasItems && !selfKpi.isComplete) ||
+    (selfGoal.hasItems && !selfGoal.isComplete) ||
+    (selfComp.hasItems && !selfComp.isComplete);
+
+  let selfOverallScore = null;
+  if (!selfIncomplete && selfActiveSumWeights > 0) {
+    const selfRaw =
+      ((selfKra.hasItems ? selfKra.weightedScore * wKra : 0) +
+        (selfKpi.hasItems ? selfKpi.weightedScore * wKpi : 0) +
+        (selfGoal.hasItems ? selfGoal.weightedScore * wGoal : 0) +
+        (selfComp.hasItems ? selfComp.weightedScore * wComp : 0)) /
+      selfActiveSumWeights;
+    selfOverallScore = Math.round(selfRaw * 100) / 100;
+  }
+
+  const formulaParts = [];
+  if (kraResult.hasItems) formulaParts.push(`KRA*${wKra}`);
+  if (kpiResult.hasItems) formulaParts.push(`KPI*${wKpi}`);
+  if (goalResult.hasItems) formulaParts.push(`Goals*${wGoal}`);
+  if (compResult.hasItems) formulaParts.push(`Competencies*${wComp}`);
 
   return {
+    isIncomplete,
+    incompleteReason,
     rawKraScore: kraResult.weightedScore,
     rawKpiScore: kpiResult.weightedScore,
     rawGoalScore: goalResult.weightedScore,
@@ -213,13 +338,20 @@ function computeConsolidatedAppraisalScore({ appraisal, cycleSettings = {}, cust
     ratingBand,
     scoreBreakdown: {
       sections: {
-        kra: { score: kraResult.weightedScore, weight: wKra, percent: kraResult.normalizedPercent },
-        kpi: { score: kpiResult.weightedScore, weight: wKpi, percent: kpiResult.normalizedPercent },
-        goals: { score: goalResult.weightedScore, weight: wGoal, percent: goalResult.normalizedPercent },
-        competencies: { score: compResult.weightedScore, weight: wComp, percent: compResult.normalizedPercent },
+        kra: { score: kraResult.weightedScore, weight: wKra, percent: kraResult.normalizedPercent, hasItems: kraResult.hasItems, isComplete: kraResult.isComplete, ratedCount: kraResult.ratedCount, itemCount: kraResult.itemCount },
+        kpi: { score: kpiResult.weightedScore, weight: wKpi, percent: kpiResult.normalizedPercent, hasItems: kpiResult.hasItems, isComplete: kpiResult.isComplete, ratedCount: kpiResult.ratedCount, itemCount: kpiResult.itemCount },
+        goals: { score: goalResult.weightedScore, weight: wGoal, percent: goalResult.normalizedPercent, hasItems: goalResult.hasItems, isComplete: goalResult.isComplete, ratedCount: goalResult.ratedCount, itemCount: goalResult.itemCount },
+        competencies: { score: compResult.weightedScore, weight: wComp, percent: compResult.normalizedPercent, hasItems: compResult.hasItems, isComplete: compResult.isComplete, ratedCount: compResult.ratedCount, itemCount: compResult.itemCount },
         peer: { score: peerAvg, count: peerList.length },
       },
-      formula: `(KRA*${wKra} + KPI*${wKpi} + Goals*${wGoal} + Competencies*${wComp}) / ${sumWeights}`,
+      activeWeights: {
+        kra: kraResult.hasItems ? wKra : 0,
+        kpi: kpiResult.hasItems ? wKpi : 0,
+        goals: goalResult.hasItems ? wGoal : 0,
+        competencies: compResult.hasItems ? wComp : 0,
+      },
+      activeSumWeights,
+      formula: activeSumWeights > 0 ? `(${formulaParts.join(' + ')}) / ${activeSumWeights}` : 'N/A',
       calculatedAt: new Date(),
     },
   };
@@ -232,3 +364,4 @@ module.exports = {
   mapPercentToRatingBand,
   computeConsolidatedAppraisalScore,
 };
+

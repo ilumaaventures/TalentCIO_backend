@@ -34,6 +34,21 @@ const {
   verifyKpi,
 } = require('./pmsKraKpi.controller');
 
+// Department-wise KPI Templates & Assignment Controllers
+const {
+  listKpiTemplates,
+  getKpiTemplateById,
+  createKpiTemplate,
+  updateKpiTemplate,
+  changeKpiTemplateStatus,
+  deleteKpiTemplate,
+  getKpisByKra,
+  assignKpisToEmployees,
+  listAssignedKpis,
+  evaluateAssignedKpi,
+  getPmsMetadata,
+} = require('./pmsKpiTemplate.controller');
+
 const {
   listGoals,
   getGoalTree,
@@ -88,7 +103,8 @@ const {
 
 const {
   getDashboardMetrics,
-  exportAppraisalsExcel,
+  getPmsReportData,
+  triggerManualReminders,
 } = require('./pmsAnalytics.controller');
 
 const {
@@ -136,6 +152,25 @@ router.post('/kpis', createKpi);
 router.put('/kpis/:id', updateKpi);
 router.post('/kpis/:id/evidence', submitKpiEvidence);
 router.post('/kpis/:id/verify', verifyKpi);
+
+// ─── Department-wise KPI Templates & Assignment ─────────────────────────────
+router.get('/kpi-templates', listKpiTemplates);
+router.post('/kpi-templates', createKpiTemplate);
+router.get('/kpi-templates/:id', getKpiTemplateById);
+router.put('/kpi-templates/:id', updateKpiTemplate);
+router.delete('/kpi-templates/:id', deleteKpiTemplate);
+router.patch('/kpi-templates/:id/status', changeKpiTemplateStatus);
+
+// Linked KPIs under a specific KRA with weightage summary
+router.get('/kras/:id/kpis', getKpisByKra);
+
+// Employee KPI Assignments & Evaluation
+router.post('/kpis/assign', assignKpisToEmployees);
+router.get('/kpis/assignments', listAssignedKpis);
+router.put('/kpis/assignments/:id/evaluation', evaluateAssignedKpi);
+
+// Performance Management Metadata (departments, designations, KRAs, cycles, users)
+router.get('/meta/options', getPmsMetadata);
 
 // ─── Goals & OKRs ─────────────────────────────────────────────────────────────
 router.get('/goals', listGoals);
@@ -185,9 +220,15 @@ router.get('/dev-plans', listDevPlans);
 router.post('/dev-plans', createDevPlan);
 router.patch('/dev-plans/:id/objective', updateDevPlanObjective);
 
-// ─── Analytics & Excel Export ─────────────────────────────────────────────────
+// ─── Analytics, Reports & Automated Reminders ─────────────────────────────────
 router.get('/analytics/dashboard', getDashboardMetrics);
-router.get('/analytics/export', exportAppraisalsExcel);
+router.get('/analytics/reports/:reportType', getPmsReportData);
+router.get('/analytics/export', (req, res) => {
+  req.params.reportType = 'employee-performance';
+  req.query.format = 'xlsx';
+  return getPmsReportData(req, res);
+});
+router.post('/analytics/reminders/trigger', triggerManualReminders);
 
 // ─── Simplified Evaluations & Direct Team Ratings ─────────────────────────────
 const {

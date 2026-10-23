@@ -4,10 +4,44 @@ const PmsAppraisal = require('./models/pmsAppraisal.model');
 const User = require('../user/user.model');
 const { logPmsAudit } = require('./services/pmsAudit.service');
 const { sendPmsNotification } = require('./services/pmsNotification.service');
-const { isUserAdminOrSuper, isUserHr } = require('./services/pmsWorkflow.service');
+const { isUserAdminOrSuper, isUserHr, getCompanyWorkflow } = require('./services/pmsWorkflow.service');
 
 const canManageCycles = (user) => {
   return isUserAdminOrSuper(user) || isUserHr(user) || user?.permissions?.includes('pms.cycle.manage');
+};
+
+/**
+ * Helper to determine initial appraisal stage and status based on cycle settings and workflow configuration
+ */
+const determineInitialAppraisalStage = (cycle, workflow) => {
+  const selfStage = workflow?.stages?.find((s) => s.key === 'self_review');
+  const isSelfAppraisalEnabled =
+    cycle?.settings?.allowSelfAppraisal !== false &&
+    (!selfStage || selfStage.isRequired !== false);
+
+  if (!isSelfAppraisalEnabled) {
+    // Self-appraisal is disabled for this cycle or workflow stage is skipped/not required
+    const firstActiveStage = workflow?.stages?.find((s) => s.key !== 'self_review') || workflow?.stages?.[0];
+    const initialStageKey = firstActiveStage?.key || 'manager_review';
+    return {
+      currentStageKey: initialStageKey,
+      status: `${initialStageKey}_pending`,
+    };
+  }
+
+  // Preserve any existing workflow configuration that intentionally uses a different starting stage
+  if (workflow?.stages?.[0]?.key && workflow.stages[0].key !== 'self_review') {
+    const initialStageKey = workflow.stages[0].key;
+    return {
+      currentStageKey: initialStageKey,
+      status: `${initialStageKey}_pending`,
+    };
+  }
+
+  return {
+    currentStageKey: 'self_review',
+    status: 'self_review_pending',
+  };
 };
 
 // Valid status lifecycle order
@@ -248,6 +282,9 @@ const createCycle = async (req, res) => {
         query._id = { ...(query._id || {}), $nin: cycle.excludedEmployees };
       }
 
+      const workflow = await getCompanyWorkflow(req.companyId);
+      const { currentStageKey: initialStageKey, status: initialStatus } = determineInitialAppraisalStage(cycle, workflow);
+
       const eligibleEmployees = await User.find(query).select('_id reportingManagers').lean();
       for (const emp of eligibleEmployees) {
         const primaryManager = (emp.reportingManagers && emp.reportingManagers[0]) || req.user._id;
@@ -259,7 +296,8 @@ const createCycle = async (req, res) => {
               cycleId: cycle._id,
               employeeId: emp._id,
               managerId: primaryManager,
-              status: 'manager_review_pending',
+              currentStageKey: initialStageKey,
+              status: initialStatus,
             },
           },
           { upsert: true, new: true }
@@ -434,6 +472,9 @@ const changeCycleStatus = async (req, res) => {
         query._id = { ...(query._id || {}), $nin: cycle.excludedEmployees };
       }
 
+      const workflow = await getCompanyWorkflow(req.companyId);
+      const { currentStageKey: initialStageKey, status: initialStatus } = determineInitialAppraisalStage(cycle, workflow);
+
       const eligibleEmployees = await User.find(query).select('_id reportingManagers').lean();
 
       for (const emp of eligibleEmployees) {
@@ -446,7 +487,8 @@ const changeCycleStatus = async (req, res) => {
               cycleId: cycle._id,
               employeeId: emp._id,
               managerId: primaryManager,
-              status: 'self_review_pending',
+              currentStageKey: initialStageKey,
+              status: initialStatus,
             },
           },
           { upsert: true, new: true }
@@ -563,6 +605,9 @@ const syncCycleParticipants = async (req, res) => {
       query._id = { ...(query._id || {}), $nin: cycle.excludedEmployees };
     }
 
+    const workflow = await getCompanyWorkflow(req.companyId);
+    const { currentStageKey: initialStageKey, status: initialStatus } = determineInitialAppraisalStage(cycle, workflow);
+
     const eligibleEmployees = await User.find(query).select('_id reportingManagers').lean();
     const existingAppraisals = await PmsAppraisal.find({ cycleId: cycle._id, companyId: req.companyId }).select('employeeId managerId status').lean();
 
@@ -582,8 +627,8 @@ const syncCycleParticipants = async (req, res) => {
           cycleId: cycle._id,
           employeeId: emp._id,
           managerId: primaryManager,
-          currentStageKey: 'self_review',
-          status: 'self_review_pending',
+          currentStageKey: initialStageKey,
+          status: initialStatus,
         });
         addedCount++;
 

@@ -96,7 +96,6 @@ const listGoals = async (req, res) => {
       pagination: {
         page,
         limit,
-        total: goals.length,
         total,
         pages: Math.ceil(total / limit),
       },

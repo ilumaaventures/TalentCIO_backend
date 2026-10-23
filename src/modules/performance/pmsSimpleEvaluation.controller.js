@@ -480,6 +480,14 @@ const submitReview = async (req, res) => {
     const { targetUserId } = req.params;
     const { rating, feedback, strengths, improvements, kraRatings = [], level = 'auto' } = req.body;
 
+    // Enforce separation of duties: Authenticated reviewer cannot evaluate their own employee profile
+    if (String(targetUserId) === String(reviewerId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Separation of duties: You cannot evaluate or review your own performance profile.',
+      });
+    }
+
     if (!rating || Number(rating) < 1 || Number(rating) > 5) {
       return res.status(400).json({ success: false, message: 'Please provide a valid rating score between 1 and 5' });
     }
@@ -487,9 +495,10 @@ const submitReview = async (req, res) => {
     const isAdmin = isUserAdminOrSuper(req.user) || req.user?.permissions?.includes('pms.can.edit.all');
     const isHr = isUserHr(req.user) || req.user?.permissions?.includes('pms.view.all');
 
-    // Verify reporting manager relationship and employee active status
+    // Verify reporting manager relationship and employee active status within the caller's company
     const targetUser = await User.findOne({
       _id: targetUserId,
+      companyId,
       isActive: true,
       isDeleted: { $ne: true },
       status: { $nin: ['deleted', 'inactive', 'terminated', 'Inactive', 'Terminated'] },
