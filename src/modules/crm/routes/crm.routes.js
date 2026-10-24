@@ -192,6 +192,7 @@ router.get('/data/import-data', authorize(['crm.leads.read', 'crm.data.import', 
 router.post('/data/import-data/sync', authorize(['crm.data.import', 'crm.admin']), dataController.syncImportData);
 router.get('/data/import-data/:id', authorize(['crm.leads.read', 'crm.data.import', 'crm.admin']), dataController.getImportDataById);
 router.post('/data/import-data/:id/activity', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.create', 'crm.admin']), dataController.logImportDataActivity);
+router.put('/data/import-data/activity/:activityId', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.create', 'crm.admin']), dataController.updateImportDataActivity);
 router.get('/data/import-data/:id/activities', authorize(['crm.leads.read', 'crm.data.import', 'crm.activities.read', 'crm.admin']), dataController.getImportDataActivities);
 router.post('/data/import-data/:id/follow-up', authorize(['crm.leads.read', 'crm.data.import', 'crm.followups.manage', 'crm.admin']), dataController.scheduleImportDataFollowUp);
 router.patch('/data/import-data/:id/status', authorize(['crm.leads.read', 'crm.data.import', 'crm.leads.manage', 'crm.admin']), dataController.updateImportDataStatus);

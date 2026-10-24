@@ -813,6 +813,12 @@ const logImportDataActivity = async (req, res, next) => {
       outcome = 'Connected',
       durationMinutes = 0,
       callType = 'Cold Call',
+      contactPerson = '',
+      contactPhone = '',
+      contactDesignation = '',
+      contactEmail = '',
+      contactPersons = [],
+      metadata = {},
     } = req.body;
 
     const row = await resolveImportDataProspect(companyId, id, req);
@@ -823,10 +829,26 @@ const logImportDataActivity = async (req, res, next) => {
     const repName = getUserDisplayName(req.user);
     const userId = req.user?._id;
 
+    // Normalize multiple contact persons if supplied
+    const cleanContactPersons = Array.isArray(contactPersons)
+      ? contactPersons
+          .map((p) => ({
+            name: (p.name || p.contactPerson || '').trim(),
+            phone: (p.phone || p.mobileNo || '').trim(),
+            designation: (p.designation || '').trim(),
+            email: (p.email || p.emailId || '').trim(),
+            callType: (p.callType || callType || 'Cold Call').trim(),
+            durationMinutes: Number(p.durationMinutes ?? durationMinutes) || 0,
+            outcome: (p.outcome || outcome || 'Connected').trim(),
+            notes: (p.notes ?? p.description ?? '').trim(),
+          }))
+          .filter((p) => p.name || p.phone)
+      : [];
+
     // Update the row's interaction counters & last contacted status
     const incField = {};
-    if (type === 'call') incField.callCount = 1;
-    else if (type === 'whatsapp') incField.whatsappCount = 1;
+    if (type === 'call') incField.callCount = cleanContactPersons.length > 1 ? cleanContactPersons.length : 1;
+    else if (type === 'whatsapp') incField.whatsappCount = cleanContactPersons.length > 1 ? cleanContactPersons.length : 1;
     else if (type === 'email') incField.emailCount = 1;
 
     const updateData = {
@@ -837,6 +859,37 @@ const logImportDataActivity = async (req, res, next) => {
       lastCallType: callType,
     };
 
+    // Auto-persist new contact persons into the company record's contacts array
+    if (cleanContactPersons.length > 0) {
+      const existingContacts = Array.isArray(row.contacts) ? [...row.contacts] : [];
+      let addedAny = false;
+      cleanContactPersons.forEach((cp) => {
+        if (!cp.name && !cp.phone) return;
+        const exists = existingContacts.some((ec) => {
+          const ecName = (ec.contactPerson || ec.name || '').trim().toLowerCase();
+          const ecPhone = (ec.mobileNo || ec.phone || '').trim().replace(/\D/g, '');
+          const cpCleanPhone = cp.phone.replace(/\D/g, '');
+          return (
+            (cp.name && ecName === cp.name.toLowerCase()) ||
+            (cpCleanPhone && ecPhone === cpCleanPhone && cpCleanPhone.length >= 10)
+          );
+        });
+        if (!exists && cp.name) {
+          existingContacts.push({
+            contactPerson: cp.name,
+            designation: cp.designation || '',
+            mobileNo: cp.phone || '',
+            emailId: cp.email || '',
+            isPrimary: false,
+          });
+          addedAny = true;
+        }
+      });
+      if (addedAny) {
+        updateData.contacts = existingContacts;
+      }
+    }
+
     const updatedRow = await CrmImportData.findByIdAndUpdate(
       row._id,
       {
@@ -846,17 +899,65 @@ const logImportDataActivity = async (req, res, next) => {
       { new: true }
     );
 
-    // Create the CrmActivity record
+    // Resolve main contact names & phones
+    let resolvedContactPerson = (contactPerson || '').trim();
+    let resolvedContactPhone = (contactPhone || '').trim();
+    let resolvedContactDesignation = (contactDesignation || '').trim();
+    let resolvedContactEmail = (contactEmail || '').trim();
+
+    if (!resolvedContactPerson && cleanContactPersons.length > 0) {
+      resolvedContactPerson = cleanContactPersons.map((p) => p.name).filter(Boolean).join(' & ');
+    }
+    if (!resolvedContactPerson) {
+      resolvedContactPerson = (row.contactPerson || '').trim();
+    }
+
+    if (!resolvedContactPhone && cleanContactPersons.length > 0) {
+      resolvedContactPhone = cleanContactPersons.map((p) => p.phone).filter(Boolean).join(', ');
+    }
+    if (!resolvedContactPhone) {
+      resolvedContactPhone = (row.mobileNo || row.phone || '').trim();
+    }
+
+    if (!resolvedContactDesignation && cleanContactPersons.length > 0) {
+      resolvedContactDesignation = cleanContactPersons.map((p) => p.designation).filter(Boolean).join(', ');
+    }
+    if (!resolvedContactDesignation) {
+      resolvedContactDesignation = (row.designation || '').trim();
+    }
+
     const activity = await CrmActivity.create({
       companyId,
       importDataId: row._id,
       leadId: row.leadId || null,
       type,
-      subject: subject || `${type.toUpperCase()} with ${row.contactPerson || row.companyName || 'Prospect'}`,
+      subject: subject || `${type.toUpperCase()} with ${resolvedContactPerson || row.companyName || 'Prospect'}`,
       description,
       outcome,
       durationMinutes: Number(durationMinutes) || 0,
       callType,
+      contactPerson: resolvedContactPerson,
+      contactPhone: resolvedContactPhone,
+      contactDesignation: resolvedContactDesignation,
+      contactEmail: resolvedContactEmail,
+      contactPersons: cleanContactPersons.length > 0 ? cleanContactPersons : (resolvedContactPerson ? [{
+        name: resolvedContactPerson,
+        phone: resolvedContactPhone,
+        designation: resolvedContactDesignation,
+        email: resolvedContactEmail,
+        callType: callType || 'Cold Call',
+        durationMinutes: Number(durationMinutes) || 0,
+        outcome: outcome || 'Connected',
+        notes: description || '',
+      }] : []),
+      metadata: {
+        ...(typeof metadata === 'object' && metadata !== null ? metadata : {}),
+        contactPerson: resolvedContactPerson,
+        contactPhone: resolvedContactPhone,
+        contactDesignation: resolvedContactDesignation,
+        contactEmail: resolvedContactEmail,
+        contactPersons: cleanContactPersons,
+      },
       performedBy: userId,
       performedByName: repName,
       performedAt: new Date(),
@@ -867,6 +968,109 @@ const logImportDataActivity = async (req, res, next) => {
       message: `${type.toUpperCase()} interaction logged successfully`,
       data: activity,
       record: updatedRow,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc Update outreach activity (call, WhatsApp, email, meeting, note)
+// @route PUT /api/crm/data/import-data/activity/:activityId
+const updateImportDataActivity = async (req, res, next) => {
+  try {
+    const companyId = getTenantId(req);
+    const { activityId } = req.params;
+    const {
+      callType,
+      outcome,
+      durationMinutes,
+      description,
+      subject,
+      contactPerson,
+      contactPhone,
+      contactDesignation,
+      contactEmail,
+      contactPersons,
+    } = req.body;
+
+    let activity = null;
+    if (companyId) {
+      activity = await CrmActivity.findOne({ _id: activityId, companyId });
+    }
+    if (!activity) {
+      activity = await CrmActivity.findById(activityId);
+    }
+    if (!activity) {
+      return res.status(404).json({ success: false, message: 'Activity record not found' });
+    }
+
+    if (callType !== undefined) activity.callType = callType;
+    if (outcome !== undefined) activity.outcome = outcome;
+    if (durationMinutes !== undefined) activity.durationMinutes = Number(durationMinutes) || 0;
+    if (description !== undefined) activity.description = description;
+    if (subject !== undefined) activity.subject = subject;
+    if (contactPerson !== undefined) activity.contactPerson = contactPerson;
+    if (contactPhone !== undefined) activity.contactPhone = contactPhone;
+    if (contactDesignation !== undefined) activity.contactDesignation = contactDesignation;
+    if (contactEmail !== undefined) activity.contactEmail = contactEmail;
+
+    if (Array.isArray(contactPersons)) {
+      const cleanPersons = contactPersons.map((p) => ({
+        name: (p.name || p.contactPerson || '').trim(),
+        phone: (p.phone || p.mobileNo || '').trim(),
+        designation: (p.designation || '').trim(),
+        email: (p.email || p.emailId || '').trim(),
+        callType: (p.callType || callType || activity.callType || 'Cold Call').trim(),
+        durationMinutes: Number(p.durationMinutes ?? durationMinutes ?? 0) || 0,
+        outcome: (p.outcome || outcome || activity.outcome || 'Connected').trim(),
+        notes: (p.notes ?? p.description ?? '').trim(),
+      }));
+
+      activity.contactPersons = cleanPersons;
+
+      if (cleanPersons.length > 1) {
+        activity.contactPerson = cleanPersons.map((p) => p.name).filter(Boolean).join(' & ');
+        activity.contactPhone = cleanPersons.map((p) => p.phone).filter(Boolean).join(', ');
+        activity.contactDesignation = cleanPersons.map((p) => p.designation).filter(Boolean).join(', ');
+        if (!subject) {
+          activity.subject = `Multi-Person Call (${cleanPersons.length}) with ${activity.contactPerson}`;
+        }
+      } else if (cleanPersons.length === 1) {
+        activity.contactPerson = cleanPersons[0].name || activity.contactPerson;
+        activity.contactPhone = cleanPersons[0].phone || activity.contactPhone;
+        activity.contactDesignation = cleanPersons[0].designation || activity.contactDesignation;
+      }
+
+      // Safely update Mongoose Map if present without spreading internal $ properties
+      if (activity.metadata && typeof activity.metadata.set === 'function') {
+        activity.metadata.set('contactPersons', cleanPersons);
+        activity.metadata.set('contactPerson', activity.contactPerson);
+        activity.metadata.set('contactPhone', activity.contactPhone);
+        activity.metadata.set('contactDesignation', activity.contactDesignation);
+        activity.metadata.set('contactEmail', activity.contactEmail);
+      }
+    }
+
+    await activity.save();
+
+    // If linked to an importData row, update row's lastOutcome / lastCallType if this was the latest activity
+    if (activity.importDataId) {
+      const latestActivity = await CrmActivity.findOne({
+        importDataId: activity.importDataId,
+      }).sort({ performedAt: -1 });
+
+      if (latestActivity && String(latestActivity._id) === String(activity._id)) {
+        await CrmImportData.findByIdAndUpdate(activity.importDataId, {
+          lastOutcome: activity.outcome,
+          lastCallType: activity.callType,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Activity updated successfully',
+      data: activity,
     });
   } catch (error) {
     next(error);
@@ -1944,6 +2148,7 @@ module.exports = {
   syncImportData,
   updateImportDataStatus,
   logImportDataActivity,
+  updateImportDataActivity,
   getImportDataActivities,
   scheduleImportDataFollowUp,
   getRepPerformanceSummary,
