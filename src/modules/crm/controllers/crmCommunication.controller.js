@@ -400,6 +400,18 @@ const sendEmail = async (req, res, next) => {
       formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b;">${formattedHtml}</div>`;
     }
 
+    // Process uploaded attachments (from multer memory storage) or raw attachment body payloads
+    let emailAttachments = [];
+    if (Array.isArray(req.files) && req.files.length > 0) {
+      emailAttachments = req.files.map((file) => ({
+        filename: file.originalname,
+        content: file.buffer,
+        contentType: file.mimetype || 'application/octet-stream',
+      }));
+    } else if (Array.isArray(req.body.attachments)) {
+      emailAttachments = req.body.attachments;
+    }
+
     // Dispatch email using configured company account or platform default
     // Sales outreach emails exclude the corporate logo header configured in general email settings
     let sendResult = false;
@@ -415,6 +427,7 @@ const sendEmail = async (req, res, next) => {
         subject: subject.trim(),
         html: formattedHtml,
         text: plainBody || emailContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+        attachments: emailAttachments,
         brandEmail: false,
         logoUrl: '',
         throwOnError: true
@@ -437,13 +450,15 @@ const sendEmail = async (req, res, next) => {
     const targetImportId = prospectId || importDataId || null;
 
     const cleanText = plainBody || emailContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const attachmentFileNames = emailAttachments.map((a) => a.filename).filter(Boolean);
+    const attachmentNote = attachmentFileNames.length > 0 ? `\n\nAttachments (${attachmentFileNames.length}): ${attachmentFileNames.join(', ')}` : '';
 
     // Log in CrmActivity
     const activity = await CrmActivity.create({
       companyId,
       type: 'email',
       subject: subject.trim().startsWith('Email:') ? subject.trim() : `Email: ${subject.trim()}`,
-      description: `To: ${recipientName ? `${recipientName} <${to}>` : to}\n\n${cleanText}`,
+      description: `To: ${recipientName ? `${recipientName} <${to}>` : to}\n\n${cleanText}${attachmentNote}`,
       outcome: 'Sent',
       performedBy: req.user?._id,
       performedByName: getUserDisplayName(req.user),
@@ -461,7 +476,8 @@ const sendEmail = async (req, res, next) => {
         sentAt: new Date(),
         emailSubject: subject.trim(),
         htmlBody: emailContent,
-        plainBody: cleanText
+        plainBody: cleanText,
+        attachments: attachmentFileNames,
       }
     });
 
@@ -486,6 +502,7 @@ const sendEmail = async (req, res, next) => {
       recipientName: recipientName || to.trim(),
       subject: subject.trim(),
       body: emailContent,
+      attachments: attachmentFileNames,
       status: 'Sent',
       opened: false,
       sentAt: new Date(),
