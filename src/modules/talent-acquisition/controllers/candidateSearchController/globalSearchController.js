@@ -445,7 +445,28 @@ exports.globalSearchCandidates = async (req, res) => {
             publicAppFilterQuery.reviewStatus = req.query.decision.trim();
         }
 
-        const { startDate, endDate, dateField, dateFrom, dateTo } = req.query;
+        let { startDate, endDate, dateField, dateFrom, dateTo, dateFilter } = req.query;
+        if (dateFilter && dateFilter !== 'all') {
+            const now = new Date();
+            if (dateFilter === 'today') {
+                const s = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+                const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                startDate = startDate || s.toISOString();
+                endDate = endDate || e.toISOString();
+            } else if (dateFilter === 'last2days' || dateFilter === '2days') {
+                const s = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+                const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                startDate = startDate || s.toISOString();
+                endDate = endDate || e.toISOString();
+            } else if (dateFilter === 'this_week') {
+                const dayOfWeek = now.getDay();
+                const diffToMonday = (dayOfWeek + 6) % 7;
+                const s = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday, 0, 0, 0, 0);
+                const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                startDate = startDate || s.toISOString();
+                endDate = endDate || e.toISOString();
+            }
+        }
         const effectiveStartDate = startDate || dateFrom;
         const effectiveEndDate = endDate || dateTo;
         if (effectiveStartDate || effectiveEndDate) {

@@ -26,7 +26,7 @@ const leadSchema = new mongoose.Schema({
   source: {
     type: String,
     trim: true,
-    default: 'Website',
+    default: '',
   },
   status: {
     type: String,

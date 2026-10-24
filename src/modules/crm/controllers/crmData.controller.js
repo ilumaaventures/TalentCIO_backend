@@ -533,13 +533,14 @@ const getImportData = async (req, res, next) => {
 
       const resolvedSource = (r.source && r.source !== 'Excel Import' && r.source !== 'Website')
         ? r.source
-        : (r.leadSource && r.leadSource !== 'Website' ? r.leadSource : (r.source || r.leadSource || ''));
+        : (r.leadSource && r.leadSource !== 'Website' ? r.leadSource : '');
 
       return {
         id: r.rowId || String(r._id),
         _id: r._id,
         sNo: r.sNo || '',
         companyName: r.companyName || '',
+        dateOfRegistration: r.dateOfRegistration || '',
         industry: r.industry || '',
         status: r.status || r.leadStatus || (hasActiveLead ? 'Converted to Lead' : 'New'),
         date: r.date,
@@ -660,13 +661,14 @@ const syncImportData = async (req, res, next) => {
 
       const resolvedSyncSource = (item.source && item.source !== 'Website' && item.source !== 'Excel Import')
         ? item.source
-        : (item.leadSource && item.leadSource !== 'Website' ? item.leadSource : (item.source || item.leadSource || 'Website'));
+        : (item.leadSource && item.leadSource !== 'Website' ? item.leadSource : '');
 
       const setFields = {
         companyId,
         rowId,
         sNo: item.sNo || '',
         companyName,
+        dateOfRegistration: (item.dateOfRegistration || '').trim(),
         gstin: (item.gstin || '').trim().toUpperCase(),
         industry: (item.industry || '').trim(),
         address: (item.address || '').trim(),

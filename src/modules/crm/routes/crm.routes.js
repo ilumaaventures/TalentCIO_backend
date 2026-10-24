@@ -1,7 +1,47 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { protect } = require('../../../common/middleware/authMiddleware');
 const { authorize } = require('../../../common/middleware/authorize');
+
+// Multer memory storage configuration for CRM email attachments (5MB max)
+const emailAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB per file
+    files: 5,                  // Maximum 5 attachments
+  },
+  fileFilter: (req, file, cb) => {
+    // Allowed types: photo, pdf, docs, ppt, zip
+    const allowedRegex = /\.(jpe?g|png|gif|webp|svg|bmp|pdf|docx?|txt|rtf|odt|pptx?|xlsx?|csv|zip|rar|7z|tar|gz)$/i;
+    if (!allowedRegex.test(file.originalname)) {
+      return cb(new Error('Invalid file type. Only photos, PDF, Docs, PPT, and ZIP files are allowed.'));
+    }
+    cb(null, true);
+  },
+});
+
+const handleEmailAttachmentUpload = (req, res, next) => {
+  emailAttachmentUpload.array('attachments', 5)(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        message: 'File size exceeds the 5MB maximum limit per attachment.',
+      });
+    }
+    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({
+        success: false,
+        message: 'A maximum of 5 attachments is allowed.',
+      });
+    }
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Attachment upload failed.',
+    });
+  });
+};
 
 const leadController = require('../controllers/crmLead.controller');
 const dealController = require('../controllers/crmDeal.controller');
@@ -97,9 +137,9 @@ router.get('/communication/email-templates', authorize(['crm.communication.read'
 router.post('/communication/email-templates', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.createCrmEmailTemplate);
 router.put('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.updateCrmEmailTemplate);
 router.delete('/communication/email-templates/:id', authorize(['crm.growth.manage', 'crm.communication.send', 'crm.admin']), communicationController.deleteCrmEmailTemplate);
-router.post('/communication/send-email', authorize(['crm.communication.send', 'crm.data.import', 'crm.leads.create', 'crm.leads.update', 'crm.admin']), communicationController.sendEmail);
+router.post('/communication/send-email', authorize(['crm.communication.send', 'crm.data.import', 'crm.leads.create', 'crm.leads.update', 'crm.admin']), handleEmailAttachmentUpload, communicationController.sendEmail);
 router.get('/communication/emails', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getEmails);
-router.post('/communication/emails', authorize(['crm.communication.send', 'crm.admin']), communicationController.sendEmail);
+router.post('/communication/emails', authorize(['crm.communication.send', 'crm.admin']), handleEmailAttachmentUpload, communicationController.sendEmail);
 router.get('/communication/whatsapp', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getWhatsAppMessages);
 router.post('/communication/whatsapp', authorize(['crm.communication.send', 'crm.admin']), communicationController.sendWhatsAppMessage);
 router.get('/communication/calls', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getCalls);

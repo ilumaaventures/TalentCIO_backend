@@ -20,6 +20,7 @@ const crmImportDataSchema = new mongoose.Schema(
     mobileNo: { type: String, trim: true, default: '' },
     emailId: { type: String, trim: true, default: '' },
     gstin: { type: String, trim: true, uppercase: true, default: '' },
+    dateOfRegistration: { type: String, trim: true, default: '' },
     contacts: [
       {
         contactPerson: { type: String, trim: true, default: '' },

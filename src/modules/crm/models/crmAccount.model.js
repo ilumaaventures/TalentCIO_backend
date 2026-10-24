@@ -9,6 +9,7 @@ const accountSchema = new mongoose.Schema({
   },
   name: { type: String, required: true, trim: true, index: true },
   gstin: { type: String, trim: true, uppercase: true, default: '' },
+  dateOfRegistration: { type: String, trim: true, default: '' },
   industry: { type: String, default: 'Technology' },
   website: { type: String, trim: true },
   phone: { type: String, trim: true },
