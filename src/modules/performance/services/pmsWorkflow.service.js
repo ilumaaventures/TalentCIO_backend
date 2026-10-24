@@ -86,7 +86,9 @@ const getNextWorkflowStage = (currentStageKey, stages) => {
  * Helper to check if a user is an admin or super admin
  */
 const isUserAdminOrSuper = (user) => {
-  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const roles = (Array.isArray(user?.roles) && user.roles.length > 0)
+    ? user.roles
+    : (Array.isArray(user?._doc?.roles) ? user._doc.roles : []);
   return (
     roles.some((r) => {
       const name = typeof r === 'string' ? r : r?.name;
@@ -103,7 +105,9 @@ const isUserAdminOrSuper = (user) => {
  * Helper to check if user has HR permissions
  */
 const isUserHr = (user) => {
-  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const roles = (Array.isArray(user?.roles) && user.roles.length > 0)
+    ? user.roles
+    : (Array.isArray(user?._doc?.roles) ? user._doc.roles : []);
   return (
     isUserAdminOrSuper(user) ||
     roles.some((r) => {

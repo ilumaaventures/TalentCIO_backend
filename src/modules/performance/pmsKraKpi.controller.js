@@ -377,8 +377,34 @@ const listKpis = async (req, res) => {
  * @desc Create new KPI
  * @route POST /api/performance/kpis
  */
+/**
+ * Evidence URL validator: disallows dangerous protocols (javascript:, data:, vbscript:)
+ */
+const isValidEvidenceUrl = (url) => {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed) return true;
+  if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+    return false;
+  }
+  return trimmed.startsWith('/') || /^https?:\/\//i.test(trimmed);
+};
+
 const createKpi = async (req, res) => {
   try {
+    const isHrOrAdmin = canManageKras(req.user);
+    if (!isHrOrAdmin) {
+      if (req.body.employeeId) {
+        const emp = await User.findById(req.body.employeeId).select('reportingManagers').lean();
+        const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+        if (!isManager) {
+          return res.status(403).json({ success: false, message: 'Forbidden: Only HR, Admins, or Reporting Managers can define new KPIs.' });
+        }
+      } else {
+        return res.status(403).json({ success: false, message: 'Forbidden: Only HR or Admins can define organization-wide KPIs.' });
+      }
+    }
+
     const {
       kraId,
       cycleId,
@@ -439,6 +465,15 @@ const createKpi = async (req, res) => {
       createdBy: req.user._id,
     });
 
+    await logPmsAudit({
+      companyId: req.companyId,
+      userId: req.user._id,
+      action: 'KPI_CREATED',
+      entityType: 'PmsKpi',
+      entityId: kpi._id,
+      changes: { name: kpi.name, targetValue: kpi.targetValue, weightage: kpi.weightage, employeeId: kpi.employeeId },
+    });
+
     return res.status(201).json({ success: true, message: 'KPI created successfully', data: kpi });
   } catch (err) {
     console.error('[PMS createKpi Error]:', err);
@@ -457,6 +492,34 @@ const updateKpi = async (req, res) => {
     if (!kpi) {
       return res.status(404).json({ success: false, message: 'KPI not found' });
     }
+
+    const isHrOrAdmin = canManageKras(req.user);
+    let isManager = false;
+    if (!isHrOrAdmin && kpi.employeeId) {
+      const emp = await User.findById(kpi.employeeId).select('reportingManagers').lean();
+      isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+    }
+
+    // Tamper-proofing: Non-privileged users/employees cannot modify assigned targets, weightages, or measurement rules
+    const sensitiveFields = ['targetValue', 'weightage', 'measurementDirection', 'baselineValue', 'code', 'acceptableRangeMin', 'acceptableRangeMax', 'name'];
+    const attemptsSensitiveChange = sensitiveFields.some((f) => req.body[f] !== undefined && Number(req.body[f]) !== Number(kpi[f]) && String(req.body[f]) !== String(kpi[f]));
+
+    if (attemptsSensitiveChange && !isHrOrAdmin && !isManager) {
+      return res.status(403).json({
+        success: false,
+        message: 'Separation of duties: Employees cannot modify assigned KPI targets or weightages.',
+      });
+    }
+
+    if (!isHrOrAdmin && !isManager && String(kpi.employeeId) !== String(req.user._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: You do not have permission to modify this KPI.',
+      });
+    }
+
+    const previousTarget = kpi.targetValue;
+    const previousWeightage = kpi.weightage;
 
     const fields = [
       'name',
@@ -493,6 +556,22 @@ const updateKpi = async (req, res) => {
 
     await kpi.save();
 
+    if (previousTarget !== kpi.targetValue || previousWeightage !== kpi.weightage) {
+      await logPmsAudit({
+        companyId: req.companyId,
+        userId: req.user._id,
+        action: 'KPI_AMENDED',
+        entityType: 'PmsKpi',
+        entityId: kpi._id,
+        changes: {
+          previousTarget,
+          newTarget: kpi.targetValue,
+          previousWeightage,
+          newWeightage: kpi.weightage,
+        },
+      });
+    }
+
     return res.status(200).json({ success: true, message: 'KPI updated successfully', data: kpi });
   } catch (err) {
     console.error('[PMS updateKpi Error]:', err);
@@ -512,6 +591,28 @@ const submitKpiEvidence = async (req, res) => {
     const kpi = await PmsKpi.findOne({ _id: id, companyId: req.companyId });
     if (!kpi) {
       return res.status(404).json({ success: false, message: 'KPI not found' });
+    }
+
+    // Role scoping: only owner, manager, HR, or admin can submit evidence
+    const isOwner = String(kpi.employeeId) === String(req.user._id);
+    const isHrOrAdmin = isUserAdminOrSuper(req.user) || isUserHr(req.user);
+    if (!isOwner && !isHrOrAdmin) {
+      const emp = await User.findById(kpi.employeeId).select('reportingManagers').lean();
+      const isManager = (emp?.reportingManagers || []).some((m) => String(m) === String(req.user._id));
+      if (!isManager) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You can only submit evidence for your own or your direct reports\' assigned KPIs.',
+        });
+      }
+    }
+
+    // Evidence URL sanitization against dangerous URI schemes
+    if (fileUrl && !isValidEvidenceUrl(fileUrl)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid evidence URL. Disallowed URI protocol (e.g. javascript:, data:).',
+      });
     }
 
     if (actualValue !== undefined) {

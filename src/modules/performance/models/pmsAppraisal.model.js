@@ -43,9 +43,11 @@ const pmsAppraisalSchema = new mongoose.Schema({
       'manager_review_pending',
       'manager_review_submitted',
       'dept_head_review_pending',
+      'department_head_review_pending',
       'hr_evaluation_pending',
       'calibration_pending',
       'final_approval_pending',
+      'approved',
       'under_approval',
       'revision_requested',
       'rejected',
@@ -72,12 +74,20 @@ const pmsAppraisalSchema = new mongoose.Schema({
     kpiRatings: [
       {
         kpiId: { type: mongoose.Schema.Types.ObjectId, ref: 'PmsKpi' },
+        kraId: { type: mongoose.Schema.Types.ObjectId, ref: 'PmsKra', default: null },
         name: String,
+        code: String,
         targetValue: Number,
         actualValue: Number,
+        weightage: { type: Number, default: 0 },
+        unit: { type: String, default: '%' },
+        measurementType: { type: String, default: 'number' },
+        measurementDirection: { type: String, default: 'higher_is_better' },
         achievementPercent: Number,
         selfRating: Number,
         selfComments: String,
+        evidenceUrl: { type: String, default: '' },
+        evidenceNote: { type: String, default: '' },
       },
     ],
     goalRatings: [
@@ -103,6 +113,7 @@ const pmsAppraisalSchema = new mongoose.Schema({
     careerAspirations: { type: String, default: '' },
     submittedAt: { type: Date },
     isDraft: { type: Boolean, default: true },
+    isSubmitted: { type: Boolean, default: false },
   },
 
   // --- Manager Appraisal Section ---
@@ -119,10 +130,20 @@ const pmsAppraisalSchema = new mongoose.Schema({
     kpiRatings: [
       {
         kpiId: { type: mongoose.Schema.Types.ObjectId, ref: 'PmsKpi' },
+        kraId: { type: mongoose.Schema.Types.ObjectId, ref: 'PmsKra', default: null },
         name: String,
+        code: String,
+        targetValue: Number,
         actualValue: Number,
+        verifiedActualValue: { type: Number, default: null },
+        weightage: { type: Number, default: 0 },
+        unit: { type: String, default: '%' },
+        measurementType: { type: String, default: 'number' },
+        measurementDirection: { type: String, default: 'higher_is_better' },
         managerRating: Number,
         managerComments: String,
+        evidenceVerified: { type: Boolean, default: null },
+        evidenceComments: { type: String, default: '' },
       },
     ],
     goalRatings: [
@@ -152,6 +173,7 @@ const pmsAppraisalSchema = new mongoose.Schema({
     overallComments: { type: String, default: '' },
     submittedAt: { type: Date },
     isDraft: { type: Boolean, default: true },
+    isSubmitted: { type: Boolean, default: false },
   },
 
   // --- 360 Feedback Reviewers ---
@@ -194,6 +216,7 @@ const pmsAppraisalSchema = new mongoose.Schema({
     managerOverallScore: { type: Number, default: 0 },
     calculatedFinalScore: { type: Number, default: 0 }, // Out of 5 or 100
     normalizedScore: { type: Number, default: 0 }, // 0 to 100
+    calibratedScore: { type: Number },
     ratingBand: { type: String, default: '' }, // e.g. "Meets Expectations"
     scoreBreakdown: mongoose.Schema.Types.Mixed,
   },
@@ -273,7 +296,7 @@ const pmsAppraisalSchema = new mongoose.Schema({
       stageLabel: { type: String, default: '' },
       action: {
         type: String,
-        enum: ['submitted', 'approved', 'revision_requested', 'rejected', 'calibrated', 'published', 'reopened', 'delegated', 'reassigned'],
+        enum: ['submitted', 'approved', 'revision_requested', 'rejected', 'calibrated', 'published', 'reopened', 'delegated', 'reassigned', 'acknowledged', 'disputed'],
         required: true,
       },
       actedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -295,6 +318,16 @@ const pmsAppraisalSchema = new mongoose.Schema({
     disputeReason: { type: String, default: '' },
     employeeComments: { type: String, default: '' },
   },
+
+  // --- Automated Reminders & Escalations ---
+  remindersSent: [
+    {
+      reminderType: { type: String, required: true },
+      sentTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      sentAt: { type: Date, default: Date.now },
+      stageKey: { type: String },
+    },
+  ],
 }, { timestamps: true });
 
 pmsAppraisalSchema.index({ companyId: 1, cycleId: 1, employeeId: 1 }, { unique: true });
@@ -302,6 +335,8 @@ pmsAppraisalSchema.index({ companyId: 1, managerId: 1, status: 1 });
 pmsAppraisalSchema.index({ companyId: 1, currentStageKey: 1, status: 1 });
 pmsAppraisalSchema.index({ companyId: 1, 'delegation.delegatedTo': 1 });
 pmsAppraisalSchema.index({ companyId: 1, status: 1 });
+pmsAppraisalSchema.index({ companyId: 1, cycleId: 1, status: 1 });
+pmsAppraisalSchema.index({ companyId: 1, isPublished: 1, 'scores.calculatedFinalScore': -1 });
 pmsAppraisalSchema.index({ companyId: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('PmsAppraisal', pmsAppraisalSchema);

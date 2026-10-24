@@ -266,6 +266,7 @@ const { startBinAutoPurgeCron } = require('./src/modules/bin/binAutoPurge.cron')
 const startAnnouncementScheduler = require('./src/modules/announcement/announcement.scheduler');
 const startEscalationCron = require('./src/modules/helpdesk/escalation.cron');
 const { startEmployeeRevisionCron } = require('./src/modules/dossier/employeeRevision.cron');
+const startPmsRemindersCron = require('./src/modules/performance/services/pmsReminders.cron');
 
 const startImpersonationCleanup = () => {
     setInterval(async () => {
@@ -292,6 +293,7 @@ const initServer = async () => {
     startBinAutoPurgeCron();
     startAnnouncementScheduler(io);
     startEmployeeRevisionCron();
+    startPmsRemindersCron(io);
     startImpersonationCleanup();
 
     server.listen(PORT, () => {

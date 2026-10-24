@@ -2,9 +2,11 @@ const mongoose = require('mongoose');
 const PmsAppraisal = require('./models/pmsAppraisal.model');
 const PmsCycle = require('./models/pmsCycle.model');
 const PmsSetting = require('./models/pmsSetting.model');
+const PmsKpi = require('./models/pmsKpi.model');
+const PmsKra = require('./models/pmsKra.model');
 const User = require('../user/user.model');
 const Department = require('../organization/models/department.model');
-const { computeConsolidatedAppraisalScore } = require('./services/pmsScoring.service');
+const { computeConsolidatedAppraisalScore, calculateKpiAchievement } = require('./services/pmsScoring.service');
 const { logPmsAudit } = require('./services/pmsAudit.service');
 const { sendPmsNotification } = require('./services/pmsNotification.service');
 const {
@@ -15,6 +17,19 @@ const {
   isUserAuthorizedForStage,
   sanitizeAppraisalForUser,
 } = require('./services/pmsWorkflow.service');
+
+/**
+ * Validates evidence URL protocol to prevent dangerous URI schemes
+ */
+const isValidEvidenceUrl = (url) => {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed) return true;
+  if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+    return false;
+  }
+  return trimmed.startsWith('/') || /^https?:\/\//i.test(trimmed);
+};
 
 /**
  * @desc List appraisals with scope authorization, role filtering & pagination
@@ -177,7 +192,8 @@ const listAppraisals = async (req, res) => {
 const getAppraisalDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId })
+    const companyId = req.companyId || req.user?.companyId;
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId })
       .populate('cycleId')
       .populate('employeeId', 'firstName lastName email department departmentRef profilePicture employeeCode workLocation joiningDate')
       .populate('managerId', 'firstName lastName email profilePicture')
@@ -224,12 +240,37 @@ const getAppraisalDetails = async (req, res) => {
     const setting = await PmsSetting.findOne({ companyId: req.companyId }).lean();
     const minResponses = setting?.continuousFeedbackSettings?.minResponsesForDisclosure || 3;
 
+    const cycleId = appraisal.cycleId?._id || appraisal.cycleId;
+    const employeeId = appraisal.employeeId?._id || appraisal.employeeId;
+
+    // Fetch assigned KRAs & KPIs for this employee and cycle
+    const assignedKpis = await PmsKpi.find({
+      companyId: req.companyId,
+      cycleId,
+      employeeId,
+      status: { $nin: ['deleted', 'inactive'] },
+    })
+      .populate('kraId', 'name code description category weightage')
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const kraMap = new Map();
+    assignedKpis.forEach((k) => {
+      if (k.kraId && typeof k.kraId === 'object') {
+        kraMap.set(String(k.kraId._id), k.kraId);
+      }
+    });
+    const assignedKras = Array.from(kraMap.values());
+
     // Mask confidential unpublished ratings & anonymous peer review identities
     const sanitized = sanitizeAppraisalForUser({
       appraisal,
       user: req.user,
       minResponsesForDisclosure: minResponses,
     });
+
+    sanitized.assignedKpis = assignedKpis;
+    sanitized.assignedKras = assignedKras;
 
     return res.status(200).json({ success: true, data: sanitized });
   } catch (err) {
@@ -256,7 +297,8 @@ const saveSelfAppraisal = async (req, res) => {
       isSubmit,
     } = req.body;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const companyId = req.companyId || req.user?.companyId;
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
     }
@@ -273,17 +315,116 @@ const saveSelfAppraisal = async (req, res) => {
       });
     }
 
-    appraisal.selfAppraisal = {
-      kraRatings: kraRatings || appraisal.selfAppraisal?.kraRatings || [],
-      kpiRatings: kpiRatings || appraisal.selfAppraisal?.kpiRatings || [],
-      goalRatings: goalRatings || appraisal.selfAppraisal?.goalRatings || [],
-      competencyRatings: competencyRatings || appraisal.selfAppraisal?.competencyRatings || [],
-      accomplishments: accomplishments !== undefined ? accomplishments : appraisal.selfAppraisal?.accomplishments,
-      challenges: challenges !== undefined ? challenges : appraisal.selfAppraisal?.challenges,
-      careerAspirations: careerAspirations !== undefined ? careerAspirations : appraisal.selfAppraisal?.careerAspirations,
-      isDraft: !isSubmit,
-      submittedAt: isSubmit ? new Date() : appraisal.selfAppraisal?.submittedAt,
-    };
+    // Fetch assigned KPIs for authoritative validation & snapshot preservation
+    const assignedKpis = await PmsKpi.find({
+      companyId,
+      cycleId: appraisal.cycleId,
+      employeeId: appraisal.employeeId,
+      status: { $nin: ['deleted', 'inactive'] },
+    }).lean();
+    const kpiMap = new Map(assignedKpis.map((k) => [String(k._id), k]));
+
+    const processedKpiRatings = [];
+    if (Array.isArray(kpiRatings) && kpiRatings.length > 0) {
+      for (const item of kpiRatings) {
+        const kId = String(item.kpiId?._id || item.kpiId);
+        const assignedKpi = kpiMap.get(kId);
+
+        const targetValue = assignedKpi ? assignedKpi.targetValue : Number(item.targetValue || 0);
+        const weightage = assignedKpi ? assignedKpi.weightage : Number(item.weightage || 0);
+        const unit = assignedKpi ? (assignedKpi.unit || '%') : (item.unit || '%');
+        const measurementType = assignedKpi ? (assignedKpi.measurementType || 'number') : (item.measurementType || 'number');
+        const measurementDirection = assignedKpi ? (assignedKpi.measurementDirection || 'higher_is_better') : (item.measurementDirection || 'higher_is_better');
+        const name = assignedKpi ? assignedKpi.name : (item.name || '');
+        const code = assignedKpi ? assignedKpi.code : (item.code || '');
+        const kraId = assignedKpi ? assignedKpi.kraId : (item.kraId || null);
+
+        let actualValue = item.actualValue !== undefined && item.actualValue !== null && item.actualValue !== '' ? Number(item.actualValue) : null;
+        let selfRating = item.selfRating !== undefined && item.selfRating !== null && item.selfRating !== '' ? Number(item.selfRating) : null;
+
+        // Authoritative achievement calculation
+        let achievementPercent = null;
+        if (actualValue !== null && !isNaN(actualValue)) {
+          const achCalc = calculateKpiAchievement({
+            targetValue,
+            actualValue,
+            measurementType,
+            measurementDirection,
+          });
+          achievementPercent = achCalc.isValid && achCalc.achievementPercent !== null ? achCalc.achievementPercent : null;
+        }
+
+        if (item.evidenceUrl && !isValidEvidenceUrl(item.evidenceUrl)) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid evidence URL for KPI "${name}". Disallowed URI protocol (e.g. javascript:, data:).`,
+          });
+        }
+
+        processedKpiRatings.push({
+          kpiId: kId,
+          kraId,
+          name,
+          code,
+          targetValue,
+          actualValue,
+          weightage,
+          unit,
+          measurementType,
+          measurementDirection,
+          achievementPercent,
+          selfRating,
+          selfComments: item.selfComments || '',
+          evidenceUrl: item.evidenceUrl || '',
+          evidenceNote: item.evidenceNote || '',
+        });
+
+        // Sync actual value to PmsKpi record
+        if (actualValue !== null && !isNaN(actualValue)) {
+          await PmsKpi.updateOne(
+            { _id: kId, companyId: req.companyId, employeeId: appraisal.employeeId },
+            { $set: { actualValue, updatedBy: req.user._id } }
+          );
+        }
+      }
+    }
+
+    // Required KPI validation on submission
+    if (isSubmit && assignedKpis.length > 0) {
+      const missingRatings = assignedKpis.filter((ak) => {
+        const rated = processedKpiRatings.find((pk) => String(pk.kpiId) === String(ak._id));
+        return !rated || rated.actualValue === null || rated.actualValue === undefined || !rated.selfRating || rated.selfRating < 1;
+      });
+      if (missingRatings.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Please provide actual achievements and self-ratings (1-5) for all assigned KPIs before submitting. Pending items: ${missingRatings.map((m) => m.name).join(', ')}`,
+        });
+      }
+    }
+
+    if (!appraisal.selfAppraisal) {
+      appraisal.selfAppraisal = {};
+    }
+    appraisal.selfAppraisal.kraRatings = kraRatings || appraisal.selfAppraisal.kraRatings || [];
+    appraisal.selfAppraisal.kpiRatings = processedKpiRatings.length > 0 ? processedKpiRatings : (appraisal.selfAppraisal.kpiRatings || []);
+    appraisal.selfAppraisal.goalRatings = goalRatings || appraisal.selfAppraisal.goalRatings || [];
+    appraisal.selfAppraisal.competencyRatings = competencyRatings || appraisal.selfAppraisal.competencyRatings || [];
+    if (accomplishments !== undefined) appraisal.selfAppraisal.accomplishments = accomplishments;
+    if (challenges !== undefined) appraisal.selfAppraisal.challenges = challenges;
+    if (careerAspirations !== undefined) appraisal.selfAppraisal.careerAspirations = careerAspirations;
+    appraisal.selfAppraisal.isDraft = !isSubmit;
+    appraisal.selfAppraisal.isSubmitted = Boolean(isSubmit);
+    if (isSubmit) appraisal.selfAppraisal.submittedAt = new Date();
+
+    // Calculate self overall score preview
+    const settings = await PmsSetting.findOne({ companyId: req.companyId }).lean();
+    const customBands = settings?.ratingScales?.[0]?.bands || null;
+    appraisal.scores = computeConsolidatedAppraisalScore({
+      appraisal,
+      cycleSettings: appraisal.cycleId?.settings,
+      customBands,
+    });
 
     if (isSubmit) {
       const workflow = await getCompanyWorkflow(req.companyId);
@@ -343,7 +484,8 @@ const saveManagerAppraisal = async (req, res) => {
       isSubmit,
     } = req.body;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId }).populate('cycleId');
+    const companyId = req.companyId || req.user?.companyId;
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId }).populate('cycleId');
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
     }
@@ -376,19 +518,86 @@ const saveManagerAppraisal = async (req, res) => {
       });
     }
 
-    appraisal.managerAppraisal = {
-      kraRatings: kraRatings || appraisal.managerAppraisal?.kraRatings || [],
-      kpiRatings: kpiRatings || appraisal.managerAppraisal?.kpiRatings || [],
-      goalRatings: goalRatings || appraisal.managerAppraisal?.goalRatings || [],
-      competencyRatings: competencyRatings || appraisal.managerAppraisal?.competencyRatings || [],
-      strengths: strengths !== undefined ? strengths : appraisal.managerAppraisal?.strengths,
-      areasOfImprovement: areasOfImprovement !== undefined ? areasOfImprovement : appraisal.managerAppraisal?.areasOfImprovement,
-      promotionRecommendation: promotionRecommendation || appraisal.managerAppraisal?.promotionRecommendation,
-      trainingNeeds: trainingNeeds || appraisal.managerAppraisal?.trainingNeeds || [],
-      overallComments: overallComments !== undefined ? overallComments : appraisal.managerAppraisal?.overallComments,
-      isDraft: !isSubmit,
-      submittedAt: isSubmit ? new Date() : appraisal.managerAppraisal?.submittedAt,
-    };
+    const assignedKpis = await PmsKpi.find({
+      companyId: req.companyId,
+      cycleId: appraisal.cycleId,
+      employeeId: appraisal.employeeId,
+      status: { $nin: ['deleted', 'inactive'] },
+    }).lean();
+    const kpiMap = new Map(assignedKpis.map((k) => [String(k._id), k]));
+
+    const processedManagerKpis = [];
+    if (Array.isArray(kpiRatings) && kpiRatings.length > 0) {
+      for (const item of kpiRatings) {
+        const kId = String(item.kpiId?._id || item.kpiId);
+        const assignedKpi = kpiMap.get(kId);
+
+        const name = assignedKpi ? assignedKpi.name : (item.name || '');
+        const code = assignedKpi ? assignedKpi.code : (item.code || '');
+        const targetValue = assignedKpi ? assignedKpi.targetValue : Number(item.targetValue || 0);
+        const weightage = assignedKpi ? assignedKpi.weightage : Number(item.weightage || 0);
+        const unit = assignedKpi ? (assignedKpi.unit || '%') : (item.unit || '%');
+        const measurementType = assignedKpi ? (assignedKpi.measurementType || 'number') : (item.measurementType || 'number');
+        const measurementDirection = assignedKpi ? (assignedKpi.measurementDirection || 'higher_is_better') : (item.measurementDirection || 'higher_is_better');
+        const kraId = assignedKpi ? assignedKpi.kraId : (item.kraId || null);
+
+        let managerRating = item.managerRating !== undefined && item.managerRating !== null && item.managerRating !== '' ? Number(item.managerRating) : null;
+        let verifiedActual = item.verifiedActualValue !== undefined && item.verifiedActualValue !== null && item.verifiedActualValue !== '' ? Number(item.verifiedActualValue) : null;
+
+        processedManagerKpis.push({
+          kpiId: kId,
+          kraId,
+          name,
+          code,
+          targetValue,
+          actualValue: assignedKpi?.actualValue || 0,
+          verifiedActualValue: verifiedActual,
+          weightage,
+          unit,
+          measurementType,
+          measurementDirection,
+          managerRating,
+          managerComments: item.managerComments || '',
+          evidenceVerified: item.evidenceVerified !== undefined ? Boolean(item.evidenceVerified) : null,
+          evidenceComments: item.evidenceComments || '',
+        });
+      }
+    }
+
+    if (isSubmit && assignedKpis.length > 0) {
+      const missingMgrRatings = assignedKpis.filter((ak) => {
+        const rated = processedManagerKpis.find((pk) => String(pk.kpiId) === String(ak._id));
+        return !rated || !rated.managerRating || rated.managerRating < 1;
+      });
+      if (missingMgrRatings.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Please provide manager ratings (1-5) for all assigned KPIs before submitting. Pending items: ${missingMgrRatings.map((m) => m.name).join(', ')}`,
+        });
+      }
+    }
+
+    if (!appraisal.managerAppraisal) {
+      appraisal.managerAppraisal = {};
+    }
+    appraisal.managerAppraisal.kraRatings = kraRatings || appraisal.managerAppraisal.kraRatings || [];
+    appraisal.managerAppraisal.kpiRatings = processedManagerKpis.length > 0 ? processedManagerKpis : (appraisal.managerAppraisal.kpiRatings || []);
+    appraisal.managerAppraisal.goalRatings = goalRatings || appraisal.managerAppraisal.goalRatings || [];
+    appraisal.managerAppraisal.competencyRatings = competencyRatings || appraisal.managerAppraisal.competencyRatings || [];
+    if (strengths !== undefined) appraisal.managerAppraisal.strengths = strengths;
+    if (areasOfImprovement !== undefined) appraisal.managerAppraisal.areasOfImprovement = areasOfImprovement;
+    if (promotionRecommendation && typeof promotionRecommendation === 'object') {
+      appraisal.managerAppraisal.promotionRecommendation = {
+        recommended: Boolean(promotionRecommendation.recommended),
+        proposedDesignation: promotionRecommendation.proposedDesignation || '',
+        notes: promotionRecommendation.notes || '',
+      };
+    }
+    if (trainingNeeds) appraisal.managerAppraisal.trainingNeeds = trainingNeeds;
+    if (overallComments !== undefined) appraisal.managerAppraisal.overallComments = overallComments;
+    appraisal.managerAppraisal.isDraft = !isSubmit;
+    appraisal.managerAppraisal.isSubmitted = Boolean(isSubmit);
+    if (isSubmit) appraisal.managerAppraisal.submittedAt = new Date();
 
     // Calculate authoritative scores via scoring service
     const settings = await PmsSetting.findOne({ companyId: req.companyId }).lean();
@@ -400,6 +609,14 @@ const saveManagerAppraisal = async (req, res) => {
       customBands,
     });
     appraisal.scores = calculatedScores;
+
+    if (isSubmit && calculatedScores.isIncomplete) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot submit manager evaluation: ${calculatedScores.incompleteReason}`,
+        details: calculatedScores.scoreBreakdown?.sections,
+      });
+    }
 
     if (isSubmit) {
       const workflow = await getCompanyWorkflow(req.companyId);
@@ -452,17 +669,23 @@ const saveDepartmentHeadReview = async (req, res) => {
   try {
     const { id } = req.params;
     const { deptHeadRating, deptHeadComments } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
+    }
+
+    // Separation of duties
+    if (String(appraisal.employeeId) === String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Separation of duties: You cannot review your own appraisal as department head.' });
     }
 
     const authCheck = await isUserAuthorizedForStage({
       user: req.user,
       appraisal,
       stageKey: 'department_head_review',
-      companyId: req.companyId,
+      companyId,
     });
 
     if (!authCheck.authorized) {
@@ -483,7 +706,7 @@ const saveDepartmentHeadReview = async (req, res) => {
       evaluatedAt: new Date(),
     };
 
-    const workflow = await getCompanyWorkflow(req.companyId);
+    const workflow = await getCompanyWorkflow(companyId);
     const nextStage = getNextWorkflowStage('department_head_review', workflow.stages);
 
     appraisal.currentStageKey = nextStage.key;
@@ -499,6 +722,15 @@ const saveDepartmentHeadReview = async (req, res) => {
     });
 
     await appraisal.save();
+
+    await logPmsAudit({
+      companyId,
+      userId: req.user._id,
+      action: 'DEPARTMENT_HEAD_REVIEW_SUBMITTED',
+      entityType: 'PmsAppraisal',
+      entityId: appraisal._id,
+      changes: { deptHeadRating, nextStage: nextStage.key },
+    });
 
     return res.status(200).json({
       success: true,
@@ -519,17 +751,23 @@ const saveHrEvaluation = async (req, res) => {
   try {
     const { id } = req.params;
     const { hrRating, hrComments } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
+    }
+
+    // Separation of duties
+    if (String(appraisal.employeeId) === String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Separation of duties: You cannot complete HR evaluation on your own appraisal.' });
     }
 
     const authCheck = await isUserAuthorizedForStage({
       user: req.user,
       appraisal,
       stageKey: 'hr_evaluation',
-      companyId: req.companyId,
+      companyId,
     });
 
     if (!authCheck.authorized) {
@@ -550,7 +788,7 @@ const saveHrEvaluation = async (req, res) => {
       evaluatedAt: new Date(),
     };
 
-    const workflow = await getCompanyWorkflow(req.companyId);
+    const workflow = await getCompanyWorkflow(companyId);
     const nextStage = getNextWorkflowStage('hr_evaluation', workflow.stages);
 
     appraisal.currentStageKey = nextStage.key;
@@ -566,6 +804,15 @@ const saveHrEvaluation = async (req, res) => {
     });
 
     await appraisal.save();
+
+    await logPmsAudit({
+      companyId,
+      userId: req.user._id,
+      action: 'HR_EVALUATION_SUBMITTED',
+      entityType: 'PmsAppraisal',
+      entityId: appraisal._id,
+      changes: { hrRating, nextStage: nextStage.key },
+    });
 
     return res.status(200).json({
       success: true,
@@ -585,18 +832,24 @@ const saveHrEvaluation = async (req, res) => {
 const saveFinalApproval = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments } = req.body;
+    const { comments, publishImmediately } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
+    }
+
+    // Separation of duties
+    if (String(appraisal.employeeId) === String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Separation of duties: You cannot approve your own appraisal.' });
     }
 
     const authCheck = await isUserAuthorizedForStage({
       user: req.user,
       appraisal,
       stageKey: 'final_approval',
-      companyId: req.companyId,
+      companyId,
     });
 
     if (!authCheck.authorized) {
@@ -616,15 +869,28 @@ const saveFinalApproval = async (req, res) => {
       comments: comments || '',
     };
 
-    const workflow = await getCompanyWorkflow(req.companyId);
-    const nextStage = getNextWorkflowStage('final_approval', workflow.stages);
+    if (publishImmediately) {
+      const isAdmin = isUserAdminOrSuper(req.user);
+      const hasPublishPerm = req.user?.permissions?.includes('pms.ratings.publish');
+      if (isAdmin || hasPublishPerm) {
+        appraisal.currentStageKey = 'published';
+        appraisal.status = 'published';
+        appraisal.isPublished = true;
+        appraisal.publishedAt = new Date();
+        appraisal.publishedBy = req.user._id;
 
-    appraisal.currentStageKey = nextStage.key;
-    appraisal.status = nextStage.key === 'published' ? 'published' : 'under_approval';
-    if (nextStage.key === 'published') {
-      appraisal.isPublished = true;
-      appraisal.publishedAt = new Date();
-      appraisal.publishedBy = req.user._id;
+        sendPmsNotification(req, {
+          userId: appraisal.employeeId,
+          title: 'Performance Appraisal Published',
+          message: 'Your performance evaluation has been finalized and published. Please review and acknowledge.',
+          link: `/performance?tab=reviews&appraisalId=${appraisal._id}`,
+          preferenceKey: 'pms_final_published',
+        });
+      } else {
+        appraisal.status = 'approved';
+      }
+    } else {
+      appraisal.status = 'approved';
     }
 
     appraisal.workflowHistory.push({
@@ -638,6 +904,15 @@ const saveFinalApproval = async (req, res) => {
     });
 
     await appraisal.save();
+
+    await logPmsAudit({
+      companyId,
+      userId: req.user._id,
+      action: 'FINAL_APPROVAL_RECORDED',
+      entityType: 'PmsAppraisal',
+      entityId: appraisal._id,
+      changes: { comments, isPublished: appraisal.isPublished, status: appraisal.status },
+    });
 
     return res.status(200).json({
       success: true,
@@ -808,14 +1083,25 @@ const calibrateRating = async (req, res) => {
   try {
     const { id } = req.params;
     const { calibratedScore, calibratedRatingBand, reason } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
     if (calibratedScore === undefined || !reason || reason.trim().length < 5) {
       return res.status(400).json({ success: false, message: 'Calibrated score and a documented reason (min 5 chars) are required' });
     }
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const numScore = Number(calibratedScore);
+    if (isNaN(numScore) || numScore < 0 || numScore > 100) {
+      return res.status(400).json({ success: false, message: 'Calibrated score must be a valid number between 0 and 100' });
+    }
+
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
+    }
+
+    // Separation of duties: Evaluator CANNOT calibrate their own appraisal
+    if (String(appraisal.employeeId) === String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Separation of duties: You cannot calibrate your own appraisal.' });
     }
 
     const isHr = isUserHr(req.user);
@@ -823,11 +1109,19 @@ const calibrateRating = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Calibration moderation requires HR or Admin permissions.' });
     }
 
+    if (appraisal.isPublished) {
+      return res.status(400).json({ success: false, message: 'Cannot calibrate an already published appraisal. Reopen first.' });
+    }
+
+    if (appraisal.currentStageKey === 'self_review') {
+      return res.status(400).json({ success: false, message: 'Cannot calibrate an appraisal that is still in self-review.' });
+    }
+
     const originalScore = appraisal.scores?.calculatedFinalScore || 0;
 
     appraisal.calibration = {
       originalScore,
-      calibratedScore: Number(calibratedScore),
+      calibratedScore: numScore,
       calibratedRatingBand: calibratedRatingBand || appraisal.scores?.ratingBand,
       calibratedBy: req.user._id,
       calibratedAt: new Date(),
@@ -835,30 +1129,33 @@ const calibrateRating = async (req, res) => {
       isAdjusted: true,
     };
 
-    appraisal.scores.calibratedScore = Number(calibratedScore);
-    appraisal.scores.ratingBand = calibratedRatingBand || appraisal.scores?.ratingBand;
+    if (!appraisal.scores) appraisal.scores = {};
+    appraisal.scores.calibratedScore = numScore;
+    if (calibratedRatingBand) {
+      appraisal.scores.ratingBand = calibratedRatingBand;
+    }
 
     appraisal.workflowHistory.push({
-      stageKey: 'calibration',
+      stageKey: appraisal.currentStageKey || 'calibration',
       stageLabel: 'Rating Calibration',
       action: 'calibrated',
       actedBy: req.user._id,
       actedByRole: 'HR Calibration Officer',
       comments: reason.trim(),
-      ratingsSnapshot: { originalScore, calibratedScore: Number(calibratedScore) },
+      ratingsSnapshot: { originalScore, calibratedScore: numScore },
       actionDate: new Date(),
     });
 
     await appraisal.save();
 
     await logPmsAudit({
-      companyId: req.companyId,
+      companyId,
       userId: req.user._id,
       action: 'CALIBRATION_ADJUSTMENT',
       entityType: 'PmsAppraisal',
       entityId: appraisal._id,
       reason: reason.trim(),
-      changes: { originalScore, calibratedScore },
+      changes: { originalScore, calibratedScore: numScore },
     });
 
     return res.status(200).json({ success: true, message: 'Rating calibrated successfully', data: appraisal });
@@ -875,6 +1172,7 @@ const calibrateRating = async (req, res) => {
 const publishAppraisals = async (req, res) => {
   try {
     const { appraisalIds, cycleId } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
     const isAdmin = isUserAdminOrSuper(req.user);
     const hasPublishPerm = req.user?.permissions?.includes('pms.ratings.publish');
@@ -882,26 +1180,51 @@ const publishAppraisals = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only authorized administrators can publish performance ratings.' });
     }
 
-    let filter = { companyId: req.companyId };
+    let filter = { companyId };
     if (Array.isArray(appraisalIds) && appraisalIds.length > 0) {
-      filter._id = { $in: appraisalIds };
+      const candidates = await PmsAppraisal.find({ _id: { $in: appraisalIds }, companyId });
+      if (candidates.length === 0) {
+        return res.status(404).json({ success: false, message: 'No matching appraisals found to publish.' });
+      }
+      for (const app of candidates) {
+        const isApproved = Boolean(app.finalApproval?.approvedAt) || app.status === 'approved' || app.status === 'final_approval_approved';
+        if (!isApproved && app.status !== 'published') {
+          return res.status(400).json({
+            success: false,
+            message: `Cannot publish appraisal: Required reviews and final approval must be completed first (Appraisal ID: ${app._id}, Stage: ${app.currentStageKey || app.status}).`,
+          });
+        }
+      }
+      filter._id = { $in: candidates.map((c) => c._id) };
     } else if (cycleId) {
       filter.cycleId = cycleId;
+      filter.$or = [
+        { 'finalApproval.approvedAt': { $exists: true, $ne: null } },
+        { status: 'approved' },
+        { status: 'final_approval_approved' },
+      ];
+      filter.isPublished = { $ne: true };
     } else {
       return res.status(400).json({ success: false, message: 'Provide appraisalIds or cycleId to publish' });
     }
 
-    const toPublish = await PmsAppraisal.find(filter).select('_id employeeId').lean();
+    const toPublish = await PmsAppraisal.find(filter).select('_id employeeId scores calibration').lean();
+    if (toPublish.length === 0) {
+      return res.status(400).json({ success: false, message: 'No un-published, approved appraisals ready for publication.' });
+    }
 
-    await PmsAppraisal.updateMany(filter, {
-      $set: {
-        isPublished: true,
-        publishedAt: new Date(),
-        publishedBy: req.user._id,
-        currentStageKey: 'published',
-        status: 'published',
-      },
-    });
+    await PmsAppraisal.updateMany(
+      { _id: { $in: toPublish.map((p) => p._id) }, companyId },
+      {
+        $set: {
+          isPublished: true,
+          publishedAt: new Date(),
+          publishedBy: req.user._id,
+          currentStageKey: 'published',
+          status: 'published',
+        },
+      }
+    );
 
     for (const app of toPublish) {
       sendPmsNotification(req, {
@@ -914,14 +1237,18 @@ const publishAppraisals = async (req, res) => {
     }
 
     await logPmsAudit({
-      companyId: req.companyId,
+      companyId,
       userId: req.user._id,
       action: 'APPRAISALS_PUBLISHED',
       entityType: 'PmsAppraisal',
-      changes: { count: toPublish.length },
+      changes: { count: toPublish.length, appraisalIds: toPublish.map((p) => p._id) },
     });
 
-    return res.status(200).json({ success: true, message: `Successfully published ${toPublish.length} appraisals` });
+    return res.status(200).json({
+      success: true,
+      message: `Successfully published ${toPublish.length} appraisals`,
+      data: { publishedCount: toPublish.length },
+    });
   } catch (err) {
     console.error('[PMS publishAppraisals Error]:', err);
     return res.status(500).json({ success: false, message: 'Failed to publish appraisals' });
@@ -936,8 +1263,9 @@ const acknowledgeAppraisal = async (req, res) => {
   try {
     const { id } = req.params;
     const { isDisputed, disputeReason, comments } = req.body;
+    const companyId = req.companyId || req.user?.companyId;
 
-    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId: req.companyId });
+    const appraisal = await PmsAppraisal.findOne({ _id: id, companyId });
     if (!appraisal) {
       return res.status(404).json({ success: false, message: 'Appraisal not found' });
     }
@@ -946,29 +1274,37 @@ const acknowledgeAppraisal = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only the assigned employee can acknowledge this appraisal' });
     }
 
+    if (!appraisal.isPublished && appraisal.status !== 'published') {
+      return res.status(400).json({ success: false, message: 'Only published appraisals can be acknowledged or disputed.' });
+    }
+
+    if (isDisputed && (!disputeReason || disputeReason.trim().length < 5)) {
+      return res.status(400).json({ success: false, message: 'A specific reason (minimum 5 characters) is required when submitting a dispute.' });
+    }
+
     appraisal.acknowledgement = {
       isAcknowledged: true,
       acknowledgedAt: new Date(),
       isDisputed: Boolean(isDisputed),
-      disputeReason: disputeReason || '',
-      employeeComments: comments || '',
+      disputeReason: disputeReason ? disputeReason.trim() : '',
+      employeeComments: comments ? comments.trim() : '',
     };
     appraisal.status = isDisputed ? 'disputed' : 'acknowledged';
 
     appraisal.workflowHistory.push({
       stageKey: 'published',
       stageLabel: 'Rating Published',
-      action: isDisputed ? 'rejected' : 'approved',
+      action: isDisputed ? 'disputed' : 'acknowledged',
       actedBy: req.user._id,
       actedByRole: 'Employee',
-      comments: isDisputed ? disputeReason : (comments || 'Employee acknowledged appraisal'),
+      comments: isDisputed ? disputeReason.trim() : (comments || 'Employee acknowledged appraisal'),
       actionDate: new Date(),
     });
 
     await appraisal.save();
 
     await logPmsAudit({
-      companyId: req.companyId,
+      companyId,
       userId: req.user._id,
       action: isDisputed ? 'APPRAISAL_DISPUTED' : 'APPRAISAL_ACKNOWLEDGED',
       entityType: 'PmsAppraisal',
@@ -976,7 +1312,24 @@ const acknowledgeAppraisal = async (req, res) => {
       changes: { isDisputed, comments },
     });
 
-    return res.status(200).json({ success: true, message: 'Appraisal acknowledged successfully', data: appraisal });
+    // Notify reporting manager
+    if (appraisal.managerId) {
+      sendPmsNotification(req, {
+        userId: appraisal.managerId,
+        title: isDisputed ? 'Appraisal Disputed by Employee' : 'Appraisal Acknowledged',
+        message: isDisputed
+          ? `Employee has raised a dispute on their published appraisal: "${disputeReason.trim()}".`
+          : `Employee has formally signed off and acknowledged their appraisal.`,
+        link: `/performance?tab=reviews&appraisalId=${appraisal._id}`,
+        preferenceKey: isDisputed ? 'pms_appraisal_disputed' : 'pms_appraisal_acknowledged',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: isDisputed ? 'Dispute submitted successfully' : 'Appraisal acknowledged successfully',
+      data: appraisal,
+    });
   } catch (err) {
     console.error('[PMS acknowledgeAppraisal Error]:', err);
     return res.status(500).json({ success: false, message: 'Failed to acknowledge appraisal' });
