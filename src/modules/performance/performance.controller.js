@@ -466,31 +466,40 @@ const getEmployeePerformance = async (req, res) => {
         const companyId = new mongoose.Types.ObjectId(req.companyId);
         const range = req.query.range || '30d'; // 7d, 30d, 90d
 
-        // Check permission: Own profile, direct report (if project.view_team), or view all user performance
+        // Check permission: Own profile, admin, HR, reporting manager, PMS manager, or project.view_team
         const isSelf = String(req.user._id) === String(userId);
         const userPermissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+        const userRoles = Array.isArray(req.user?.roles) ? req.user.roles : [];
         const hasAllPerms = req.user?.hasAllPermissions === true || userPermissions.includes('*') || userPermissions.includes('admin');
+        const roleNames = userRoles.map(r => (typeof r === 'string' ? r : r?.name || '')).filter(Boolean);
+        const isHrOrAdmin = isAdminOrManager(req.user) ||
+            hasAllPerms ||
+            roleNames.some(r => /admin|hr|super/i.test(r)) ||
+            userPermissions.includes('pms.view.all') ||
+            userPermissions.includes('pms.can.edit.all') ||
+            (userPermissions.includes('project.userperformance.view') && userPermissions.includes('user.read'));
 
-        // project.userperformance.view ONLY works when user has user.read permission
-        const canViewAllUserPerformance = isAdminOrManager(req.user) || (
-            hasAllPerms || (userPermissions.includes('project.userperformance.view') && userPermissions.includes('user.read'))
-        );
-
-        let isTeamMember = false;
-        if (!isSelf && !canViewAllUserPerformance) {
-            const canViewTeam = userPermissions.includes('project.view_team');
-            if (canViewTeam) {
-                const directReport = await User.findOne({ _id: userId, reportingManagers: req.user._id, companyId }).select('_id');
-                if (directReport) isTeamMember = true;
+        let isAuthorizedManager = false;
+        if (!isSelf && !isHrOrAdmin) {
+            const isDirectReport = await User.findOne({ _id: userId, reportingManagers: req.user._id, companyId }).select('_id');
+            if (isDirectReport) {
+                isAuthorizedManager = true;
+            } else if (
+                userPermissions.includes('project.view_team') ||
+                userPermissions.includes('pms.manage.team') ||
+                roleNames.some(r => /manager/i.test(r))
+            ) {
+                isAuthorizedManager = true;
             }
         }
 
-        if (!isSelf && !canViewAllUserPerformance && !isTeamMember) {
+        if (!isSelf && !isHrOrAdmin && !isAuthorizedManager) {
             return res.status(403).json({ message: 'Not authorized to view performance for this user' });
         }
 
         const employee = await User.findOne({ _id: userId, companyId })
-            .select('firstName lastName email profilePicture department')
+            .select('firstName lastName name email profilePicture department designation employeeCode joiningDate createdAt workLocation employmentType reportingManagers status isActive')
+            .populate('reportingManagers', 'firstName lastName name email designation')
             .lean();
         if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
@@ -745,9 +754,38 @@ const getEmployeePerformance = async (req, res) => {
             estimatedHours: Number(b.estimatedHours.toFixed(1))
         }));
 
+        // Calculate total all-time hours given to the company
+        const allTimeAggregation = await WorkLog.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(userId),
+                    companyId,
+                    isDeleted: { $ne: true }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalHours: { $sum: '$hours' },
+                    totalLogs: { $sum: 1 }
+                }
+            }
+        ]);
+        const totalLifetimeHours = allTimeAggregation.length > 0
+            ? Number(Number(allTimeAggregation[0].totalHours || 0).toFixed(2))
+            : totalLoggedHours;
+        const totalLifetimeLogs = allTimeAggregation.length > 0
+            ? allTimeAggregation[0].totalLogs
+            : worklogs.length;
+
         res.json({
             user: employee,
             range,
+            companyStats: {
+                totalLifetimeHours,
+                totalLifetimeLogs,
+                joiningDate: employee.joiningDate || employee.createdAt,
+            },
             delivery: {
                 tasksAssigned: totalAssigned,
                 tasksCompleted: totalCompleted,
