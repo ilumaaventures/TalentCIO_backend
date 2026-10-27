@@ -233,6 +233,7 @@ const getAttendanceSummary = async (req, res) => {
                 let halfDays = 0;
                 let paidLeaves = 0;
                 let unpaidLeaves = 0;
+                let sandwichLeaveDays = 0;
                 let workedOffDays = 0;
                 let totalWorkingHours = 0;
 
@@ -325,17 +326,7 @@ const getAttendanceSummary = async (req, res) => {
                         });
 
                         if (isOffDay) {
-                            if (isWeeklyOffDay) {
-                                weeklyOffDays += 1;
-                            } else if (isHolidayDay) {
-                                holidayDays += 1;
-                            }
-
-                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY')) {
-                                const credit = status === 'HALF_DAY' ? 0.5 : 1;
-                                workedOffDays += credit;
-                                totalWorkingHours += workingHours;
-                            }
+                            let offDayCredit = 1;
 
                             if (matchingLeave) {
                                 const leaveConfig = leaveConfigMap.get(matchingLeave.leaveType);
@@ -343,7 +334,23 @@ const getAttendanceSummary = async (req, res) => {
                                     const leaveDays = matchingLeave.isHalfDay ? 0.5 : 1;
                                     if (isPaidLeave) paidLeaves += leaveDays;
                                     else unpaidLeaves += leaveDays;
+                                    sandwichLeaveDays += leaveDays;
+                                    offDayCredit = Math.max(0, 1 - leaveDays);
                                 }
+                            }
+
+                            if (offDayCredit > 0) {
+                                if (isWeeklyOffDay) {
+                                    weeklyOffDays += offDayCredit;
+                                } else if (isHolidayDay) {
+                                    holidayDays += offDayCredit;
+                                }
+                            }
+
+                            if (hasEntry && (status === 'PRESENT' || status === 'HALF_DAY')) {
+                                const credit = status === 'HALF_DAY' ? 0.5 : 1;
+                                workedOffDays += credit;
+                                totalWorkingHours += workingHours;
                             }
                         } else if (isFutureDate && !hasEntry && !matchingLeave) {
                             // Future unelapsed days in ongoing month: do not mark absent
@@ -403,7 +410,7 @@ const getAttendanceSummary = async (req, res) => {
                 if (workingDaysTillDate > elapsedDays) {
                     console.warn(`[Validation Warning] user ${user._id}: workingDaysTillDate (${workingDaysTillDate}) > elapsedDays (${elapsedDays})`);
                 }
-                const sumDays = presentDays + absentDays + paidLeaves + unpaidLeaves;
+                const sumDays = presentDays + absentDays + paidLeaves + unpaidLeaves - sandwichLeaveDays;
                 if (Math.abs(sumDays - workingDaysTillDate) > 0.01) {
                     console.warn(`[Validation Warning] user ${user._id}: sum (${sumDays}) != workingDaysTillDate (${workingDaysTillDate})`);
                 }
