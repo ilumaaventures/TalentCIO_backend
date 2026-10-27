@@ -1,6 +1,7 @@
 const EmployeeProfile = require('../employeeProfile.model');
 const { getDossierDiff, checkIsAdmin, hasPermission } = require('../utils/dossierHelpers');
 const { logDossierActivity } = require('./dossierHistoryController');
+const { dispatchEmployeeWebhook } = require('../../payroll/payrollIntegration.service');
 
 exports.getHRISRequests = async (req, res) => {
     try {
@@ -113,6 +114,14 @@ exports.approveHRIS = async (req, res) => {
 
         await profile.save();
 
+        void dispatchEmployeeWebhook({
+            companyId: req.companyId,
+            userId,
+            event: 'employee.updated'
+        }).catch(err => {
+            console.error('[PayrollWebhook] approveHRIS webhook error:', err.message);
+        });
+
         await logDossierActivity({
             action: 'APPROVE_HRIS',
             performedBy: req.user._id,
@@ -159,7 +168,6 @@ exports.rejectHRIS = async (req, res) => {
         await profile.save();
 
         await logDossierActivity({
-            action: 'REJECT_HRIS',
             performedBy: req.user._id,
             companyId: req.companyId,
             details: {

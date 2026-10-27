@@ -47,6 +47,16 @@ const activitySchema = new mongoose.Schema({
   accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmAccount', index: true },
   dealId: { type: mongoose.Schema.Types.ObjectId, ref: 'CrmDeal', index: true },
 
+  attachments: [
+    {
+      filename: { type: String },
+      name: { type: String },
+      size: { type: Number },
+      contentType: { type: String },
+      url: { type: String, default: '' },
+    },
+  ],
+
   metadata: { type: Map, of: mongoose.Schema.Types.Mixed },
   performedAt: { type: Date, default: Date.now },
 }, { timestamps: true });

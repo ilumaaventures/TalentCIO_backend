@@ -287,20 +287,27 @@ const checkDuplicatesBatch = async (req, res, next) => {
       return res.json({ success: true, results: [] });
     }
 
-    const emails = items.map(i => (i.email || i.emailId || '').trim().toLowerCase()).filter(Boolean);
-    const phones = items.map(i => (i.phone || i.mobileNo || '').trim()).filter(Boolean);
-    const phoneDigs = phones.map(p => normalizePhone(p)).filter(Boolean);
-    const companyNames = items.map(i => (i.companyName || '').trim()).filter(Boolean);
+    const uniqueEmails = [...new Set(items.map(i => (i.email || i.emailId || '').trim().toLowerCase()).filter(Boolean))];
+    const uniquePhones = [...new Set(items.map(i => (i.phone || i.mobileNo || '').trim()).filter(Boolean))];
+    const uniquePhoneDigs = [...new Set(uniquePhones.map(p => normalizePhone(p)).filter(Boolean))];
+    const uniqueCompanyNames = [...new Set(items.map(i => (i.companyName || '').trim()).filter(Boolean))];
 
     const conditions = [];
-    if (emails.length > 0) conditions.push({ email: { $in: emails } });
-    if (phones.length > 0) {
-      const phoneRegexes = phoneDigs.map(d => new RegExp(`${d}$`));
-      conditions.push({ phone: { $in: [...phones, ...phoneRegexes] } });
+    if (uniqueEmails.length > 0) conditions.push({ email: { $in: uniqueEmails } });
+    if (uniquePhones.length > 0) {
+      const phoneMatchers = [...uniquePhones];
+      if (uniquePhoneDigs.length <= 200) {
+        phoneMatchers.push(...uniquePhoneDigs.map(d => new RegExp(`${d}$`)));
+      }
+      conditions.push({ phone: { $in: phoneMatchers } });
     }
-    if (companyNames.length > 0) {
-      const escapedRegexes = companyNames.map(name => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-      conditions.push({ companyName: { $in: escapedRegexes } });
+    if (uniqueCompanyNames.length > 0) {
+      if (uniqueCompanyNames.length <= 200) {
+        const escapedRegexes = uniqueCompanyNames.map(name => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+        conditions.push({ companyName: { $in: escapedRegexes } });
+      } else {
+        conditions.push({ companyName: { $in: uniqueCompanyNames } });
+      }
     }
 
     let existingLeads = [];
@@ -656,8 +663,15 @@ const moveToRecycleBin = async (req, res, next) => {
 
       // Look up existing CrmImportData for this company
       let importDoc = null;
-      if (rowId) {
-        importDoc = await CrmImportData.findOne({ companyId, rowId });
+      if (item._id && mongoose.Types.ObjectId.isValid(item._id)) {
+        importDoc = await CrmImportData.findOne({ companyId, _id: item._id });
+      }
+      if (!importDoc && rowId) {
+        if (mongoose.Types.ObjectId.isValid(rowId)) {
+          importDoc = await CrmImportData.findOne({ companyId, $or: [{ _id: rowId }, { rowId }] });
+        } else {
+          importDoc = await CrmImportData.findOne({ companyId, rowId });
+        }
       }
       if (!importDoc && (compName || email || mobile)) {
         const orConds = [];

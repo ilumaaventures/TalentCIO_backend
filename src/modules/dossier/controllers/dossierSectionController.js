@@ -14,6 +14,7 @@ const {
     getHRISApprovers
 } = require('../utils/dossierHelpers');
 const { logDossierActivity } = require('./dossierHistoryController');
+const { dispatchEmployeeWebhook } = require('../../payroll/payrollIntegration.service');
 
 exports.submitHRIS = async (req, res) => {
     try {
@@ -263,6 +264,19 @@ exports.submitHRIS = async (req, res) => {
 
         await profile.save();
 
+        if (shouldDirectWrite) {
+            const hasPayrollRelevantUpdates = ['personal', 'identity', 'contact', 'employment', 'compensation'].some(k => Boolean(updates[k]));
+            if (hasPayrollRelevantUpdates) {
+                void dispatchEmployeeWebhook({
+                    companyId: req.companyId,
+                    userId,
+                    event: 'employee.updated'
+                }).catch(err => {
+                    console.error('[PayrollWebhook] submitHRIS direct write webhook error:', err.message);
+                });
+            }
+        }
+
         if (!shouldDirectWrite && updates.hris && updates.hris.isDeclared) {
             try {
                 const io = req.app.get('io');
@@ -505,6 +519,19 @@ exports.updateSection = async (req, res) => {
         const originModule = req.body.originModule || req.headers['x-origin-module'] || (section === 'experience' ? 'Employment History' : 'Personal Information');
 
         await profile.save();
+
+        if (shouldDirectWrite) {
+            const hasPayrollRelevantUpdates = ['personal', 'identity', 'contact', 'employment', 'compensation'].includes(section);
+            if (hasPayrollRelevantUpdates) {
+                void dispatchEmployeeWebhook({
+                    companyId: req.companyId,
+                    userId,
+                    event: 'employee.updated'
+                }).catch(err => {
+                    console.error('[PayrollWebhook] updateSection direct write webhook error:', err.message);
+                });
+            }
+        }
 
         await logDossierActivity({
             action: 'UPDATE_DOSSIER',
