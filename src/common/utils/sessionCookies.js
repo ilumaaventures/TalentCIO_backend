@@ -28,6 +28,10 @@ const getTokenFromRequest = (req, cookieName = MAIN_SESSION_COOKIE_NAME) => {
         return req.headers.authorization.split(' ')[1];
     }
 
+    if (req?.query?.token) {
+        return String(req.query.token);
+    }
+
     return getCookieValue(req, cookieName);
 };
 
