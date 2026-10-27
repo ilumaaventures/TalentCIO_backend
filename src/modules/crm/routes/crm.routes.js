@@ -63,7 +63,11 @@ const dataController = require('../controllers/crmData.controller');
 
 const { requireModule } = require('../../../common/middleware/moduleGuard');
 
-// Require authentication and company module access for all CRM routes
+// --- Public Meta WhatsApp Webhook Handlers (No user JWT required for Meta servers) ---
+router.get('/communication/whatsapp/webhook', communicationController.verifyWhatsAppWebhook);
+router.post('/communication/whatsapp/webhook', communicationController.handleWhatsAppWebhookEvent);
+
+// Require authentication and company module access for all protected CRM routes
 router.use(protect);
 router.use(requireModule('crm'));
 
@@ -141,7 +145,7 @@ router.post('/communication/send-email', authorize(['crm.communication.send', 'c
 router.get('/communication/emails', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getEmails);
 router.post('/communication/emails', authorize(['crm.communication.send', 'crm.admin']), handleEmailAttachmentUpload, communicationController.sendEmail);
 router.get('/communication/whatsapp', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getWhatsAppMessages);
-router.post('/communication/whatsapp', authorize(['crm.communication.send', 'crm.admin']), communicationController.sendWhatsAppMessage);
+router.post('/communication/whatsapp', authorize(['crm.communication.send', 'crm.data.import', 'crm.leads.create', 'crm.leads.read', 'crm.admin']), communicationController.sendWhatsAppMessage);
 router.get('/communication/calls', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getCalls);
 router.post('/communication/calls', authorize(['crm.communication.send', 'crm.admin']), communicationController.logCall);
 

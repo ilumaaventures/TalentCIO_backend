@@ -14,6 +14,11 @@ const {
   validateTemplateSyntax,
   CRM_EMAIL_TEMPLATE_PLACEHOLDERS
 } = require('../../email/templateResolver');
+const {
+  sendWhatsAppCloudMessage,
+  normalizePhoneNumber,
+  getWebhookVerifyToken,
+} = require('../../../services/whatsappCloudService');
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
@@ -532,14 +537,20 @@ const getWhatsAppMessages = async (req, res, next) => {
       type: 'whatsapp',
     })
       .populate('performedBy', 'firstName lastName')
+      .populate('leadId', 'firstName lastName phone companyName')
+      .populate('contactId', 'firstName lastName phone')
+      .populate('importDataId', 'companyName contactPerson mobileNo')
       .sort({ performedAt: -1 })
-      .limit(30);
+      .limit(50);
 
     res.json({
       success: true,
       data: {
         messages: whatsAppMessages,
         activities: waActivities,
+        defaultTemplates: [
+          { name: 'hello_world', language: 'en_US', label: 'Meta Default Welcome (hello_world)' }
+        ],
       },
     });
   } catch (error) {
@@ -547,42 +558,148 @@ const getWhatsAppMessages = async (req, res, next) => {
   }
 };
 
-// @desc Send WhatsApp message
+// @desc Send WhatsApp message via Meta Cloud API
 // @route POST /api/crm/communication/whatsapp
 const sendWhatsAppMessage = async (req, res, next) => {
   try {
     const companyId = getTenantId(req);
-    const { phone, recipientPhone, recipientName, message, leadId, dealId, contactId } = req.body;
-    const targetPhone = phone || recipientPhone || '';
+    const {
+      phone,
+      recipientPhone,
+      to,
+      recipientName,
+      message,
+      text,
+      type = 'template',
+      templateName = 'hello_world',
+      languageCode = 'en_US',
+      components = [],
+      templateParams = [],
+      leadId,
+      dealId,
+      contactId,
+      importDataId,
+    } = req.body;
+
+    const rawPhone = to || phone || recipientPhone || '';
+    if (!rawPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Recipient phone number is required.',
+      });
+    }
+
+    const resolvedText = message || text || '';
+    const repName = getUserDisplayName(req.user);
+    const userId = req.user?._id;
+
+    // Call Meta WhatsApp Cloud API
+    let metaResult;
+    try {
+      metaResult = await sendWhatsAppCloudMessage({
+        to: rawPhone,
+        type,
+        templateName: templateName || 'hello_world',
+        languageCode: languageCode || 'en_US',
+        components,
+        templateParams,
+        text: resolvedText,
+        message: resolvedText,
+      });
+    } catch (metaErr) {
+      // Record failed activity for sales rep visibility
+      await CrmActivity.create({
+        companyId,
+        type: 'whatsapp',
+        subject: `Failed WhatsApp to ${recipientName || rawPhone}`,
+        description: `Error: ${metaErr.message}. Content: ${resolvedText || templateName}`,
+        outcome: 'Failed',
+        durationMinutes: 0,
+        performedBy: userId,
+        performedByName: repName,
+        leadId: leadId || null,
+        dealId: dealId || null,
+        contactId: contactId || null,
+        importDataId: importDataId || null,
+        contactPerson: recipientName || rawPhone,
+        contactPhone: rawPhone,
+        metadata: {
+          error: metaErr.message,
+          metaCode: metaErr.metaCode,
+          isMetaCloudApi: true,
+        },
+      });
+
+      return res.status(metaErr.statusCode || 400).json({
+        success: false,
+        message: metaErr.message,
+        errorDetails: metaErr.originalError,
+      });
+    }
 
     const newMsg = {
-      id: `wa-${Date.now()}`,
-      phone: targetPhone,
-      recipientPhone: targetPhone,
-      recipientName: recipientName || targetPhone,
-      message,
-      status: 'Delivered',
+      id: metaResult.messageId || `wa-${Date.now()}`,
+      metaMessageId: metaResult.messageId,
+      phone: metaResult.normalizedPhone || rawPhone,
+      recipientPhone: metaResult.normalizedPhone || rawPhone,
+      recipientName: recipientName || rawPhone,
+      message: resolvedText || `Template: ${templateName}`,
+      status: metaResult.messageStatus || 'Delivered',
+      templateName: metaResult.templateName,
       sentAt: new Date(),
     };
     whatsAppMessages.unshift(newMsg);
 
-    await CrmActivity.create({
+    // Record successful activity in CRM timeline
+    const activity = await CrmActivity.create({
       companyId,
       type: 'whatsapp',
-      subject: `WhatsApp to ${recipientName || targetPhone}`,
-      description: message,
-      outcome: 'Sent',
-      performedBy: req.user?._id,
-      performedByName: getUserDisplayName(req.user),
-      leadId,
-      dealId,
-      contactId,
+      subject: `WhatsApp to ${recipientName || rawPhone}`,
+      description: resolvedText || `Template: ${templateName}`,
+      outcome: 'Delivered',
+      durationMinutes: 0,
+      performedBy: userId,
+      performedByName: repName,
+      leadId: leadId || null,
+      dealId: dealId || null,
+      contactId: contactId || null,
+      importDataId: importDataId || null,
+      contactPerson: recipientName || rawPhone,
+      contactPhone: metaResult.normalizedPhone || rawPhone,
+      metadata: {
+        metaMessageId: metaResult.messageId,
+        metaStatus: metaResult.messageStatus,
+        templateName: metaResult.templateName,
+        type: metaResult.type,
+        isMetaCloudApi: true,
+      },
     });
+
+    // Update prospect outreach metrics if linked to an ImportData record
+    if (importDataId) {
+      await CrmImportData.findByIdAndUpdate(importDataId, {
+        $inc: { whatsappCount: 1 },
+        $set: {
+          lastContactedAt: new Date(),
+          lastContactedBy: repName,
+          lastContactedByUserId: userId,
+          lastOutcome: 'Sent WhatsApp (Meta Cloud API)',
+        },
+      });
+    }
+
+    // Update lead activity timestamp if linked to a Lead
+    if (leadId) {
+      await CrmLead.findByIdAndUpdate(leadId, {
+        $set: { lastActivityAt: new Date() },
+      });
+    }
 
     res.status(201).json({
       success: true,
-      message: 'WhatsApp message sent',
+      message: 'WhatsApp message sent successfully via Meta Cloud API',
       data: newMsg,
+      activity,
     });
   } catch (error) {
     next(error);
@@ -650,6 +767,138 @@ const logCall = async (req, res, next) => {
   }
 };
 
+// @desc Verify Meta WhatsApp webhook challenge
+// @route GET /api/crm/communication/whatsapp/webhook
+const verifyWhatsAppWebhook = (req, res) => {
+  try {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    const expectedToken = getWebhookVerifyToken();
+
+    if (mode && token) {
+      if (mode === 'subscribe' && token === expectedToken) {
+        return res.status(200).send(challenge);
+      }
+      return res.sendStatus(403);
+    }
+    return res.sendStatus(400);
+  } catch (err) {
+    console.error('WhatsApp Webhook verification error:', err);
+    return res.sendStatus(500);
+  }
+};
+
+// @desc Handle incoming Meta WhatsApp messages & delivery statuses
+// @route POST /api/crm/communication/whatsapp/webhook
+const handleWhatsAppWebhookEvent = async (req, res) => {
+  try {
+    const body = req.body;
+
+    if (body.object === 'whatsapp_business_account') {
+      const entries = body.entry || [];
+
+      for (const entry of entries) {
+        const changes = entry.changes || [];
+
+        for (const change of changes) {
+          const value = change.value;
+          if (!value) continue;
+
+          // 1. Inbound messages from clients/contacts
+          if (Array.isArray(value.messages)) {
+            for (const msg of value.messages) {
+              const senderPhone = msg.from || '';
+              const senderName = value.contacts?.[0]?.profile?.name || senderPhone;
+              const textBody = msg.text?.body || (msg.type ? `[${msg.type.toUpperCase()} Message]` : 'Incoming Message');
+              const last10 = senderPhone.replace(/\D/g, '').slice(-10);
+
+              const matchedProspect = last10
+                ? await CrmImportData.findOne({
+                  mobileNo: new RegExp(`${last10}$`),
+                  isDeleted: false,
+                }).select('_id companyId companyName')
+                : null;
+
+              const matchedLead = (!matchedProspect && last10)
+                ? await CrmLead.findOne({
+                  phone: new RegExp(`${last10}$`),
+                }).select('_id companyId')
+                : null;
+
+              const resolvedCompanyId = matchedProspect?.companyId || matchedLead?.companyId;
+
+              const incomingMsg = {
+                id: msg.id,
+                metaMessageId: msg.id,
+                phone: senderPhone,
+                recipientPhone: senderPhone,
+                recipientName: senderName,
+                message: textBody,
+                direction: 'incoming',
+                status: 'Received',
+                timestamp: new Date(Number(msg.timestamp) * 1000 || Date.now()),
+              };
+              whatsAppMessages.unshift(incomingMsg);
+
+              if (resolvedCompanyId) {
+                await CrmActivity.create({
+                  companyId: resolvedCompanyId,
+                  type: 'whatsapp',
+                  subject: `Incoming WhatsApp from ${senderName}`,
+                  description: textBody,
+                  outcome: 'Received',
+                  contactPerson: senderName,
+                  contactPhone: senderPhone,
+                  importDataId: matchedProspect?._id || null,
+                  leadId: matchedLead?._id || null,
+                  metadata: {
+                    direction: 'incoming',
+                    metaMessageId: msg.id,
+                    timestamp: msg.timestamp,
+                  },
+                  performedAt: new Date(Number(msg.timestamp) * 1000 || Date.now()),
+                });
+              }
+            }
+          }
+
+          // 2. Outbound message delivery statuses (delivered, read, failed)
+          if (Array.isArray(value.statuses)) {
+            for (const statusObj of value.statuses) {
+              const statusId = statusObj.id;
+              const newStatus = statusObj.status; // 'sent' | 'delivered' | 'read' | 'failed'
+
+              const targetMsg = whatsAppMessages.find((m) => m.metaMessageId === statusId || m.id === statusId);
+              if (targetMsg) {
+                targetMsg.status = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+              }
+
+              await CrmActivity.updateMany(
+                { 'metadata.metaMessageId': statusId },
+                {
+                  $set: {
+                    outcome: newStatus === 'read' ? 'Read' : (newStatus === 'delivered' ? 'Delivered' : 'Sent'),
+                    'metadata.metaStatus': newStatus,
+                  },
+                }
+              );
+            }
+          }
+        }
+      }
+
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    return res.sendStatus(404);
+  } catch (err) {
+    console.error('WhatsApp Webhook Event processing error:', err);
+    return res.status(200).send('EVENT_RECEIVED');
+  }
+};
+
 module.exports = {
   getSenderAccounts,
   getCrmEmailTemplates,
@@ -662,4 +911,7 @@ module.exports = {
   sendWhatsAppMessage,
   getCalls,
   logCall,
+  verifyWhatsAppWebhook,
+  handleWhatsAppWebhookEvent,
 };
+
