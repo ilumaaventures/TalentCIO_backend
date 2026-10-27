@@ -16,15 +16,12 @@ const {
   validateTemplateSyntax,
   CRM_EMAIL_TEMPLATE_PLACEHOLDERS
 } = require('../../email/templateResolver');
-<<<<<<< HEAD
 const {
   sendWhatsAppCloudMessage,
   normalizePhoneNumber,
   getWebhookVerifyToken,
 } = require('../../../services/whatsappCloudService');
-=======
 const { uploadBufferToCloudinary } = require('../../../config/cloudinary');
->>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
@@ -877,7 +874,6 @@ const logCall = async (req, res, next) => {
   }
 };
 
-<<<<<<< HEAD
 // @desc Verify Meta WhatsApp webhook challenge
 // @route GET /api/crm/communication/whatsapp/webhook
 const verifyWhatsAppWebhook = (req, res) => {
@@ -1007,7 +1003,9 @@ const handleWhatsAppWebhookEvent = async (req, res) => {
   } catch (err) {
     console.error('WhatsApp Webhook Event processing error:', err);
     return res.status(200).send('EVENT_RECEIVED');
-=======
+  }
+};
+
 // @desc Get / Stream CRM Activity Attachment
 // @route GET /api/crm/communication/activities/:id/attachment/:attachmentIndex?
 const getActivityAttachment = async (req, res, next) => {
@@ -1089,9 +1087,9 @@ const getActivityAttachment = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
->>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
   }
 };
+
 
 module.exports = {
   getSenderAccounts,
@@ -1105,11 +1103,8 @@ module.exports = {
   sendWhatsAppMessage,
   getCalls,
   logCall,
-<<<<<<< HEAD
   verifyWhatsAppWebhook,
   handleWhatsAppWebhookEvent,
-=======
   getActivityAttachment,
->>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
 };
 
