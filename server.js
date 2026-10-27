@@ -96,6 +96,7 @@ app.use(helmet({
     crossOriginOpenerPolicy: false,
 }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MED-7: Gzip compression — reduces JSON response payloads by 50-80%
 app.use(compression({

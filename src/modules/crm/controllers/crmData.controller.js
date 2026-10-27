@@ -366,6 +366,7 @@ const getImportData = async (req, res, next) => {
       limit,
       search,
       dateFilter,
+      dateFilterType = 'updatedAt',
       fromDate,
       toDate,
       importedBy,
@@ -438,27 +439,54 @@ const getImportData = async (req, res, next) => {
       }
     }
 
-    // Date filters
+    // Date filters (supports dateFilterType: 'updatedAt' vs 'createdAt' vs default)
+    const targetDateField = dateFilterType === 'createdAt' ? 'createdAt' : (dateFilterType === 'updatedAt' ? 'updatedAt' : 'date');
     const now = new Date();
     if (dateFilter === 'today') {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
-      andConditions.push({ date: { $gte: startOfDay, $lte: endOfDay } });
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      andConditions.push({
+        $or: [
+          { [targetDateField]: { $gte: startOfDay, $lte: endOfDay } },
+          { date: { $gte: startOfDay.toISOString(), $lte: endOfDay.toISOString() } },
+        ],
+      });
     } else if (dateFilter === '2days') {
-      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
-      andConditions.push({ date: { $gte: twoDaysAgo } });
+      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+      andConditions.push({
+        $or: [
+          { [targetDateField]: { $gte: twoDaysAgo } },
+          { date: { $gte: twoDaysAgo.toISOString() } },
+        ],
+      });
     } else if (dateFilter === '5days') {
-      const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
-      andConditions.push({ date: { $gte: fiveDaysAgo } });
+      const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+      andConditions.push({
+        $or: [
+          { [targetDateField]: { $gte: fiveDaysAgo } },
+          { date: { $gte: fiveDaysAgo.toISOString() } },
+        ],
+      });
     } else if (dateFilter === 'custom' && (fromDate || toDate)) {
-      const dateCond = {};
-      if (fromDate) dateCond.$gte = new Date(fromDate).toISOString();
-      if (toDate) {
-        const toDateEnd = new Date(toDate);
-        toDateEnd.setHours(23, 59, 59, 999);
-        dateCond.$lte = toDateEnd.toISOString();
+      const dateCondTarget = {};
+      const dateCondString = {};
+      if (fromDate) {
+        const fromD = new Date(fromDate);
+        dateCondTarget.$gte = fromD;
+        dateCondString.$gte = fromD.toISOString();
       }
-      andConditions.push({ date: dateCond });
+      if (toDate) {
+        const toD = new Date(toDate);
+        toD.setHours(23, 59, 59, 999);
+        dateCondTarget.$lte = toD;
+        dateCondString.$lte = toD.toISOString();
+      }
+      andConditions.push({
+        $or: [
+          { [targetDateField]: dateCondTarget },
+          { date: dateCondString },
+        ],
+      });
     }
 
     const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
@@ -622,7 +650,11 @@ const syncImportData = async (req, res, next) => {
 
       // Compound content-key filter
       const contentFilter = {};
-      if (rowId) {
+      if (item._id && mongoose.isValidObjectId(item._id)) {
+        contentFilter._id = item._id;
+      } else if (rowId && mongoose.isValidObjectId(rowId)) {
+        contentFilter.$or = [{ _id: rowId }, { rowId }];
+      } else if (rowId) {
         contentFilter.rowId = rowId;
       } else {
         if (item.gstin) contentFilter.gstin = String(item.gstin).trim().toUpperCase();
@@ -757,15 +789,49 @@ const resolveImportDataProspect = async (companyId, id, req = null) => {
   if (typeof id === 'string' && id.startsWith('row_')) {
     try {
       const raw = id.slice(4);
-      const decoded = Buffer.from(raw, 'base64').toString('utf8');
-      const [compName = '', mobile = '', email = ''] = decoded.split('|');
+      const cleaned = raw.replace(/_+$/, ''); // strip trailing padding
+      let decoded = '';
+      try {
+        decoded = Buffer.from(cleaned.replace(/_/g, '/').replace(/-/g, '+'), 'base64').toString('utf8');
+      } catch (_) {}
+      if (!decoded || !decoded.includes('|')) {
+        try {
+          decoded = Buffer.from(cleaned.replace(/_/g, '+'), 'base64').toString('utf8');
+        } catch (_) {}
+      }
+      if (!decoded || !decoded.includes('|')) {
+        try {
+          decoded = Buffer.from(raw, 'base64').toString('utf8');
+        } catch (_) {}
+      }
 
-      const query = { companyId };
+      const parts = decoded.split('|');
+      let compName = '';
+      let gstin = '';
+      let mobile = '';
+      let email = '';
+
+      if (parts.length >= 4) {
+        compName = parts[0] || '';
+        gstin = parts[1] || '';
+        mobile = parts[2] || '';
+        email = parts[3] || '';
+      } else {
+        compName = parts[0] || '';
+        mobile = parts[1] || '';
+        email = parts[2] || '';
+      }
+
       const trimmedComp = compName.trim();
+      const trimmedGstin = gstin.trim().toUpperCase();
       const trimmedMobile = mobile.trim();
       const trimmedEmail = email.trim();
 
-      if (trimmedComp && trimmedMobile) {
+      const query = { companyId, isDeleted: false };
+
+      if (trimmedGstin) {
+        query.gstin = trimmedGstin;
+      } else if (trimmedComp && trimmedMobile) {
         query.companyName = new RegExp(`^${trimmedComp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
         query.mobileNo = trimmedMobile;
       } else if (trimmedComp) {
@@ -776,7 +842,7 @@ const resolveImportDataProspect = async (companyId, id, req = null) => {
         query.emailId = trimmedEmail;
       }
 
-      row = await CrmImportData.findOne(query);
+      row = await CrmImportData.findOne(query).populate('importedByUserId', 'firstName lastName name email');
       if (row) return row;
 
       // 4. Auto-persist row if it only existed in local workspace
@@ -785,6 +851,7 @@ const resolveImportDataProspect = async (companyId, id, req = null) => {
           companyId,
           rowId: id,
           companyName: trimmedComp || 'Prospect',
+          gstin: trimmedGstin || undefined,
           mobileNo: trimmedMobile,
           emailId: trimmedEmail,
           importedBy: getUserDisplayName(req.user),

@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const CrmActivity = require('../models/crmActivity.model');
 const CrmImportData = require('../models/crmImportData.model');
 const CrmLead = require('../models/crmLead.model');
@@ -14,11 +16,15 @@ const {
   validateTemplateSyntax,
   CRM_EMAIL_TEMPLATE_PLACEHOLDERS
 } = require('../../email/templateResolver');
+<<<<<<< HEAD
 const {
   sendWhatsAppCloudMessage,
   normalizePhoneNumber,
   getWebhookVerifyToken,
 } = require('../../../services/whatsappCloudService');
+=======
+const { uploadBufferToCloudinary } = require('../../../config/cloudinary');
+>>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
 
 const getTenantId = (req) => req.companyId || req.user?.companyId;
 
@@ -360,6 +366,8 @@ const sendEmail = async (req, res, next) => {
       htmlBody,
       plainBody,
       emailAccountId,
+      fromEmail,
+      fromName,
       cc,
       bcc,
       prospectId,
@@ -395,9 +403,13 @@ const sendEmail = async (req, res, next) => {
     // Ensure clean HTML body without attaching corporate branding or logo header
     let formattedHtml = emailContent;
     if (!/<[a-z][\s\S]*>/i.test(formattedHtml)) {
-      formattedHtml = formattedHtml
-        .split(/\r?\n\r?\n/)
-        .map((para) => `<p style="margin: 0 0 16px 0;">${para.replace(/\r?\n/g, '<br/>')}</p>`)
+      const paragraphs = formattedHtml.split(/\r?\n\r?\n/);
+      formattedHtml = paragraphs
+        .map((block) => {
+          if (!block.trim()) return '<div style="height: 16px; line-height: 16px;">&nbsp;</div>';
+          const lines = block.split(/\r?\n/).map((line) => line.replace(/ {2,}/g, (m) => '&nbsp;'.repeat(m.length)));
+          return `<p style="margin: 0 0 16px 0; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b;">${lines.join('<br/>')}</p>`;
+        })
         .join('\n');
     }
 
@@ -405,16 +417,75 @@ const sendEmail = async (req, res, next) => {
       formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b;">${formattedHtml}</div>`;
     }
 
+    // Helper: preserve newlines and spaces when extracting plain text
+    const cleanPlainText = (content) => {
+      if (!content) return '';
+      return content
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .trim();
+    };
+
     // Process uploaded attachments (from multer memory storage) or raw attachment body payloads
     let emailAttachments = [];
+    let uploadedAttachmentsMeta = [];
+
     if (Array.isArray(req.files) && req.files.length > 0) {
-      emailAttachments = req.files.map((file) => ({
-        filename: file.originalname,
-        content: file.buffer,
-        contentType: file.mimetype || 'application/octet-stream',
-      }));
+      for (const file of req.files) {
+        emailAttachments.push({
+          filename: file.originalname,
+          content: file.buffer,
+          contentType: file.mimetype || 'application/octet-stream',
+        });
+
+        let cloudUrl = '';
+        try {
+          if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY) {
+            cloudUrl = await uploadBufferToCloudinary(file.buffer, file.originalname, 'crm_outreach_attachments');
+          }
+        } catch (cErr) {
+          console.warn('[CRM_EMAIL_CLOUDINARY_WARN] Cloudinary upload deferred:', cErr.message);
+        }
+
+        // Local storage fallback in /uploads/crm_attachments if Cloudinary is deferred
+        if (!cloudUrl && file.buffer) {
+          try {
+            const uploadDir = path.join(__dirname, '../../../../uploads/crm_attachments');
+            if (!fs.existsSync(uploadDir)) {
+              fs.mkdirSync(uploadDir, { recursive: true });
+            }
+            const safeName = `${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+            fs.writeFileSync(path.join(uploadDir, safeName), file.buffer);
+            cloudUrl = `/uploads/crm_attachments/${safeName}`;
+          } catch (fsErr) {
+            console.warn('[CRM_EMAIL_LOCAL_FS_WARN] Local storage fallback failed:', fsErr.message);
+          }
+        }
+
+        uploadedAttachmentsMeta.push({
+          filename: file.originalname,
+          name: file.originalname,
+          size: file.size,
+          contentType: file.mimetype || 'application/octet-stream',
+          url: cloudUrl || '',
+        });
+      }
     } else if (Array.isArray(req.body.attachments)) {
       emailAttachments = req.body.attachments;
+      uploadedAttachmentsMeta = req.body.attachments.map((att) => ({
+        filename: att.filename || att.name || 'Attachment',
+        name: att.filename || att.name || 'Attachment',
+        size: att.size || null,
+        contentType: att.contentType || 'application/octet-stream',
+        url: att.url || '',
+      }));
     }
 
     // Dispatch email using configured company account or platform default
@@ -431,7 +502,7 @@ const sendEmail = async (req, res, next) => {
         bcc: bcc ? String(bcc).trim() : undefined,
         subject: subject.trim(),
         html: formattedHtml,
-        text: plainBody || emailContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+        text: plainBody || cleanPlainText(emailContent),
         attachments: emailAttachments,
         brandEmail: false,
         logoUrl: '',
@@ -454,24 +525,63 @@ const sendEmail = async (req, res, next) => {
 
     const targetImportId = prospectId || importDataId || null;
 
-    const cleanText = plainBody || emailContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const attachmentFileNames = emailAttachments.map((a) => a.filename).filter(Boolean);
+    // Resolve sender email and name from configured sender account
+    let actualFromAddress = (fromEmail || '').trim();
+    let actualFromName = (fromName || '').trim();
+
+    try {
+      const emailSettings = await getCompanyEmailSettings(companyId);
+      const accountSelection = pickEmailAccount(emailSettings, emailAccountId);
+      if (accountSelection?.account) {
+        if (!actualFromAddress) {
+          actualFromAddress = (accountSelection.account.fromAddress || accountSelection.account.email || '').trim();
+        }
+        if (!actualFromName) {
+          actualFromName = (accountSelection.account.fromName || accountSelection.account.name || '').trim();
+        }
+      }
+    } catch (_) {}
+
+    const loggedInUserDisplay = getUserDisplayName(req.user);
+    if (!actualFromName) {
+      actualFromName = loggedInUserDisplay;
+    }
+    if (!actualFromAddress && req.user?.email && req.user.email !== 'admin@gmail.com') {
+      actualFromAddress = req.user.email;
+    }
+
+    const cleanText = plainBody || cleanPlainText(emailContent);
+    const attachmentFileNames = (uploadedAttachmentsMeta.length > 0 ? uploadedAttachmentsMeta : emailAttachments)
+      .map((a) => a.filename || a.name)
+      .filter(Boolean);
     const attachmentNote = attachmentFileNames.length > 0 ? `\n\nAttachments (${attachmentFileNames.length}): ${attachmentFileNames.join(', ')}` : '';
+
+    const fromLine = actualFromAddress ? `From: ${actualFromName} <${actualFromAddress}>\n` : '';
+    const toLine = `To: ${recipientName ? `${recipientName} <${to}>` : to}\n\n`;
 
     // Log in CrmActivity
     const activity = await CrmActivity.create({
       companyId,
       type: 'email',
       subject: subject.trim().startsWith('Email:') ? subject.trim() : `Email: ${subject.trim()}`,
-      description: `To: ${recipientName ? `${recipientName} <${to}>` : to}\n\n${cleanText}${attachmentNote}`,
+      description: `${fromLine}${toLine}${cleanText}${attachmentNote}`,
       outcome: 'Sent',
       performedBy: req.user?._id,
-      performedByName: getUserDisplayName(req.user),
+      performedByName: loggedInUserDisplay,
       leadId: leadId || undefined,
       dealId: dealId || undefined,
       contactId: contactId || undefined,
       importDataId: targetImportId || undefined,
+      attachments: uploadedAttachmentsMeta,
       metadata: {
+        from: actualFromAddress ? `"${actualFromName}" <${actualFromAddress}>` : actualFromName,
+        fromEmail: actualFromAddress,
+        fromAddress: actualFromAddress,
+        fromName: actualFromName,
+        senderEmail: actualFromAddress,
+        senderName: actualFromName,
+        sentByUserId: req.user?._id,
+        sentByName: loggedInUserDisplay,
         to: to.trim(),
         recipientName: recipientName || '',
         cc: cc || '',
@@ -482,7 +592,7 @@ const sendEmail = async (req, res, next) => {
         emailSubject: subject.trim(),
         htmlBody: emailContent,
         plainBody: cleanText,
-        attachments: attachmentFileNames,
+        attachments: uploadedAttachmentsMeta.length > 0 ? uploadedAttachmentsMeta : attachmentFileNames,
       }
     });
 
@@ -767,6 +877,7 @@ const logCall = async (req, res, next) => {
   }
 };
 
+<<<<<<< HEAD
 // @desc Verify Meta WhatsApp webhook challenge
 // @route GET /api/crm/communication/whatsapp/webhook
 const verifyWhatsAppWebhook = (req, res) => {
@@ -896,6 +1007,89 @@ const handleWhatsAppWebhookEvent = async (req, res) => {
   } catch (err) {
     console.error('WhatsApp Webhook Event processing error:', err);
     return res.status(200).send('EVENT_RECEIVED');
+=======
+// @desc Get / Stream CRM Activity Attachment
+// @route GET /api/crm/communication/activities/:id/attachment/:attachmentIndex?
+const getActivityAttachment = async (req, res, next) => {
+  try {
+    const { id, attachmentIndex } = req.params;
+    const { filename } = req.query;
+
+    const activity = await CrmActivity.findById(id).lean();
+    if (!activity) {
+      return res.status(404).json({ success: false, message: 'Activity record not found.' });
+    }
+
+    // Resolve list of attachments from activity
+    const attachments = Array.isArray(activity.attachments) && activity.attachments.length > 0
+      ? activity.attachments
+      : (Array.isArray(activity.metadata?.attachments) ? activity.metadata.attachments : []);
+
+    let target = null;
+    if (attachmentIndex !== undefined && !isNaN(Number(attachmentIndex))) {
+      target = attachments[Number(attachmentIndex)];
+    }
+    if (!target && filename) {
+      const cleanTarget = decodeURIComponent(filename).trim().toLowerCase();
+      target = attachments.find((a) => {
+        const fn = (typeof a === 'string' ? a : (a.filename || a.name || '')).trim().toLowerCase();
+        return fn === cleanTarget || fn.includes(cleanTarget) || cleanTarget.includes(fn);
+      });
+    }
+    if (!target && attachments.length > 0) {
+      target = attachments[0];
+    }
+
+    const targetUrl = typeof target === 'object' && target ? (target.url || target.path || target.cloudinaryUrl) : '';
+    if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
+      const axios = require('axios');
+      try {
+        const response = await axios({
+          method: 'GET',
+          url: targetUrl,
+          responseType: 'stream'
+        });
+        res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
+        const fname = (typeof target === 'object' ? target.filename : target) || 'attachment.pdf';
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fname)}"`);
+        return response.data.pipe(res);
+      } catch (axErr) {
+        return res.redirect(targetUrl);
+      }
+    }
+
+    if (targetUrl && targetUrl.startsWith('/uploads')) {
+      const localFile = path.join(__dirname, '../../../../', targetUrl);
+      if (fs.existsSync(localFile)) {
+        return res.sendFile(localFile);
+      }
+    }
+
+    const targetName = typeof target === 'string' ? target : (target?.filename || target?.name || filename || '');
+    if (targetName) {
+      const cleanName = targetName.replace(/â€“/g, '–').replace(/â€”/g, '—').replace(/Â/g, '').trim();
+      const possiblePaths = [
+        path.join(__dirname, '../../../../uploads/crm_attachments', cleanName),
+        path.join(__dirname, '../../../../uploads', cleanName),
+        path.join('C:/Users/tomar/Downloads/Demo files', cleanName),
+        path.join('C:/Users/tomar/Downloads/Demo files', targetName),
+        path.join('C:/Users/tomar/Downloads/Demo files', cleanName.replace(/–/g, '-')),
+      ];
+
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          return res.sendFile(p);
+        }
+      }
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: 'Attachment file not found on server or storage repository.',
+    });
+  } catch (error) {
+    next(error);
+>>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
   }
 };
 
@@ -911,7 +1105,11 @@ module.exports = {
   sendWhatsAppMessage,
   getCalls,
   logCall,
+<<<<<<< HEAD
   verifyWhatsAppWebhook,
   handleWhatsAppWebhookEvent,
+=======
+  getActivityAttachment,
+>>>>>>> 1c6ff09c081a11f3ad1bdb57a11eefbfefcacb00
 };
 

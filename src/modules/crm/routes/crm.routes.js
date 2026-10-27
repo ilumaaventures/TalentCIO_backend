@@ -149,6 +149,11 @@ router.post('/communication/whatsapp', authorize(['crm.communication.send', 'crm
 router.get('/communication/calls', authorize(['crm.communication.read', 'crm.communication.send', 'crm.admin']), communicationController.getCalls);
 router.post('/communication/calls', authorize(['crm.communication.send', 'crm.admin']), communicationController.logCall);
 
+router.get('/communication/activities/:id/attachment', protect, communicationController.getActivityAttachment);
+router.get('/communication/activities/:id/attachment/:attachmentIndex', protect, communicationController.getActivityAttachment);
+router.get('/communication/activities/:id/attachments', protect, communicationController.getActivityAttachment);
+router.get('/communication/activities/:id/attachments/:attachmentIndex', protect, communicationController.getActivityAttachment);
+
 // --- Growth, Sequences & Campaigns ---
 router.get('/sequences', authorize(['crm.growth.read', 'crm.growth.manage', 'crm.admin']), sequenceController.getSequences);
 router.post('/sequences', authorize(['crm.growth.manage', 'crm.admin']), sequenceController.createSequence);
