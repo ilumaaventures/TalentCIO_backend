@@ -226,6 +226,10 @@ const bulkUpdateDecision = async (req, res) => {
                         candidate.phase2InterviewStatus = 'None';
                     } else if (decision === 'Rejected') {
                         candidate.phase2InterviewStatus = 'Rejected';
+                    } else if (decision === 'Did Not Turn Up' || decision === 'Did not Turn up') {
+                        candidate.phase2InterviewStatus = 'Did not Turn up';
+                    } else if (decision === 'Left in between') {
+                        candidate.phase2InterviewStatus = 'Left in between';
                     }
                     await candidate.save();
                     updatedCount++;
@@ -285,6 +289,10 @@ const updatePhase2Decision = async (req, res) => {
             candidate.phase2InterviewStatus = 'None';
         } else if (phase2Decision === 'Rejected') {
             candidate.phase2InterviewStatus = 'Rejected';
+        } else if (phase2Decision === 'Did Not Turn Up' || phase2Decision === 'Did not Turn up') {
+            candidate.phase2InterviewStatus = 'Did not Turn up';
+        } else if (phase2Decision === 'Left in between') {
+            candidate.phase2InterviewStatus = 'Left in between';
         } else if (!phase2Decision || phase2Decision === 'None') {
             candidate.phase2InterviewStatus = 'None';
         }

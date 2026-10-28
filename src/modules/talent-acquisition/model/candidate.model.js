@@ -296,7 +296,7 @@ const candidateSchema = new mongoose.Schema({
         clientEvaluatedAt: Date,
         status: { // State of this specific round
             type: String,
-            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between', 'Shortlisted', 'Rejected', 'Did not Turn up'],
+            enum: ['Pending', 'Scheduled', 'Passed', 'Failed', 'Skipped', 'Left in between', 'Shortlisted', 'Rejected', 'Did not Turn up', 'Did Not Turn Up'],
             default: 'Pending'
         },
         scheduledDate: Date,
@@ -367,7 +367,7 @@ const candidateSchema = new mongoose.Schema({
     // Phase 2 Client Decision
     phase2Decision: {
         type: String,
-        enum: ['Shortlisted', 'Selected', 'Rejected', 'On Hold', 'Left in between', 'None', '']
+        enum: ['Shortlisted', 'Selected', 'Rejected', 'On Hold', 'Did Not Turn Up', 'Did not Turn up', 'Left in between', 'None', '']
     },
 
     phase2InterviewerFeedback: {
@@ -377,7 +377,7 @@ const candidateSchema = new mongoose.Schema({
 
     phase2InterviewStatus: {
         type: String,
-        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'Left in between', 'None', ''],
+        enum: ['Scheduled', 'Rejected', 'Shortlisted', 'Did not Turn up', 'Did Not Turn Up', 'Left in between', 'None', ''],
         default: 'None'
     },
 
