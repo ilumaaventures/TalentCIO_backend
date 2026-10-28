@@ -489,6 +489,54 @@ const getImportData = async (req, res, next) => {
       });
     }
 
+    // Status filter (supports array or comma-separated string)
+    if (req.query.status) {
+      const statuses = (Array.isArray(req.query.status) ? req.query.status : String(req.query.status).split(','))
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length > 0) {
+        const hasConverted = statuses.some((s) => s.toLowerCase() === 'converted to lead');
+        const normalStatuses = statuses.filter((s) => s.toLowerCase() !== 'converted to lead');
+        const statusOr = [];
+        if (normalStatuses.length > 0) {
+          statusOr.push({
+            $or: [
+              { status: { $in: normalStatuses.map((s) => new RegExp('^' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i')) } },
+              { leadStatus: { $in: normalStatuses.map((s) => new RegExp('^' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i')) } },
+            ],
+          });
+        }
+        if (hasConverted) {
+          statusOr.push({ isConvertedToLead: true });
+        }
+        if (statusOr.length > 0) {
+          andConditions.push({ $or: statusOr });
+        }
+      }
+    }
+
+    // Source filter (supports array or comma-separated string)
+    if (req.query.source) {
+      const sources = (Array.isArray(req.query.source) ? req.query.source : String(req.query.source).split(','))
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (sources.length > 0) {
+        andConditions.push({
+          $or: [
+            { source: { $in: sources.map((s) => new RegExp('^' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i')) } },
+            { leadSource: { $in: sources.map((s) => new RegExp('^' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i')) } },
+          ],
+        });
+      }
+    }
+
+    if (req.query.showConvertedOnly === 'true') {
+      andConditions.push({ isConvertedToLead: true });
+    }
+    if (req.query.showStatusChangedOnly === 'true') {
+      andConditions.push({ 'statusHistory.0': { $exists: true } });
+    }
+
     const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
 
     const baseCountConditions = [{ companyId, isDeleted: false }];
@@ -497,22 +545,42 @@ const getImportData = async (req, res, next) => {
     }
     const baseCountQuery = baseCountConditions.length > 1 ? { $and: baseCountConditions } : baseCountConditions[0];
 
-    // Total counts in database
-    const totalMatching = await CrmImportData.countDocuments(query);
-    const totalAll = await CrmImportData.countDocuments(baseCountQuery);
-
-    // Determine pagination
-    const isPaginated = all !== 'true' && (page !== undefined || limit !== undefined);
+    // Determine pagination: default paginated to 50 unless all === 'true'
+    const isPaginated = all !== 'true';
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const parsedLimit = parseInt(limit, 10);
     const limitNum = [50, 80, 100].includes(parsedLimit) ? parsedLimit : (parsedLimit > 0 ? parsedLimit : 50);
 
-    const sortField = sortBy === 'date' ? 'date' : 'createdAt';
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    // Parallel execution of counts for metrics cards
+    const [totalMatching, totalAll, todayCount, convertedCount, statusChangedCount, distinctSources] = await Promise.all([
+      CrmImportData.countDocuments(query),
+      CrmImportData.countDocuments(baseCountQuery),
+      CrmImportData.countDocuments({
+        $and: [
+          baseCountQuery,
+          {
+            $or: [
+              { [targetDateField]: { $gte: startOfToday, $lte: endOfToday } },
+              { date: { $gte: startOfToday.toISOString(), $lte: endOfToday.toISOString() } },
+            ],
+          },
+        ],
+      }),
+      CrmImportData.countDocuments({ $and: [query, { isConvertedToLead: true }] }),
+      CrmImportData.countDocuments({ $and: [query, { 'statusHistory.0': { $exists: true } }] }),
+      CrmImportData.distinct('source', baseCountQuery),
+    ]);
+
+    const sortField = sortBy === 'date' ? 'date' : (sortBy === 'updatedAt' ? 'updatedAt' : 'createdAt');
+    const sortOrderNum = sortOrder === 'asc' ? 1 : -1;
     const TABLE_FIELDS = 'rowId sNo companyName industry status leadStatus statusHistory leadSource source date createdAt updatedAt lastContactedAt importedBy importedByUserId isConvertedToLead leadId isDuplicate duplicateReason rating contactPerson designation mobileNo emailId address remarks contacts';
     let findQuery = CrmImportData.find(query)
       .select(TABLE_FIELDS)
       .populate('importedByUserId', 'firstName lastName name email')
-      .sort({ [sortField]: sortOrder === 'asc' ? 1 : -1 });
+      .sort({ isConvertedToLead: 1, [sortField]: sortOrderNum });
 
     if (isPaginated) {
       findQuery = findQuery.skip((pageNum - 1) * limitNum).limit(limitNum);
@@ -606,6 +674,14 @@ const getImportData = async (req, res, next) => {
         page: isPaginated ? pageNum : 1,
         limit: isPaginated ? limitNum : totalMatching,
         totalPages: isPaginated ? Math.max(1, Math.ceil(totalMatching / limitNum)) : 1,
+      },
+      metrics: {
+        totalAll,
+        totalMatching,
+        todayCount,
+        convertedCount,
+        statusChangedCount,
+        sources: (distinctSources || []).filter(Boolean),
       },
     });
   } catch (error) {
@@ -711,7 +787,6 @@ const syncImportData = async (req, res, next) => {
         emailId: resolvedEmail,
         contacts: contactsList,
         remarks: (item.remarks || '').trim(),
-        date: item.date || new Date().toISOString(),
         status: (item.status || item.leadStatus || 'New').trim(),
         leadStatus: (item.status || item.leadStatus || 'New').trim(),
         source: String(resolvedSyncSource).trim(),
@@ -724,6 +799,18 @@ const syncImportData = async (req, res, next) => {
       };
 
       const setOnInsertFields = {};
+
+      if (item.date) {
+        setFields.date = item.date;
+      } else {
+        setOnInsertFields.date = new Date().toISOString();
+      }
+      if (item.createdAt) {
+        setOnInsertFields.createdAt = new Date(item.createdAt);
+      }
+      if (item.updatedAt) {
+        setFields.updatedAt = new Date(item.updatedAt);
+      }
 
       if (isRestricted) {
         setFields.importedBy = userFullName;
