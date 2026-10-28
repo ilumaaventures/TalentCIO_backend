@@ -31,7 +31,9 @@ const isValidEmail = (email) => {
 
 const isValidAadhaar = (aadhaar) => {
     if (aadhaar === undefined || aadhaar === null || aadhaar === '') return true;
-    return /^\d{12}$/.test(String(aadhaar).trim());
+    const str = String(aadhaar).trim();
+    if (str.includes('-')) return false;
+    return /^\d{12}$/.test(str.replace(/\s+/g, ''));
 };
 
 const isValidPAN = (pan) => {

@@ -133,8 +133,16 @@ exports.submitHRIS = async (req, res) => {
         }
 
         if (updates.identity) {
-            if (updates.identity.aadhaarNumber && !isValidAadhaar(updates.identity.aadhaarNumber)) {
-                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            if (updates.identity.aadhaarNumber !== undefined && updates.identity.aadhaarNumber !== null && updates.identity.aadhaarNumber !== '') {
+                const aadhaarStr = String(updates.identity.aadhaarNumber).trim();
+                if (aadhaarStr.includes('-')) {
+                    return res.status(400).json({ message: "Hyphens ('-') are not allowed in Aadhaar number" });
+                }
+                const sanitizedAadhaar = aadhaarStr.replace(/\s+/g, '');
+                if (!isValidAadhaar(sanitizedAadhaar)) {
+                    return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+                }
+                updates.identity.aadhaarNumber = sanitizedAadhaar;
             }
             if (updates.identity.panNumber && !isValidPAN(updates.identity.panNumber)) {
                 return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
@@ -432,8 +440,16 @@ exports.updateSection = async (req, res) => {
         }
 
         if (section === 'identity') {
-            if (updates.aadhaarNumber && !isValidAadhaar(updates.aadhaarNumber)) {
-                return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+            if (updates.aadhaarNumber !== undefined && updates.aadhaarNumber !== null && updates.aadhaarNumber !== '') {
+                const aadhaarStr = String(updates.aadhaarNumber).trim();
+                if (aadhaarStr.includes('-')) {
+                    return res.status(400).json({ message: "Hyphens ('-') are not allowed in Aadhaar number" });
+                }
+                const sanitizedAadhaar = aadhaarStr.replace(/\s+/g, '');
+                if (!isValidAadhaar(sanitizedAadhaar)) {
+                    return res.status(400).json({ message: 'Aadhaar number must be a 12-digit number' });
+                }
+                updates.aadhaarNumber = sanitizedAadhaar;
             }
             if (updates.panNumber && !isValidPAN(updates.panNumber)) {
                 return res.status(400).json({ message: 'PAN number must be a valid 10-character alphanumeric code' });
