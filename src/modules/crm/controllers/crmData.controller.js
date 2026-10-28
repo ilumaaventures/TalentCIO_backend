@@ -711,7 +711,6 @@ const syncImportData = async (req, res, next) => {
         emailId: resolvedEmail,
         contacts: contactsList,
         remarks: (item.remarks || '').trim(),
-        date: item.date || new Date().toISOString(),
         status: (item.status || item.leadStatus || 'New').trim(),
         leadStatus: (item.status || item.leadStatus || 'New').trim(),
         source: String(resolvedSyncSource).trim(),
@@ -724,6 +723,18 @@ const syncImportData = async (req, res, next) => {
       };
 
       const setOnInsertFields = {};
+
+      if (item.date) {
+        setFields.date = item.date;
+      } else {
+        setOnInsertFields.date = new Date().toISOString();
+      }
+      if (item.createdAt) {
+        setOnInsertFields.createdAt = new Date(item.createdAt);
+      }
+      if (item.updatedAt) {
+        setFields.updatedAt = new Date(item.updatedAt);
+      }
 
       if (isRestricted) {
         setFields.importedBy = userFullName;
