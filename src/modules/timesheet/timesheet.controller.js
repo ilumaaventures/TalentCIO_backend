@@ -914,7 +914,18 @@ const getTeamTimesheetReport = async (req, res) => {
             .lean();
 
         const memberIds = teamMembers.map(m => m._id);
-        const { start, end } = buildTimesheetPeriodRange(requestedMonth, cycle);
+        const isAllTime = requestedMonth === 'all' || requestedMonth === 'all_time' || req.body?.range === 'all' || req.query?.range === 'all';
+        const { start, end } = isAllTime
+            ? { start: new Date(0), end: new Date() }
+            : buildTimesheetPeriodRange(requestedMonth, cycle);
+
+        const timesheetQuery = {
+            user: { $in: memberIds },
+            companyId: req.companyId
+        };
+        if (!isAllTime) {
+            timesheetQuery.month = requestedMonth;
+        }
 
         const [workLogs, timesheets, assignedTasks, allActiveProjects] = await Promise.all([
             populateWorkLogHierarchy(WorkLog.find({
@@ -922,11 +933,7 @@ const getTeamTimesheetReport = async (req, res) => {
                 companyId: req.companyId,
                 date: { $gte: start, $lte: end }
             })).sort({ date: 1 }).lean(),
-            Timesheet.find({
-                user: { $in: memberIds },
-                month: requestedMonth,
-                companyId: req.companyId
-            }).lean(),
+            Timesheet.find(timesheetQuery).sort({ createdAt: -1 }).lean(),
             Task.find({
                 assignees: { $in: memberIds },
                 companyId: req.companyId,
@@ -997,10 +1004,11 @@ const getTeamTimesheetReport = async (req, res) => {
         });
 
         res.json({
-            month: requestedMonth,
+            month: isAllTime ? 'All Time' : requestedMonth,
             cycle,
             startDate: start,
             endDate: end,
+            isAllTime,
             teamMembers,
             timesheets: timesheetMap,
             workLogsByUser,
