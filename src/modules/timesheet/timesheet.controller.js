@@ -916,7 +916,7 @@ const getTeamTimesheetReport = async (req, res) => {
         const memberIds = teamMembers.map(m => m._id);
         const { start, end } = buildTimesheetPeriodRange(requestedMonth, cycle);
 
-        const [workLogs, timesheets] = await Promise.all([
+        const [workLogs, timesheets, assignedTasks, allActiveProjects] = await Promise.all([
             populateWorkLogHierarchy(WorkLog.find({
                 user: { $in: memberIds },
                 companyId: req.companyId,
@@ -926,8 +926,57 @@ const getTeamTimesheetReport = async (req, res) => {
                 user: { $in: memberIds },
                 month: requestedMonth,
                 companyId: req.companyId
-            }).lean()
+            }).lean(),
+            Task.find({
+                assignees: { $in: memberIds },
+                companyId: req.companyId,
+                isDeleted: { $ne: true }
+            }).select('assignees module').lean(),
+            Project.find({
+                companyId: req.companyId,
+                isActive: true,
+                isDeleted: { $ne: true }
+            }).select('_id name code manager members').lean()
         ]);
+
+        const taskModuleIds = [...new Set(assignedTasks.map(t => t.module).filter(Boolean))];
+        const taskModules = taskModuleIds.length > 0
+            ? await Module.find({ _id: { $in: taskModuleIds }, companyId: req.companyId, isDeleted: { $ne: true } }).select('_id project').lean()
+            : [];
+
+        const moduleToProject = {};
+        taskModules.forEach(m => {
+            if (m.project) moduleToProject[m._id.toString()] = m.project.toString();
+        });
+
+        const userTaskProjectIds = {};
+        assignedTasks.forEach(t => {
+            const pId = moduleToProject[t.module?.toString()];
+            if (pId && Array.isArray(t.assignees)) {
+                t.assignees.forEach(u => {
+                    const uStr = u.toString();
+                    if (!userTaskProjectIds[uStr]) userTaskProjectIds[uStr] = new Set();
+                    userTaskProjectIds[uStr].add(pId);
+                });
+            }
+        });
+
+        const assignedProjectsByUser = {};
+        memberIds.forEach(id => {
+            const idStr = id.toString();
+            const userTaskSet = userTaskProjectIds[idStr] || new Set();
+            const userProjs = allActiveProjects.filter(p => {
+                const isMgr = p.manager && p.manager.toString() === idStr;
+                const isMember = Array.isArray(p.members) && p.members.some(m => m.toString() === idStr);
+                const hasTask = userTaskSet.has(p._id.toString());
+                return isMgr || isMember || hasTask;
+            }).map(p => ({
+                _id: p._id,
+                name: p.name,
+                code: p.code
+            }));
+            assignedProjectsByUser[idStr] = userProjs;
+        });
 
         const workLogsByUser = {};
         memberIds.forEach(id => {
@@ -954,7 +1003,8 @@ const getTeamTimesheetReport = async (req, res) => {
             endDate: end,
             teamMembers,
             timesheets: timesheetMap,
-            workLogsByUser
+            workLogsByUser,
+            assignedProjectsByUser
         });
     } catch (error) {
         console.error('getTeamTimesheetReport Error:', error);
