@@ -544,7 +544,7 @@ const getEmployeePerformance = async (req, res) => {
         const totalAssigned = tasks.length;
         const totalCompleted = completedTasks.length;
 
-        // Worklogs in date range with project details
+        // Worklogs in date range with full project/task hierarchy
         const worklogs = await WorkLog.find({
             user: userId,
             companyId,
@@ -552,9 +552,35 @@ const getEmployeePerformance = async (req, res) => {
             date: { $gte: cutoffDate }
         })
             .populate('project', 'name status client')
-            .populate('task', 'name')
+            .populate({
+                path: 'task',
+                select: 'name module',
+                populate: {
+                    path: 'module',
+                    select: 'name project',
+                    populate: { path: 'project', select: 'name status client' }
+                }
+            })
+            .populate({
+                path: 'module',
+                select: 'name project',
+                populate: { path: 'project', select: 'name status client' }
+            })
+            .populate({
+                path: 'discussion',
+                select: 'title project module',
+                populate: { path: 'project', select: 'name status client' }
+            })
             .sort({ date: -1 })
             .lean();
+
+        const resolveProject = (w) => (
+            w.project ||
+            w.task?.module?.project ||
+            w.module?.project ||
+            w.discussion?.project ||
+            null
+        );
 
         const totalLoggedHours = Number(worklogs.reduce((sum, w) => sum + (Number(w.hours) || 0), 0).toFixed(2));
         const totalEstimatedHours = Number(tasks.reduce((sum, t) => sum + (Number(t.estimatedHours) || 0), 0).toFixed(2));
@@ -623,8 +649,9 @@ const getEmployeePerformance = async (req, res) => {
             }
         });
 
+        let unassignedHours = 0;
         worklogs.forEach(w => {
-            const proj = w.project;
+            const proj = resolveProject(w);
             const projId = proj?._id || proj;
             if (projId) {
                 const pId = String(projId);
@@ -633,7 +660,7 @@ const getEmployeePerformance = async (req, res) => {
                         _id: pId,
                         name: proj?.name || 'Project',
                         status: proj?.status || 'Active',
-                        clientName: '-',
+                        clientName: proj?.client?.name || '-',
                         role: 'Contributor',
                         isAllocated: false,
                         loggedHours: 0,
@@ -644,8 +671,25 @@ const getEmployeePerformance = async (req, res) => {
                 }
                 const entry = projectMap.get(pId);
                 entry.loggedHours = Number((entry.loggedHours + (Number(w.hours) || 0)).toFixed(2));
+            } else {
+                unassignedHours += Number(w.hours) || 0;
             }
         });
+
+        if (unassignedHours > 0) {
+            projectMap.set('unassigned', {
+                _id: 'unassigned',
+                name: 'General / Non-Project Work',
+                status: 'Active',
+                clientName: '-',
+                role: 'Contributor',
+                isAllocated: false,
+                loggedHours: Number(unassignedHours.toFixed(2)),
+                estimatedHours: 0,
+                tasksAssigned: 0,
+                tasksCompleted: 0
+            });
+        }
 
         const projectBreakdown = Array.from(projectMap.values()).map(p => ({
             ...p,
@@ -817,14 +861,17 @@ const getEmployeePerformance = async (req, res) => {
                 totalActiveAllocated: allocatedProjects.filter(p => p.status === 'Active' || p.isActive !== false).length,
                 list: projectBreakdown
             },
-            recentLogs: worklogs.slice(0, 20).map(w => ({
-                _id: w._id,
-                date: w.date,
-                hours: Number(w.hours || 0),
-                description: w.description || '',
-                projectName: w.project?.name || 'Project',
-                taskTitle: w.task?.name || 'General Task'
-            }))
+            recentLogs: worklogs.slice(0, 20).map(w => {
+                const proj = resolveProject(w);
+                return {
+                    _id: w._id,
+                    date: w.date,
+                    hours: Number(w.hours || 0),
+                    description: w.description || '',
+                    projectName: proj?.name || 'General / Non-Project',
+                    taskTitle: w.task?.name || (w.discussion?.title ? `Discussion: ${w.discussion.title}` : 'General Log')
+                };
+            })
         });
     } catch (error) {
         console.error('[PerformanceController] getEmployeePerformance error:', error);
