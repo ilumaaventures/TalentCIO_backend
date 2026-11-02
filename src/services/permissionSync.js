@@ -286,6 +286,18 @@ const syncPermissions = async () => {
             }
         }
 
+        // Assign timesheet.view_assigned to Manager role
+        const timesheetAssignedPerm = await Permission.findOne({ key: 'timesheet.view_assigned' }).select('_id');
+        if (timesheetAssignedPerm) {
+            const assignment = await assignPermissionsToRolesByName(
+                ['Manager'],
+                [timesheetAssignedPerm._id]
+            );
+            if (assignment.matchedCount > 0) {
+                console.log('Updated Manager role with timesheet.view_assigned permission.');
+            }
+        }
+
         console.log('Permissions synced successfully.');
     } catch (error) {
         console.error('Error syncing permissions:', error);

@@ -346,7 +346,10 @@ const getProjects = async (req, res) => {
             return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
         }) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin'));
 
-        const canViewOthers = isAdmin || req.user.permissions?.includes('timesheet.view') || (req.user.directReports && req.user.directReports.length > 0);
+        const canViewOthers = isAdmin || 
+            req.user.permissions?.includes('timesheet.view') || 
+            req.user.permissions?.includes('timesheet.view_assigned') || 
+            (req.user.directReports && req.user.directReports.length > 0);
 
         if (userId && (canViewOthers || userId === req.user._id.toString())) {
             targetUserId = userId;
@@ -426,7 +429,7 @@ const getUserTimesheet = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const isAdmin = req.user.roles?.some(r => 
+        const canViewAll = req.user.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
         ) || req.user.permissions?.includes('*') || 
@@ -434,10 +437,34 @@ const getUserTimesheet = async (req, res) => {
              req.user.permissions?.includes('timesheet.update_others') ||
              req.user.permissions?.includes('attendance.view');
 
-        const isManager = targetUser.reportingManagers?.some(m => m.toString() === req.user._id.toString());
+        const isViewingSelf = targetUserId === req.user._id.toString();
 
-        if (!isManager && !isAdmin && targetUserId !== req.user._id.toString()) {
-            return res.status(403).json({ message: 'Not authorized to view this timesheet' });
+        if (!isViewingSelf && !canViewAll) {
+            const canViewAssigned = req.user.permissions?.includes('timesheet.view_assigned') ||
+                req.user.roles?.some(r => {
+                    const roleName = typeof r === 'string' ? r : r?.name;
+                    return roleName === 'Admin' || roleName === 'Manager';
+                });
+
+            if (!canViewAssigned) {
+                return res.status(403).json({ message: 'Not authorized to view this timesheet' });
+            }
+
+            const isDirectReport = targetUser.reportingManagers?.some(m => m.toString() === req.user._id.toString());
+            let isProjectMember = false;
+            if (!isDirectReport) {
+                isProjectMember = await Project.exists({
+                    companyId: req.companyId,
+                    manager: req.user._id,
+                    members: targetUserId,
+                    isActive: true,
+                    isDeleted: { $ne: true }
+                });
+            }
+
+            if (!isDirectReport && !isProjectMember) {
+                return res.status(403).json({ message: 'Not authorized to view this timesheet' });
+            }
         }
 
         let timesheet = await Timesheet.findOne({
@@ -497,23 +524,39 @@ const getPendingTimesheets = async (req, res) => {
 
         let timesheets;
 
-        // Check if user is Admin
+        // Check if user is Admin or has full approve + view permission
         // req.user.roles is populated with Role objects
-        const isAdmin = req.user.roles?.some(r => 
+        const canViewAllPending = req.user.roles?.some(r => 
             (typeof r === 'string' && r === 'Admin') || 
             (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('timesheet.approve');
+        ) || req.user.permissions?.includes('*') || (
+            req.user.permissions?.includes('timesheet.approve') &&
+            req.user.permissions?.includes('timesheet.view')
+        );
 
-        if (isAdmin) {
-            // Admin sees ALL submitted timesheets
+        if (canViewAllPending) {
+            // Admin or timesheet.view + timesheet.approve sees ALL submitted timesheets
             timesheets = await Timesheet.find({
                 status: 'SUBMITTED',
                 companyId: req.companyId
             }).populate('user', 'firstName lastName email employeeCode')
                 .sort({ month: -1 });
         } else {
-            // Regular Manager: Find subordinates (where I am one of the reporting managers)
-            const subordinates = await User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('_id');
+            // Manager / Assigned viewer: Find subordinates (direct reports & managed project members)
+            const managedProjects = await Project.find({
+                companyId: req.companyId,
+                manager: req.user._id,
+                isActive: true,
+                isDeleted: { $ne: true }
+            }).select('members').lean();
+            const projectMemberIds = managedProjects.flatMap(p => p.members || []).filter(Boolean);
+
+            const subordinateConditions = [{ reportingManagers: req.user._id, companyId: req.companyId }];
+            if (projectMemberIds.length > 0) {
+                subordinateConditions.push({ _id: { $in: projectMemberIds }, companyId: req.companyId });
+            }
+
+            const subordinates = await User.find({ $or: subordinateConditions }).select('_id');
             const subordinateIds = subordinates.map(u => u._id);
 
             timesheets = await Timesheet.find({
@@ -873,17 +916,27 @@ const getTeamTimesheetReport = async (req, res) => {
 
         if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
-        const isAdmin = req.user.roles?.some(r =>
+        const hasFullView = req.user.roles?.some(r =>
             (typeof r === 'string' && r === 'Admin') ||
             (typeof r === 'object' && r.name === 'Admin')
         ) || req.user.permissions?.includes('*') ||
              req.user.permissions?.includes('timesheet.view') ||
-             req.user.permissions?.includes('timesheet.update_others') ||
-             req.user.permissions?.includes('attendance.view') ||
-             req.user.permissions?.includes('attendance.view_all') ||
-             req.user.permissions?.includes('user.read');
+             req.user.permissions?.includes('attendance.view_all');
 
         let userFilter = { companyId: req.companyId, isDeleted: { $ne: true } };
+
+        const managedProjects = await Project.find({
+            companyId: req.companyId,
+            manager: req.user._id,
+            isActive: true,
+            isDeleted: { $ne: true }
+        }).select('members').lean();
+        const projectMemberIds = managedProjects.flatMap(p => p.members || []).filter(Boolean);
+
+        const assignedConditions = [{ reportingManagers: req.user._id }, { _id: req.user._id }];
+        if (projectMemberIds.length > 0) {
+            assignedConditions.push({ _id: { $in: projectMemberIds } });
+        }
 
         if (requestedUserIds && requestedUserIds.length > 0) {
             const validIds = requestedUserIds
@@ -891,17 +944,17 @@ const getTeamTimesheetReport = async (req, res) => {
                 .filter(id => id && mongoose.Types.ObjectId.isValid(id))
                 .map(id => new mongoose.Types.ObjectId(id));
 
-            if (!isAdmin) {
+            if (!hasFullView) {
                 userFilter.$and = [
                     { _id: { $in: validIds } },
-                    { $or: [{ reportingManagers: req.user._id }, { _id: req.user._id }] }
+                    { $or: assignedConditions }
                 ];
             } else {
                 userFilter._id = { $in: validIds };
             }
         } else {
-            if (!isAdmin) {
-                userFilter.$or = [{ reportingManagers: req.user._id }, { _id: req.user._id }];
+            if (!hasFullView) {
+                userFilter.$or = assignedConditions;
             }
         }
 
