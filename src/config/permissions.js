@@ -65,6 +65,11 @@ module.exports = [
         description: "View timesheet and attendance of all users"
     },
     {
+        key: "timesheet.view_assigned",
+        module: "TIMESHEET",
+        description: "View timesheet and attendance of assigned users only"
+    },
+    {
         key: "timesheet.update_others",
         module: "TIMESHEET",
         description: "Update timesheet entries for other users"

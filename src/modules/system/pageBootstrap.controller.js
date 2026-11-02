@@ -83,6 +83,7 @@ const canViewOtherAttendance = (user) =>
 const canViewOtherTimesheets = (user) =>
     isAdminUser(user) ||
     user?.permissions?.includes('timesheet.view') ||
+    user?.permissions?.includes('timesheet.view_assigned') ||
     user?.permissions?.includes('timesheet.update_others') ||
     user?.permissions?.includes('attendance.view');
 
@@ -92,6 +93,7 @@ const canLoadUserList = (user) =>
         return roleName === 'Admin' || roleName === 'Manager';
     }) ||
     user?.permissions?.includes('timesheet.view') ||
+    user?.permissions?.includes('timesheet.view_assigned') ||
     user?.permissions?.includes('*') ||
     (user?.directReports && user.directReports.length > 0);
 
@@ -551,8 +553,25 @@ exports.getTimesheetBootstrap = async (req, res) => {
                 return res.status(404).json({ message: 'User not found' });
             }
 
-            const isManager = (targetUser.reportingManagers || []).some(managerId => String(managerId) === String(req.user._id));
-            if (!canViewOtherTimesheets(req.user) && !isManager) {
+            const isDirectReport = (targetUser.reportingManagers || []).some(managerId => String(managerId) === String(req.user._id));
+            let isProjectMember = false;
+            if (!isDirectReport) {
+                isProjectMember = await Project.exists({
+                    companyId: req.companyId,
+                    manager: req.user._id,
+                    members: targetUserId,
+                    isActive: true,
+                    isDeleted: { $ne: true }
+                });
+            }
+            const isAssigned = isDirectReport || Boolean(isProjectMember);
+            const canViewAssigned = req.user?.permissions?.includes('timesheet.view_assigned') ||
+                (req.user?.roles || []).some(r => {
+                    const roleName = typeof r === 'string' ? r : r?.name;
+                    return roleName === 'Admin' || roleName === 'Manager';
+                });
+
+            if (!canViewOtherTimesheets(req.user) && (!canViewAssigned || !isAssigned)) {
                 return res.status(403).json({ message: 'Not authorized to view this timesheet' });
             }
         }
@@ -566,7 +585,29 @@ exports.getTimesheetBootstrap = async (req, res) => {
         const usersListPromise = canLoadUserList(req.user)
             ? isAdminUser(req.user) || req.user?.permissions?.includes('timesheet.view') || req.user?.permissions?.includes('*')
                 ? User.find({ companyId: req.companyId, isActive: { $ne: false } }).select('firstName lastName email employeeCode isActive').sort({ firstName: 1, lastName: 1 }).lean()
-                : User.find({ reportingManagers: req.user._id, companyId: req.companyId, isActive: { $ne: false } }).select('firstName lastName email employeeCode isActive').sort({ firstName: 1, lastName: 1 }).lean()
+                : (async () => {
+                    const managedProjects = await Project.find({
+                        companyId: req.companyId,
+                        manager: req.user._id,
+                        isActive: true,
+                        isDeleted: { $ne: true }
+                    }).select('members').lean();
+                    const projectMemberIds = managedProjects.flatMap(p => p.members || []).filter(Boolean);
+
+                    const conditions = [{ reportingManagers: req.user._id }];
+                    if (projectMemberIds.length > 0) {
+                        conditions.push({ _id: { $in: projectMemberIds } });
+                    }
+
+                    return User.find({
+                        companyId: req.companyId,
+                        isActive: { $ne: false },
+                        $or: conditions
+                    })
+                        .select('firstName lastName email employeeCode isActive')
+                        .sort({ firstName: 1, lastName: 1 })
+                        .lean();
+                })()
             : Promise.resolve([]);
 
         const [timesheet, projects, holidays, approvedLeaves, usersList] = await Promise.all([
