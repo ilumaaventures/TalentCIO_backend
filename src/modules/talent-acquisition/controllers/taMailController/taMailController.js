@@ -172,6 +172,7 @@ exports.sendMassMail = async (req, res) => {
             candidateIds,
             filters,
             templateId,
+            templateName,
             emailSubject,
             customSubject,
             subject,
