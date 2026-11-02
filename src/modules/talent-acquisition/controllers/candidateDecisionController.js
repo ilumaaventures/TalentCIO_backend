@@ -131,6 +131,18 @@ const updateCandidateDecision = async (req, res) => {
         candidate.decision = decision;
         if (['Shortlisted', 'Profile Shared'].includes(decision)) {
             candidate.profileShared = true;
+        } else if (['Rejected', 'Did Not Turn Up', 'Left in between'].includes(decision)) {
+            // When dropped in Phase 1, reset profileShared if candidate has no explicit Phase 2 interview activity
+            const hasExplicitPhase2Activity = Boolean(
+                (candidate.phase2Decision && candidate.phase2Decision !== 'None') ||
+                (candidate.phase2InterviewStatus && candidate.phase2InterviewStatus !== 'None') ||
+                Boolean(candidate.phase2InterviewerFeedback) ||
+                (Array.isArray(candidate.interviewRounds) && candidate.interviewRounds.some(r => Number(r.phaseOrder) >= 2 || Number(r.roundNumber) >= 2 || Number(r.phase) >= 2))
+            );
+            if (!hasExplicitPhase2Activity && profileShared === undefined) {
+                candidate.profileShared = false;
+                candidate.isProfileShared = false;
+            }
         }
         if (profileShared !== undefined) {
             candidate.profileShared = Boolean(profileShared);

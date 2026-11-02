@@ -377,12 +377,25 @@ const toLegacySafeStatus = (status) => {
 
 const hasCandidateMovedToPhase2 = (candidate) => {
     if (!candidate) return false;
-    if (candidate.activePhase && Number(candidate.activePhase) >= 2) return true;
-    if (Array.isArray(candidate.interviewRounds) && candidate.interviewRounds.some(r => Number(r.phaseOrder) >= 2 || Number(r.roundNumber) >= 2 || Number(r.phase) >= 2)) return true;
-    return Boolean(
+
+    const hasExplicitPhase2Activity = Boolean(
         (candidate.phase2Decision && candidate.phase2Decision !== 'None') ||
         (candidate.phase2InterviewStatus && candidate.phase2InterviewStatus !== 'None') ||
         Boolean(candidate.phase2InterviewerFeedback) ||
+        (Array.isArray(candidate.interviewRounds) && candidate.interviewRounds.some(r => Number(r.phaseOrder) >= 2 || Number(r.roundNumber) >= 2 || Number(r.phase) >= 2))
+    );
+
+    // If candidate was dropped in Phase 1 and has no explicit Phase 2 interview activity,
+    // they are not locked in Phase 2
+    const phase1Dropped = ['Rejected', 'Did Not Turn Up', 'Left in between'].includes(candidate.decision);
+    if (phase1Dropped && !hasExplicitPhase2Activity) {
+        return false;
+    }
+
+    if (candidate.activePhase && Number(candidate.activePhase) >= 2) return true;
+    if (hasExplicitPhase2Activity) return true;
+
+    return Boolean(
         candidate.decision === 'Shortlisted' ||
         candidate.decision === 'Profile Shared' ||
         candidate.profileShared === true ||

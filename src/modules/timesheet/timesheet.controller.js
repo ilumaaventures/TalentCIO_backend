@@ -914,16 +914,31 @@ const getTeamTimesheetReport = async (req, res) => {
             .lean();
 
         const memberIds = teamMembers.map(m => m._id);
-        const isAllTime = requestedMonth === 'all' || requestedMonth === 'all_time' || req.body?.range === 'all' || req.query?.range === 'all';
-        const { start, end } = isAllTime
-            ? { start: new Date(0), end: new Date() }
-            : buildTimesheetPeriodRange(requestedMonth, cycle);
+        const fromDate = req.body?.fromDate || req.query?.fromDate;
+        const toDate = req.body?.toDate || req.query?.toDate;
+        const isDateRange = Boolean(fromDate && toDate);
+        const isAllTime = !isDateRange && (requestedMonth === 'all' || requestedMonth === 'all_time' || req.body?.range === 'all' || req.query?.range === 'all');
+
+        let start, end;
+        if (isDateRange) {
+            start = new Date(fromDate);
+            start.setHours(0, 0, 0, 0);
+            end = new Date(toDate);
+            end.setHours(23, 59, 59, 999);
+        } else if (isAllTime) {
+            start = new Date(0);
+            end = new Date();
+        } else {
+            const range = buildTimesheetPeriodRange(requestedMonth, cycle);
+            start = range.start;
+            end = range.end;
+        }
 
         const timesheetQuery = {
             user: { $in: memberIds },
             companyId: req.companyId
         };
-        if (!isAllTime) {
+        if (!isAllTime && !isDateRange) {
             timesheetQuery.month = requestedMonth;
         }
 
@@ -1004,11 +1019,14 @@ const getTeamTimesheetReport = async (req, res) => {
         });
 
         res.json({
-            month: isAllTime ? 'All Time' : requestedMonth,
+            month: isDateRange ? `${fromDate} to ${toDate}` : (isAllTime ? 'All Time' : requestedMonth),
             cycle,
             startDate: start,
             endDate: end,
             isAllTime,
+            isDateRange,
+            fromDate,
+            toDate,
             teamMembers,
             timesheets: timesheetMap,
             workLogsByUser,
