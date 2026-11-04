@@ -225,14 +225,72 @@ const getWorkLogs = async (req, res) => {
             }
 
             filter.$or = orConditions;
-            if (req.query.userId) {
+            if (req.query.userId && req.query.userId !== 'ALL') {
                 filter.user = req.query.userId;
             }
         } else {
             filter.user = req.user._id;
         }
 
-        const logs = await WorkLog.find(filter)
+        // Additional status filter
+        if (req.query.status && req.query.status !== 'all') {
+            filter.status = req.query.status;
+        }
+
+        // Date range filter
+        if (req.query.dateRange && req.query.dateRange !== 'all') {
+            const now = new Date();
+            let days = 0;
+            if (req.query.dateRange === '7d') days = 7;
+            else if (req.query.dateRange === '14d') days = 14;
+            else if (req.query.dateRange === '30d') days = 30;
+
+            if (days > 0) {
+                const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+                filter.date = { $gte: startDate };
+            }
+        } else if (req.query.startDate || req.query.endDate) {
+            filter.date = {};
+            if (req.query.startDate) {
+                filter.date.$gte = new Date(req.query.startDate);
+            }
+            if (req.query.endDate) {
+                const end = new Date(req.query.endDate);
+                end.setHours(23, 59, 59, 999);
+                filter.date.$lte = end;
+            }
+        }
+
+        // Search filter (description or task name/key)
+        if (req.query.search && req.query.search.trim()) {
+            const searchRegex = new RegExp(req.query.search.trim(), 'i');
+            const Task = require('../task/task.model');
+            const matchingTasks = await Task.find({
+                companyId: req.companyId,
+                $or: [
+                    { name: searchRegex },
+                    { taskKey: searchRegex }
+                ]
+            }).select('_id').lean();
+
+            const searchOr = [{ description: searchRegex }];
+            if (matchingTasks.length > 0) {
+                searchOr.push({ task: { $in: matchingTasks.map(t => t._id) } });
+            }
+
+            filter.$and = filter.$and || [];
+            filter.$and.push({ $or: searchOr });
+        }
+
+        const page = parseInt(req.query.page);
+        const isPaginated = !isNaN(page) && page > 0;
+        const pageLimit = parseInt(req.query.limit) || (isPaginated ? 20 : (parseInt(limit) || 0));
+        const skip = isPaginated ? (page - 1) * pageLimit : 0;
+
+        const total = await WorkLog.countDocuments(filter);
+        const totalPages = pageLimit > 0 ? Math.ceil(total / pageLimit) : 1;
+
+        let query = WorkLog.find(filter)
             .populate('user', 'firstName lastName email profilePicture profilePhoto')
             .populate({
                 path: 'task',
@@ -246,9 +304,24 @@ const getWorkLogs = async (req, res) => {
             .populate('module', 'name')
             .populate('project', 'name')
             .populate('discussion', 'title discussion status priority hours')
-            .sort({ date: -1 })
-            .limit(limit)
-            .lean();
+            .sort({ date: -1, _id: -1 });
+
+        if (pageLimit > 0) {
+            query = query.skip(skip).limit(pageLimit);
+        }
+
+        const logs = await query.lean();
+
+        if (isPaginated || req.query.paginate === 'true') {
+            return res.json({
+                logs,
+                total,
+                page: page || 1,
+                totalPages,
+                limit: pageLimit,
+                hasMore: (page || 1) < totalPages
+            });
+        }
 
         res.json(logs);
     } catch (error) {
