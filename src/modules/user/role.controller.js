@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Role = require('./role.model');
 const Permission = require('./permission.model');
 const User = require('./user.model');
@@ -26,20 +27,31 @@ const isVisiblePermission = (permission) =>
 const getRoles = async (req, res) => {
     try {
         res.set('Cache-Control', 'no-cache');
-        const [roles, company] = await Promise.all([
+        const compObjectId = mongoose.Types.ObjectId.isValid(req.companyId) ? new mongoose.Types.ObjectId(req.companyId) : req.companyId;
+        const [roles, company, userRoleCounts] = await Promise.all([
             Role.find({ companyId: req.companyId })
                 .populate('permissions')
                 .populate('inheritsFrom', 'name isSystem'),
-            Company.findById(req.companyId).select('enabledModules').lean()
+            Company.findById(req.companyId).select('enabledModules').lean(),
+            User.aggregate([
+                { $match: { companyId: { $in: [req.companyId, compObjectId].filter(Boolean) }, isDeleted: { $ne: true } } },
+                { $unwind: '$roles' },
+                { $group: { _id: '$roles', count: { $sum: 1 } } }
+            ])
         ]);
         const enabledModules = company?.enabledModules || [];
+        const roleMemberCountMap = {};
+        (userRoleCounts || []).forEach(item => {
+            if (item?._id) roleMemberCountMap[item._id.toString()] = item.count;
+        });
         const sanitizedRoles = roles.map(role => {
             const rawPermissions = (role.permissions || []).filter(isVisiblePermission);
             return {
                 ...role.toObject(),
+                memberCount: roleMemberCountMap[role._id.toString()] || 0,
                 permissions: filterPermissionsByEnabledModules(rawPermissions, enabledModules)
             };
-        });
+        }).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         res.json(sanitizedRoles);
     } catch (error) {
         console.error(error);
@@ -51,7 +63,7 @@ const getRoles = async (req, res) => {
 // @route   POST /api/roles
 // @access  Private (Admin)
 const createRole = async (req, res) => {
-    const { name, permissions, inheritsFrom = [] } = req.body; // permissions = array of permission IDs
+    const { name, description = '', permissions, inheritsFrom = [] } = req.body; // permissions = array of permission IDs
 
     try {
         const validatedParentRoleIds = await validateRoleInheritanceGraph({
@@ -62,6 +74,7 @@ const createRole = async (req, res) => {
         const role = await Role.create({
             companyId: req.companyId,
             name,
+            description,
             permissions,
             inheritsFrom: validatedParentRoleIds,
             isSystem: false
@@ -89,7 +102,14 @@ const updateRole = async (req, res) => {
         }
 
         role.name = req.body.name || role.name;
-        role.permissions = req.body.permissions || role.permissions;
+        if (req.body.description !== undefined) {
+            role.description = req.body.description;
+        }
+        if (Array.isArray(req.body.permissions)) {
+            role.permissions = req.body.permissions;
+        } else if (req.body.permissions !== undefined) {
+            role.permissions = req.body.permissions;
+        }
         if (req.body.inheritsFrom !== undefined) {
             role.inheritsFrom = await validateRoleInheritanceGraph({
                 roleId: role._id,
