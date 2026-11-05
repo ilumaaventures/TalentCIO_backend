@@ -23,6 +23,7 @@ const DEFAULT_PAYROLL_CONFIG = {
   ltaMaxPercent: 0.0833,
   standardMonthlyHours: 160,
   compensationTypeDefaults: {},
+  displayPreferences: {},
 };
 
 const normalizeConfig = (config = {}) => {
@@ -51,6 +52,7 @@ const normalizeConfig = (config = {}) => {
     ltaMaxPercent: getNum(cfg.ltaMaxPercent, DEFAULT_PAYROLL_CONFIG.ltaMaxPercent),
     standardMonthlyHours: getNum(cfg.standardMonthlyHours, DEFAULT_PAYROLL_CONFIG.standardMonthlyHours),
     compensationTypeDefaults: cfg.compensationTypeDefaults || DEFAULT_PAYROLL_CONFIG.compensationTypeDefaults,
+    displayPreferences: cfg.displayPreferences || DEFAULT_PAYROLL_CONFIG.displayPreferences || {},
     salaryComponents: cfg.salaryComponents || null,
   };
 };
@@ -98,12 +100,28 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   };
 
   const resolveStatutory = (sourceVal, overrideVal, baseVal) => {
+    // 1. Force overrides strictly take precedence
+    if (overrideVal === 'force_eligible' || overrideVal === true || overrideVal === 'true') {
+      return true;
+    }
+    if (overrideVal === 'force_exempt' || overrideVal === false || overrideVal === 'false') {
+      return false;
+    }
+
+    // 2. If employee/source explicitly provided a boolean setting
     if (sourceVal !== undefined && sourceVal !== null && sourceVal !== '') {
       return parseBoolVal(sourceVal);
     }
-    if (overrideVal !== undefined && overrideVal !== null) {
-      return Boolean(overrideVal);
+
+    // 3. Default overrides
+    if (overrideVal === 'default_eligible' || overrideVal === 'eligible') {
+      return true;
     }
+    if (overrideVal === 'default_exempt' || overrideVal === 'exempt') {
+      return false;
+    }
+
+    // 4. Fall back to base compensation strategy default
     return Boolean(baseVal);
   };
 

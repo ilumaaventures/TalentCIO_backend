@@ -105,33 +105,37 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
                     }
                 });
 
-                if (master.pfEmployer > 0) {
-                    contributionsList.push({
-                        name: 'PF Employer Contribution',
-                        monthly: formatCurrency(master.pfEmployer),
-                        annual: formatCurrency(master.pfEmployer * 12)
-                    });
-                }
-                if (master.esiEmployer > 0) {
-                    contributionsList.push({
-                        name: 'ESI Employer Contribution',
-                        monthly: formatCurrency(master.esiEmployer),
-                        annual: formatCurrency(master.esiEmployer * 12)
-                    });
-                }
-                if (master.gratuity > 0) {
-                    contributionsList.push({
-                        name: 'Gratuity Provision',
-                        monthly: formatCurrency(master.gratuity),
-                        annual: formatCurrency(master.gratuity * 12)
-                    });
-                }
-                if (master.lwfEmployer > 0) {
-                    contributionsList.push({
-                        name: 'LWF Employer Share',
-                        monthly: formatCurrency(master.lwfEmployer),
-                        annual: formatCurrency(master.lwfEmployer * 12)
-                    });
+                const prefs = config.displayPreferences || {};
+
+                if (prefs.showEmployerStatutory !== false) {
+                    if (prefs.showPFEmployer !== false && master.pfEmployer > 0) {
+                        contributionsList.push({
+                            name: 'PF Employer Contribution',
+                            monthly: formatCurrency(master.pfEmployer),
+                            annual: formatCurrency(master.pfEmployer * 12)
+                        });
+                    }
+                    if (prefs.showESIEmployer !== false && master.esiEmployer > 0) {
+                        contributionsList.push({
+                            name: 'ESI Employer Contribution',
+                            monthly: formatCurrency(master.esiEmployer),
+                            annual: formatCurrency(master.esiEmployer * 12)
+                        });
+                    }
+                    if (prefs.showGratuity !== false && master.gratuity > 0) {
+                        contributionsList.push({
+                            name: 'Gratuity Provision',
+                            monthly: formatCurrency(master.gratuity),
+                            annual: formatCurrency(master.gratuity * 12)
+                        });
+                    }
+                    if (prefs.showLWFEmployer !== false && master.lwfEmployer > 0) {
+                        contributionsList.push({
+                            name: 'LWF Employer Share',
+                            monthly: formatCurrency(master.lwfEmployer),
+                            annual: formatCurrency(master.lwfEmployer * 12)
+                        });
+                    }
                 }
 
                 const payroll = buildPayrollSnapshot(salaryData, config, {
@@ -139,29 +143,29 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
                     paidDays: config.defaultWorkingDays || 26
                 }, {}, new Date().getMonth() + 1, new Date().getFullYear());
 
-                if (payroll && payroll.deductions) {
-                    if (payroll.deductions.pfEmployee > 0) {
+                if (prefs.showEmployeeDeductions !== false && payroll && payroll.deductions) {
+                    if (prefs.showPFEmployee !== false && payroll.deductions.pfEmployee > 0) {
                         deductionsList.push({
                             name: 'PF Employee Contribution',
                             monthly: formatCurrency(payroll.deductions.pfEmployee),
                             annual: formatCurrency(payroll.deductions.pfEmployee * 12)
                         });
                     }
-                    if (payroll.deductions.esiEmployee > 0) {
+                    if (prefs.showESIEmployee !== false && payroll.deductions.esiEmployee > 0) {
                         deductionsList.push({
                             name: 'ESI Employee Contribution',
                             monthly: formatCurrency(payroll.deductions.esiEmployee),
                             annual: formatCurrency(payroll.deductions.esiEmployee * 12)
                         });
                     }
-                    if (payroll.deductions.professionalTax > 0) {
+                    if (prefs.showProfessionalTax !== false && payroll.deductions.professionalTax > 0) {
                         deductionsList.push({
                             name: 'Professional Tax (PT)',
                             monthly: formatCurrency(payroll.deductions.professionalTax),
                             annual: formatCurrency(payroll.deductions.professionalTax * 12)
                         });
                     }
-                    if (payroll.deductions.lwfEmployee > 0) {
+                    if (prefs.showLWFEmployee !== false && payroll.deductions.lwfEmployee > 0) {
                         deductionsList.push({
                             name: 'LWF Employee Share',
                             monthly: formatCurrency(payroll.deductions.lwfEmployee),

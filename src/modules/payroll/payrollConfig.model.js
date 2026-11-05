@@ -31,6 +31,7 @@ const payrollConfigSchema = new mongoose.Schema({
   defaultInsurance: { type: Number, default: 0 },
   standardMonthlyHours: { type: Number, default: 160 },
   compensationTypeDefaults: { type: mongoose.Schema.Types.Mixed, default: {} },
+  displayPreferences: { type: mongoose.Schema.Types.Mixed, default: {} },
   salaryComponents: { type: [salaryComponentSchema], default: [] }
 }, { timestamps: true });
 
