@@ -240,14 +240,49 @@ const getWorkLogs = async (req, res) => {
         // Date range filter
         if (req.query.dateRange && req.query.dateRange !== 'all') {
             const now = new Date();
-            let days = 0;
-            if (req.query.dateRange === '7d') days = 7;
-            else if (req.query.dateRange === '14d') days = 14;
-            else if (req.query.dateRange === '30d') days = 30;
+            if (req.query.dateRange === 'this_week') {
+                const day = now.getDay();
+                const diff = now.getDate() - (day === 0 ? 6 : day - 1);
+                const startDate = new Date(now.getFullYear(), now.getMonth(), diff, 0, 0, 0, 0);
+                const endDate = new Date(now.getFullYear(), now.getMonth(), diff + 6, 23, 59, 59, 999);
+                filter.date = { $gte: startDate, $lte: endDate };
+            } else if (req.query.dateRange === 'this_month') {
+                const startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+                const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+                filter.date = { $gte: startDate, $lte: endDate };
+            } else if (req.query.dateRange === 'custom') {
+                filter.date = {};
+                if (req.query.startDate) {
+                    if (typeof req.query.startDate === 'string' && req.query.startDate.includes('-')) {
+                        const [fY, fM, fD] = req.query.startDate.split('-').map(Number);
+                        filter.date.$gte = new Date(fY, fM - 1, fD, 0, 0, 0, 0);
+                    } else {
+                        filter.date.$gte = new Date(req.query.startDate);
+                    }
+                }
+                if (req.query.endDate) {
+                    if (typeof req.query.endDate === 'string' && req.query.endDate.includes('-')) {
+                        const [tY, tM, tD] = req.query.endDate.split('-').map(Number);
+                        filter.date.$lte = new Date(tY, tM - 1, tD, 23, 59, 59, 999);
+                    } else {
+                        const end = new Date(req.query.endDate);
+                        end.setHours(23, 59, 59, 999);
+                        filter.date.$lte = end;
+                    }
+                }
+                if (!filter.date.$gte && !filter.date.$lte) {
+                    delete filter.date;
+                }
+            } else {
+                let days = 0;
+                if (req.query.dateRange === '7d') days = 7;
+                else if (req.query.dateRange === '14d') days = 14;
+                else if (req.query.dateRange === '30d') days = 30;
 
-            if (days > 0) {
-                const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-                filter.date = { $gte: startDate };
+                if (days > 0) {
+                    const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+                    filter.date = { $gte: startDate };
+                }
             }
         } else if (req.query.startDate || req.query.endDate) {
             filter.date = {};
