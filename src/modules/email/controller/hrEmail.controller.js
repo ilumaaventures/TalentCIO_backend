@@ -433,13 +433,25 @@ exports.sendHREmail = async (req, res) => {
         const sent = [];
         const failed = [];
 
-        // Cache for downloaded dossier buffers across users
+        // Pre-fetch all recipient profiles to strictly verify document ownership
+        const recipientProfiles = await EmployeeProfile.find({
+            user: { $in: recipientUserIds },
+            companyId: req.companyId
+        })
+            .select('user documents')
+            .lean();
+
+        const profileDocsByUser = new Map();
+        recipientProfiles.forEach((p) => {
+            profileDocsByUser.set(String(p.user), p.documents || []);
+        });
+
+        // Cache for downloaded dossier buffers across users (URL-keyed buffer cache)
         const dossierBufferCache = new Map();
-        const fetchDossierBuffer = async (url, fallbackName) => {
+        const fetchDossierBuffer = async (url) => {
             if (dossierBufferCache.has(url)) return dossierBufferCache.get(url);
             const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
             const payload = {
-                filename: sanitizeFileName(fallbackName, 'document.pdf'),
                 content: Buffer.from(resp.data),
                 contentType: resp.headers['content-type'] || 'application/octet-stream'
             };
@@ -479,35 +491,63 @@ exports.sendHREmail = async (req, res) => {
                     continue;
                 }
 
-                // Resolve dossier documents for this specific recipient
+                // Resolve and strictly verify dossier documents for THIS specific recipient only
+                const genuineUserDocs = (profileDocsByUser.get(String(recipientUserId)) || [])
+                    .filter((d) => d && d.isDeleted !== true && d.url);
+
+                const genuineDocById = new Map();
+                const genuineDocByUrl = new Map();
+                genuineUserDocs.forEach((d) => {
+                    if (d._id) genuineDocById.set(String(d._id), d);
+                    if (d.url) genuineDocByUrl.set(String(d.url), d);
+                });
+
                 const userDossierItems = [];
+
+                // 1. Process explicitly selected individual dossier documents for this specific recipient
                 if (recipientDossierDocs && Array.isArray(recipientDossierDocs[recipientUserId])) {
-                    userDossierItems.push(...recipientDossierDocs[recipientUserId]);
-                }
-                if (commonDossierCategory) {
-                    let pDocs = profile?.documents;
-                    if (!pDocs && profile?._id) {
-                        const fullProf = await EmployeeProfile.findById(profile._id).select('documents').lean();
-                        pDocs = fullProf?.documents || [];
+                    for (const item of recipientDossierDocs[recipientUserId]) {
+                        // Strict ownership check: Must exist in this user's genuine profile documents
+                        const genuineDoc = (item._id && genuineDocById.get(String(item._id))) ||
+                                           (item.url && genuineDocByUrl.get(String(item.url)));
+                        if (genuineDoc) {
+                            userDossierItems.push({
+                                _id: String(genuineDoc._id),
+                                title: genuineDoc.title || genuineDoc.fileName,
+                                fileName: genuineDoc.fileName || item.fileName || 'document.pdf',
+                                url: genuineDoc.url,
+                                category: genuineDoc.category
+                            });
+                        } else {
+                            console.warn(`[HR-EMAIL SECURITY] Skipped unauthorized document for user ${recipientUserId}:`, item);
+                        }
                     }
-                    if (Array.isArray(pDocs)) {
-                        const matches = pDocs.filter((d) =>
-                            d && d.isDeleted !== true && d.url && (
-                                String(d.category || '').toLowerCase() === commonDossierCategory.toLowerCase() ||
-                                String(d.title || '').toLowerCase().includes(commonDossierCategory.toLowerCase())
-                            )
-                        );
-                        matches.forEach((md) => {
-                            if (!userDossierItems.some((item) => String(item._id || item.url) === String(md._id || md.url))) {
-                                userDossierItems.push({
-                                    _id: String(md._id),
-                                    title: md.title || md.fileName,
-                                    fileName: md.fileName,
-                                    url: md.url,
-                                    category: md.category
-                                });
-                            }
-                        });
+                }
+
+                // 2. Only if no individual documents were selected for this recipient AND commonDossierCategory was specified:
+                if (commonDossierCategory && userDossierItems.length === 0) {
+                    const matches = genuineUserDocs.filter((d) =>
+                        String(d.category || '').toLowerCase() === commonDossierCategory.toLowerCase() ||
+                        String(d.title || '').toLowerCase().includes(commonDossierCategory.toLowerCase())
+                    );
+
+                    if (matches.length > 0) {
+                        // Pick strictly the single latest document for this recipient (never multiple historical revisions)
+                        const latestDoc = matches.sort((a, b) => {
+                            const timeA = new Date(a.uploadDate || a.createdAt || 0).getTime();
+                            const timeB = new Date(b.uploadDate || b.createdAt || 0).getTime();
+                            return timeB - timeA;
+                        })[0];
+
+                        if (latestDoc) {
+                            userDossierItems.push({
+                                _id: String(latestDoc._id),
+                                title: latestDoc.title || latestDoc.fileName,
+                                fileName: latestDoc.fileName || 'document.pdf',
+                                url: latestDoc.url,
+                                category: latestDoc.category
+                            });
+                        }
                     }
                 }
 
@@ -515,9 +555,9 @@ exports.sendHREmail = async (req, res) => {
                 for (const item of userDossierItems) {
                     if (item.url && item.url.startsWith('http')) {
                         try {
-                            const bufPayload = await fetchDossierBuffer(item.url, item.fileName || item.title);
+                            const bufPayload = await fetchDossierBuffer(item.url);
                             userDossierAttachments.push({
-                                filename: bufPayload.filename,
+                                filename: sanitizeFileName(item.fileName || item.title, 'document.pdf'),
                                 content: bufPayload.content,
                                 contentType: bufPayload.contentType,
                                 cloudinaryUrl: item.url,
