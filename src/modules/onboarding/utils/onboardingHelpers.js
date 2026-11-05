@@ -438,6 +438,18 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
         }
     }
 
+    // Section D: Net Take-Home Pay (Estimated)
+    if (totals.monthlyNet || totals.annualNet) {
+        rows.push(makeRow([
+            makeCell({ text: 'D. ESTIMATED NET TAKE-HOME PAY', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+        ]));
+        rows.push(makeRow([
+            makeCell({ text: 'Net In-Hand Salary (Gross - Employee Deductions)', align: 'left', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.monthlyNet, align: 'right', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.annualNet, align: 'right', isBold: true, fill: totalFill })
+        ]));
+    }
+
     return `
         <w:tbl>
             <w:tblPr>
