@@ -51,7 +51,7 @@ const hrEmailLogSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['onboarding', 'general', 'offboarding'],
+        enum: ['onboarding', 'general', 'offboarding', 'adhoc', 'template'],
         default: 'general',
         index: true
     },
@@ -87,6 +87,10 @@ const hrEmailLogSchema = new mongoose.Schema({
     dossierSaved: {
         type: Boolean,
         default: false
+    },
+    dossierDocIds: {
+        type: [mongoose.Schema.Types.ObjectId],
+        default: []
     },
     dossierSaveError: {
         type: String,
