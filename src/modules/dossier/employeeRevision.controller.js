@@ -1785,15 +1785,21 @@ const sendRevisionLetter = async (req, res) => {
             options
         });
 
+        let message = result.emailSent
+            ? 'Revised offer letter generated and sent via email'
+            : 'Revised offer letter generated and saved to dossier';
+        if (result.warning) {
+            message += ` (${result.warning})`;
+        }
+
         return res.json({
-            message: result.emailSent
-                ? 'Revised offer letter generated and sent via email'
-                : 'Revised offer letter generated and saved to dossier',
+            message,
             result
         });
     } catch (error) {
         console.error('[sendRevisionLetter Error]:', error);
-        return res.status(500).json({ message: error.message || 'Failed to generate revision letter' });
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to generate revision letter' });
     }
 };
 
@@ -1823,7 +1829,8 @@ const downloadRevisionLetter = async (req, res) => {
         return res.send(result.buffer);
     } catch (error) {
         console.error('[downloadRevisionLetter Error]:', error);
-        return res.status(500).json({ message: error.message || 'Failed to download revision letter' });
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to download revision letter' });
     }
 };
 
@@ -1833,8 +1840,7 @@ const downloadRevisionLetter = async (req, res) => {
  */
 const bulkSendRevisionLetters = async (req, res) => {
     try {
-        const { employeeIds = [], options = {} } = req.body;
-
+        const { employeeIds, ...options } = req.body;
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
             return res.status(400).json({ message: 'No employees specified for bulk letter generation' });
         }
@@ -1852,7 +1858,8 @@ const bulkSendRevisionLetters = async (req, res) => {
         });
     } catch (error) {
         console.error('[bulkSendRevisionLetters Error]:', error);
-        return res.status(500).json({ message: error.message || 'Failed to dispatch bulk revision letters' });
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to process bulk revision letters' });
     }
 };
 

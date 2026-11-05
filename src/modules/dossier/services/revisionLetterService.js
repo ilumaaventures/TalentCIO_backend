@@ -22,6 +22,18 @@ const {
 /**
  * Upload a document buffer to Cloudinary in the employee dossier folder
  */
+const formatDateLabel = (d) => {
+    try {
+        const date = d ? new Date(d) : new Date();
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${y}${m}${day}`;
+    } catch {
+        return 'revision';
+    }
+};
+
 const uploadBufferToCloudinary = async (buffer, folder, filename) => {
     return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -222,30 +234,56 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
  * Loads the template content from URL or local default
  */
 const getTemplateBuffer = async (company, requestedTemplateId = null) => {
-    let targetUrl = null;
-
-    if (requestedTemplateId && requestedTemplateId !== 'default') {
-        const found = (company?.settings?.onboarding?.dynamicTemplates || []).find(
-            t => String(t._id) === String(requestedTemplateId)
-        );
-        if (found && found.url) targetUrl = found.url;
+    // If explicitly requested 'default', load the built-in professional template directly!
+    if (requestedTemplateId === 'default') {
+        const fallbackPath = path.join(__dirname, '../templates/defaultRevisionLetter.docx');
+        if (fs.existsSync(fallbackPath)) {
+            return {
+                buffer: fs.readFileSync(fallbackPath),
+                name: 'Built-in Professional Revision Offer Letter',
+                isCustom: false
+            };
+        }
     }
 
-    if (!targetUrl) {
+    let targetUrl = null;
+    let templateName = 'Custom Revision Letter';
+
+    if (requestedTemplateId && requestedTemplateId !== 'default') {
+        if (requestedTemplateId === 'company_offer' && company?.settings?.onboarding?.offerLetterTemplateUrl) {
+            targetUrl = company.settings.onboarding.offerLetterTemplateUrl;
+            templateName = 'Company Default Offer Letter';
+        } else {
+            const found = (company?.settings?.onboarding?.dynamicTemplates || []).find(
+                t => String(t._id) === String(requestedTemplateId)
+            );
+            if (found && found.url) {
+                targetUrl = found.url;
+                templateName = found.name || 'Custom Dynamic Template';
+            }
+        }
+    }
+
+    // Only if NO template was explicitly requested, look for a custom revision/restructure template
+    if (!requestedTemplateId && !targetUrl) {
         const dynamicRevision = (company?.settings?.onboarding?.dynamicTemplates || []).find(
-            t => /offer|revision|restructure/i.test(t.name)
+            t => /revision|restructure/i.test(t.name)
         );
         if (dynamicRevision && dynamicRevision.url) {
             targetUrl = dynamicRevision.url;
-        } else if (company?.settings?.onboarding?.offerLetterTemplateUrl) {
-            targetUrl = company.settings.onboarding.offerLetterTemplateUrl;
+            templateName = dynamicRevision.name;
         }
     }
 
     if (targetUrl && targetUrl.startsWith('http')) {
         try {
             const resp = await axios.get(targetUrl, { responseType: 'arraybuffer', timeout: 10000 });
-            return Buffer.from(resp.data);
+            return {
+                buffer: Buffer.from(resp.data),
+                name: templateName,
+                isCustom: true,
+                url: targetUrl
+            };
         } catch (e) {
             console.warn(`Failed to fetch remote template from ${targetUrl}, falling back to built-in template:`, e.message);
         }
@@ -254,29 +292,20 @@ const getTemplateBuffer = async (company, requestedTemplateId = null) => {
     // Built-in fallback
     const fallbackPath = path.join(__dirname, '../templates/defaultRevisionLetter.docx');
     if (fs.existsSync(fallbackPath)) {
-        return fs.readFileSync(fallbackPath);
+        return {
+            buffer: fs.readFileSync(fallbackPath),
+            name: 'Built-in Professional Revision Offer Letter',
+            isCustom: false
+        };
     }
 
     throw new Error('No template document found and fallback template is unavailable.');
 };
 
 /**
- * Generates the populated DOCX buffer for an employee revision
+ * Builds data dictionary for letter rendering
  */
-const generateRevisionLetterBuffer = async ({ user, profile, revision, company, config, templateId = null }) => {
-    const rawTemplateBuffer = await getTemplateBuffer(company, templateId);
-    const zip = new PizZip(rawTemplateBuffer);
-
-    let docXml = zip.file('word/document.xml').asText();
-    docXml = preprocessDocxXml(docXml);
-    zip.file('word/document.xml', docXml);
-
-    const doc = new Docxtemplater(zip, {
-        paragraphLoop: true,
-        linebreaks: true,
-        nullGetter: () => '—'
-    });
-
+const buildRevisionLetterData = ({ user, profile, revision, company, config }) => {
     const salaryData = revision?.metadata?.salaryBreakup || profile?.compensation?.salaryBreakup || profile?.compensation || {};
     const breakupDetails = computeSalaryBreakupDetails(salaryData, config);
 
@@ -284,29 +313,43 @@ const generateRevisionLetterBuffer = async ({ user, profile, revision, company, 
     const effectiveDateStr = formatDate(revision?.effectiveDate || new Date());
     const hrUser = revision?.createdBy || {};
     const hrName = hrUser.firstName ? `${hrUser.firstName} ${hrUser.lastName || ''}`.trim() : 'Authorized Signatory';
+    const hrDesignation = hrUser.designation || 'Human Resources';
 
-    doc.render({
+    const empPermAddr = profile?.personalDetails?.permanentAddress || profile?.personalDetails?.currentAddress || {};
+    const addressStr = [empPermAddr.line1, empPermAddr.line2].filter(Boolean).join(', ') || profile?.address || '—';
+    const cityStr = empPermAddr.city || '—';
+
+    const renderData = {
         company_name: company?.name || 'Company',
+        company_email: company?.email || '—',
+        company_website: company?.website || '—',
         offer_date: effectiveDateStr,
         effective_date: effectiveDateStr,
         employee_full_name: fullName,
         employee_first_name: user.firstName || 'Employee',
         employee_last_name: user.lastName || '',
-        employee_id: user.employeeCode || '—',
-        employee_code: user.employeeCode || '—',
+        employee_id: user.employeeCode || profile?.employment?.employeeId || '—',
+        employee_code: user.employeeCode || profile?.employment?.employeeId || '—',
         designation: profile?.employment?.designation || user.designation || '—',
         department: profile?.employment?.department || user.department || '—',
         work_location: profile?.employment?.workLocation || user.workLocation || '—',
         joining_date: formatDate(profile?.employment?.joiningDate || user.joiningDate),
+        probation_period: profile?.employment?.probationPeriod || 'Confirmed',
+        probationPeriod: profile?.employment?.probationPeriod || 'Confirmed',
+        employee_address: addressStr,
+        employee_city: cityStr,
+        employee_email: user.email || profile?.contact?.workEmail || '—',
+        employee_phone: user.phone || profile?.personalDetails?.phone || '—',
         annual_ctc: formatCurrency(breakupDetails.annualCTC),
         annual_salary: formatCurrency(breakupDetails.annualCTC),
         monthly_gross: formatCurrency(breakupDetails.monthlyGross),
         monthly_ctc: formatCurrency(breakupDetails.monthlyCTC),
         basic_salary: formatCurrency(breakupDetails.basicVal),
+        basic: formatCurrency(breakupDetails.basicVal),
         hra: formatCurrency(breakupDetails.hraVal),
         special_allowance: formatCurrency(breakupDetails.specialVal),
-        revision_reason: revision?.reason || 'Compensation Restructuring',
-        reason_for_revision: revision?.reason || 'Compensation Restructuring',
+        revision_reason: revision?.reason || 'Annual Appraisal & Hike',
+        reason_for_revision: revision?.reason || 'Annual Appraisal & Hike',
         net_take_home: formatCurrency(breakupDetails.netMonthly),
         monthly_net: formatCurrency(breakupDetails.netMonthly),
         annual_net: formatCurrency(breakupDetails.totals?.annualNet || breakupDetails.netMonthly * 12),
@@ -314,11 +357,20 @@ const generateRevisionLetterBuffer = async ({ user, profile, revision, company, 
         total_employer_contributions: formatCurrency(breakupDetails.totals?.monthlyContributions || 0),
         total_deductions: formatCurrency(breakupDetails.totals?.monthlyDeductions || 0),
         current_date: formatDate(new Date()),
+        date: effectiveDateStr,
         hr_name: hrName,
         authorized_signatory: hrName,
         signatory: hrName,
+        signatory_name: hrName,
+        signatory_designation: hrDesignation,
+        hr_designation: hrDesignation,
+        employee_signature: fullName,
+        employee_signature_name: fullName,
+        candidate_signature: fullName,
+        signature: hrName,
         salary_table: breakupDetails.salaryTableXml,
         salaryTable: breakupDetails.salaryTableXml,
+        salarytable: breakupDetails.salaryTableXml,
         earnings_breakdown: breakupDetails.earningsList || [],
         contributions_breakdown: breakupDetails.contributionsList || [],
         deductions_breakdown: breakupDetails.deductionsList || [],
@@ -327,9 +379,93 @@ const generateRevisionLetterBuffer = async ({ user, profile, revision, company, 
             ...(breakupDetails.contributionsList || []).map(c => ({ category: 'Employer Contributions', ...c })),
             ...(breakupDetails.deductionsList || []).map(d => ({ category: 'Employee Deductions', ...d }))
         ]
+    };
+
+    if (config && config.salaryComponents) {
+        config.salaryComponents.forEach(c => {
+            const val = salaryData[c.id] || 0;
+            const formatted = formatCurrency(val);
+            renderData[c.id] = formatted;
+            renderData[`${c.id}_annual`] = formatCurrency(val * 12);
+            const cleanId = c.id.replace(/([A-Z])/g, '_$1').toLowerCase();
+            renderData[cleanId] = formatted;
+            renderData[`${cleanId}_annual`] = formatCurrency(val * 12);
+            if (!cleanId.endsWith('_allowance')) {
+                renderData[`${cleanId}_allowance`] = formatted;
+                renderData[`${cleanId}_allowance_annual`] = formatCurrency(val * 12);
+            }
+        });
+    }
+
+    return { renderData, breakupDetails };
+};
+
+/**
+ * Pure helper to render DOCX with Docxtemplater
+ */
+const renderDocxZip = (rawBuffer, renderData) => {
+    const zip = new PizZip(rawBuffer);
+    let docXml = zip.file('word/document.xml').asText();
+    docXml = preprocessDocxXml(docXml);
+    zip.file('word/document.xml', docXml);
+
+    const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        nullGetter: (part) => {
+            if (part && part.module === 'rawxml') return '';
+            return '—';
+        }
     });
 
+    doc.render(renderData);
     return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+};
+
+/**
+ * Generates the populated DOCX buffer for an employee revision
+ */
+const generateRevisionLetterBuffer = async ({ user, profile, revision, company, config, templateId = null }) => {
+    const templateInfo = await getTemplateBuffer(company, templateId);
+    const { renderData, breakupDetails } = buildRevisionLetterData({ user, profile, revision, company, config });
+
+    try {
+        const buffer = renderDocxZip(templateInfo.buffer, renderData);
+        buffer.usedTemplateName = templateInfo.name;
+        buffer.fallbackUsed = false;
+        buffer.breakupDetails = breakupDetails;
+        return buffer;
+    } catch (renderErr) {
+        const errorDetails = (renderErr.properties?.errors || [])
+            .map(e => e.properties?.explanation || e.message)
+            .filter(Boolean);
+        const detailedMsg = errorDetails.length > 0 ? errorDetails.join('; ') : (renderErr.message || 'Template syntax error');
+        console.warn(`[RevisionLetter] Failed to render template "${templateInfo.name}": ${detailedMsg}`);
+
+        // If a custom template failed, FALL BACK to the built-in default template so employee letter generation NEVER fails!
+        if (templateInfo.isCustom) {
+            console.warn('[RevisionLetter] Automatically falling back to built-in defaultRevisionLetter.docx...');
+            try {
+                const fallbackPath = path.join(__dirname, '../templates/defaultRevisionLetter.docx');
+                if (fs.existsSync(fallbackPath)) {
+                    const fallbackBuffer = fs.readFileSync(fallbackPath);
+                    const buffer = renderDocxZip(fallbackBuffer, renderData);
+                    buffer.usedTemplateName = 'Built-in Professional Revision Offer Letter';
+                    buffer.fallbackUsed = true;
+                    buffer.warning = `Custom template "${templateInfo.name}" had syntax errors (${detailedMsg}). Generated using standard professional template.`;
+                    buffer.breakupDetails = breakupDetails;
+                    return buffer;
+                }
+            } catch (fallbackErr) {
+                console.error('[RevisionLetter] Built-in fallback also failed:', fallbackErr);
+            }
+        }
+
+        const enhancedError = new Error(detailedMsg);
+        enhancedError.name = 'TemplateRenderError';
+        enhancedError.details = errorDetails;
+        throw enhancedError;
+    }
 };
 
 /**
@@ -345,8 +481,25 @@ const generateAndDispatchRevisionLetter = async ({
     const user = await User.findOne({ _id: userId, companyId });
     if (!user) throw new Error('Employee not found');
 
-    const profile = await EmployeeProfile.findOne({ user: user._id, companyId });
-    if (!profile) throw new Error('Employee dossier profile not found');
+    const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Employee';
+
+    let profile = await EmployeeProfile.findOne({ user: user._id, companyId });
+    if (!profile) {
+        profile = new EmployeeProfile({
+            user: user._id,
+            companyId,
+            personal: {
+                firstName: user.firstName,
+                lastName: user.lastName || ''
+            },
+            employment: {
+                designation: user.designation || 'Employee',
+                department: user.department || 'General',
+                joiningDate: user.joiningDate || new Date()
+            },
+            compensation: user.compensation || {}
+        });
+    }
 
     const company = await Company.findById(companyId);
     const config = await PayrollConfig.findOne({ companyId });
@@ -370,7 +523,7 @@ const generateAndDispatchRevisionLetter = async ({
     });
 
     const safeName = `${user.firstName}_${user.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
-    const effectiveDateLabel = revision?.effectiveDate ? format(new Date(revision.effectiveDate), 'yyyyMMdd') : format(new Date(), 'yyyyMMdd');
+    const effectiveDateLabel = formatDateLabel(revision?.effectiveDate);
     const filename = `Revised_Offer_Letter_${safeName}_${effectiveDateLabel}.docx`;
 
     let fileUrl = '';
@@ -480,7 +633,9 @@ const generateAndDispatchRevisionLetter = async ({
         fileUrl,
         emailSent,
         emailError,
-        buffer: docxBuffer
+        buffer: docxBuffer,
+        fallbackUsed: docxBuffer?.fallbackUsed || false,
+        warning: docxBuffer?.warning || null
     };
 };
 
