@@ -671,7 +671,11 @@ exports.sendHREmail = async (req, res) => {
                     recipientEmail: resolvedEmail,
                     subject: resolvedSubject,
                     body: resolvedHtml,
-                    type: selectedTemplate ? 'template' : 'adhoc',
+                    type: req.body?.type && ['onboarding', 'general', 'offboarding', 'adhoc', 'template'].includes(req.body.type)
+                        ? req.body.type
+                        : (['onboarding', 'offboarding'].includes(selectedTemplate?.templateType)
+                            ? selectedTemplate.templateType
+                            : 'general'),
                     templateId: selectedTemplate?._id || null,
                     templateName: selectedTemplate?.name || '',
                     emailAccountId: emailAccountSnapshot.emailAccountId,
@@ -734,7 +738,7 @@ exports.getHistory = async (req, res) => {
 
         const query = {
             companyId: req.companyId,
-            type
+            type: type === 'general' ? { $in: ['general', 'adhoc', 'template'] } : type
         };
 
         if (emailList.length > 0) {
