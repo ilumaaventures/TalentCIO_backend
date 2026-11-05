@@ -233,7 +233,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     includeGratuityInCTC
   });
 
-  const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? config.defaultInsurance) : 0;
+  const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? source.insurance ?? config.defaultInsurance) : 0;
   const employerNPS = roundAmount(source.employerNPS);
 
   const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || source.customAllowances || [];
@@ -671,7 +671,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
     includeGratuityInCTC: parseBoolVal(calculatedSalary.includeGratuityInCTC, true),
     useSalaryComponents: parseBoolVal(calculatedSalary.useSalaryComponents, true),
     ptState: calculatedSalary.ptState || 'MH',
-    insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
+    insuranceAmount: parseFloat(calculatedSalary.insuranceAmount !== undefined ? calculatedSalary.insuranceAmount : calculatedSalary.insurance) || 0,
     employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
     hourlyRate: parseFloat(calculatedSalary.hourlyRate) || 0,
     hoursWorked: parseFloat(calculatedSalary.hoursWorked) || 160,
@@ -713,6 +713,9 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
         }
         if (customVal === undefined && c.id === 'medical') {
           customVal = calculatedSalary['medicalAllowance'];
+        }
+        if (customVal === undefined && (c.id === 'insurance' || c.id === 'insuranceAmount')) {
+          customVal = calculatedSalary['insuranceAmount'] !== undefined ? calculatedSalary['insuranceAmount'] : calculatedSalary['insurance'];
         }
         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
       }

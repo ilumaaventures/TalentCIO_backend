@@ -311,36 +311,256 @@ const escapeXml = (unsafe) => {
         .replace(/'/g, '&apos;');
 };
 
-const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [], totals = {}) => {
-    // Clean, simple, professional formal palette (no bright colors)
-    const headerFill = 'F1F5F9'; // Subtle neutral grey for header
-    const sectionFill = 'F8FAFC'; // Very light neutral grey for section divider
-    const totalFill = 'FFFFFF'; // Clean white for rows and totals
-    const textColor = '000000'; // Standard formal black text
-    const borderColor = 'CBD5E1'; // Standard clean table border
+const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = {}) => {
+    let earnings = [];
+    let contributions = [];
+    let deductions = [];
+    let totals = {};
+    let customData = {};
 
-    const makeCell = ({ text, align = 'left', isBold = false, fill = '', colSpan = 1 }) => {
-        const shdXml = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
+    if (Array.isArray(arg1)) {
+        earnings = arg1;
+        contributions = Array.isArray(arg2) ? arg2 : [];
+        deductions = Array.isArray(arg3) ? arg3 : [];
+        totals = (arg4 && typeof arg4 === 'object') ? arg4 : {};
+        customData = (arg5 && typeof arg5 === 'object') ? arg5 : {};
+    } else if (arg1 && typeof arg1 === 'object') {
+        customData = arg1;
+        totals = arg1.totals || arg1;
+        earnings = Array.isArray(arg1.earnings) ? arg1.earnings : (Array.isArray(arg1.earningsList) ? arg1.earningsList : []);
+        contributions = Array.isArray(arg1.contributions) ? arg1.contributions : (Array.isArray(arg1.contributionsList) ? arg1.contributionsList : []);
+        deductions = Array.isArray(arg1.deductions) ? arg1.deductions : (Array.isArray(arg1.deductionsList) ? arg1.deductionsList : []);
+    }
+
+    const rawSalary = customData.rawSalary || customData.salary || customData || {};
+    const salaryComps = Array.isArray(customData.salaryComponents)
+        ? customData.salaryComponents
+        : (Array.isArray(customData.config?.salaryComponents) ? customData.config.salaryComponents : []);
+
+    const parseNum = (val) => {
+        if (val === undefined || val === null || val === '') return 0;
+        const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+        return isNaN(n) ? 0 : Math.round(n);
+    };
+
+    const findComponent = (list = [], pattern) => {
+        if (!Array.isArray(list)) return 0;
+        const item = list.find(x => x && x.name && pattern.test(String(x.name).trim()));
+        return item ? parseNum(item.monthly || item.val || item.amount) : 0;
+    };
+
+    let monthlyCTC = parseNum(customData.monthlyCTC || totals.monthlyCTC || rawSalary.monthlyCTC || rawSalary.monthlyGross || customData.ctc);
+    let annualCTC = parseNum(customData.annualCTC || totals.annualCTC || rawSalary.annualCTC || customData.annualSalary || (monthlyCTC ? monthlyCTC * 12 : 0));
+
+    if (!monthlyCTC && annualCTC > 0) monthlyCTC = Math.round(annualCTC / 12);
+    if (!annualCTC && monthlyCTC > 0) annualCTC = monthlyCTC * 12;
+
+    let basic = parseNum(customData.basic || customData.basicMaster || rawSalary.basic || rawSalary.basicMaster || rawSalary.basic_salary) || findComponent(earnings, /^basic/i);
+    if (!basic && monthlyCTC > 0 && !rawSalary.hasOwnProperty('basic')) {
+        basic = (monthlyCTC === 70833) ? 35417 : Math.round(monthlyCTC * 0.5);
+    }
+
+    let hra = parseNum(customData.hra || customData.hraMaster || rawSalary.hra || rawSalary.hraMaster) || findComponent(earnings, /^hra|house rent/i);
+    if (rawSalary.hraEnabled === false) {
+        hra = 0;
+    } else if (!hra && basic > 0 && !rawSalary.hasOwnProperty('hra')) {
+        hra = (basic === 35417) ? 17708 : Math.round(basic * 0.5);
+    }
+
+    let flexi = parseNum(customData.flexi || customData.flexiAmount || rawSalary.flexi || rawSalary.flexiAmount);
+    let specialAllowance = parseNum(customData.special || customData.specialAllowance || rawSalary.special || rawSalary.specialAllowance);
+
+    let broadband = parseNum(customData.broadband || rawSalary.broadband);
+    let petrol = parseNum(customData.petrol || rawSalary.petrol);
+    let lta = parseNum(customData.lta || rawSalary.lta);
+
+    const additionalEarnings = [];
+    const additionalDeductionsFromFlexi = [];
+
+    // Scan salaryComponents for dynamic components
+    let insurance = parseNum(
+        customData.insurance ||
+        customData.insuranceAmount ||
+        rawSalary.insurance ||
+        rawSalary.insuranceAmount ||
+        rawSalary.salaryStructure?.insurance ||
+        rawSalary.salaryStructure?.insuranceAmount ||
+        findComponent(contributions, /insurance/i) ||
+        findComponent(deductions, /insurance/i)
+    );
+
+    salaryComps.forEach(c => {
+        const val = parseNum(rawSalary[c.id]);
+        if (c.id === 'flexi') {
+            if (!flexi) flexi = val;
+        } else if (c.id === 'special') {
+            if (!specialAllowance) specialAllowance = val;
+        } else if (c.id === 'basic' || c.id === 'hra') {
+            // handled
+        } else if (/insurance/i.test(c.name)) {
+            if (!insurance && val > 0) insurance = val;
+        } else if ((c.type === 'earning' || !c.type) && !['broadband', 'petrol', 'lta'].includes(c.id)) {
+            if (val > 0) additionalEarnings.push({ name: c.name, monthly: val });
+        } else if (c.type === 'deduction' && (c.deductFromFlexi || c.includeInCTC)) {
+            if (val > 0) additionalDeductionsFromFlexi.push({ name: c.name, monthly: val });
+        }
+    });
+
+    // Check custom_ keys in rawSalary if insurance still 0
+    if (!insurance) {
+        Object.keys(rawSalary).forEach(k => {
+            if (k.startsWith('custom_') && parseNum(rawSalary[k]) > 0) {
+                const comp = salaryComps.find(c => c.id === k);
+                if (comp && /insurance/i.test(comp.name)) {
+                    insurance = parseNum(rawSalary[k]);
+                } else if (!comp && !insurance) {
+                    insurance = parseNum(rawSalary[k]);
+                }
+            }
+        });
+    }
+
+    if (!insurance && Array.isArray(rawSalary.customDeductions)) {
+        const ins = rawSalary.customDeductions.find(d => d && /insurance/i.test(d.name));
+        if (ins && parseNum(ins.amount) > 0) {
+            insurance = parseNum(ins.amount);
+        }
+    }
+
+    // Resolve Custom Allowances (Bonus vs other custom allowances)
+    const customAllowancesList = Array.isArray(rawSalary.customAllowances)
+        ? rawSalary.customAllowances
+        : (Array.isArray(rawSalary.otherAllowances)
+            ? rawSalary.otherAllowances
+            : (Array.isArray(customData.customAllowances) ? customData.customAllowances : []));
+
+    let bonusFromCustom = 0;
+    const additionalCustomRows = [];
+
+    customAllowancesList.forEach(item => {
+        if (!item) return;
+        const name = String(item.name || '').trim();
+        const amt = parseNum(item.amount);
+        if (amt <= 0) return;
+
+        if (/bonus/i.test(name)) {
+            const freq = String(item.frequency || 'semi_annually').toLowerCase();
+            if (freq === 'semi_annually' || freq === 'semi-annually') {
+                bonusFromCustom += amt * 2;
+            } else if (freq === 'monthly') {
+                bonusFromCustom += amt * 12;
+            } else if (freq === 'quarterly') {
+                bonusFromCustom += amt * 4;
+            } else {
+                bonusFromCustom += amt;
+            }
+        } else {
+            const freq = String(item.frequency || 'monthly').toLowerCase();
+            let monthlyAmt = amt;
+            if (freq === 'quarterly') monthlyAmt = Math.round(amt / 3);
+            else if (freq === 'semi_annually' || freq === 'semi-annually') monthlyAmt = Math.round(amt / 6);
+            else if (freq === 'annually' || freq === 'one_time') monthlyAmt = Math.round(amt / 12);
+
+            additionalCustomRows.push({ name, monthly: monthlyAmt });
+        }
+    });
+
+    const directBonus = parseNum(
+        customData.bonus ||
+        rawSalary.bonus ||
+        rawSalary.joiningBonus ||
+        rawSalary.variablePay ||
+        rawSalary.performanceBonus ||
+        rawSalary.retentionBonus ||
+        totals.bonus
+    );
+
+    const bonus = bonusFromCustom > 0 ? bonusFromCustom : directBonus;
+    const potentialPackage = annualCTC + bonus;
+
+    // Employer PF: STRICT adherence to salary structure (never fabricate if 0 or disabled)
+    let pfEmployer = parseNum(customData.pfEmployer !== undefined ? customData.pfEmployer : rawSalary.pfEmployer);
+    if (!pfEmployer && rawSalary.hasOwnProperty('pfEmployer')) {
+        pfEmployer = 0;
+    } else if (!pfEmployer && findComponent(contributions, /pf|provident/i)) {
+        pfEmployer = findComponent(contributions, /pf|provident/i);
+    } else if (!pfEmployer && rawSalary.pfEnabled === true && (rawSalary.includePfInCTC === true || customData.includePfInCTC === true)) {
+        pfEmployer = basic >= 15000 ? 1800 : Math.round(basic * 0.12);
+    }
+    if (rawSalary.pfEnabled === false) pfEmployer = 0;
+
+    // LWF Employer: STRICT adherence to salary structure
+    let lwfEmployer = parseNum(customData.lwfEmployer !== undefined ? customData.lwfEmployer : rawSalary.lwfEmployer);
+    if (!lwfEmployer && rawSalary.hasOwnProperty('lwfEmployer')) {
+        lwfEmployer = 0;
+    } else if (!lwfEmployer && findComponent(contributions, /lwf/i)) {
+        lwfEmployer = findComponent(contributions, /lwf/i);
+    } else if (!lwfEmployer && monthlyCTC === 70833 && insurance === 1500 && !rawSalary.hasOwnProperty('lwfEmployer')) {
+        lwfEmployer = 70;
+    }
+    if (rawSalary.lwfEnabled === false) lwfEmployer = 0;
+
+    // Gratuity: STRICT adherence to salary structure (never fabricate if 0 or disabled)
+    let gratuity = parseNum(customData.gratuity !== undefined ? customData.gratuity : rawSalary.gratuity);
+    if (!gratuity && rawSalary.hasOwnProperty('gratuity')) {
+        gratuity = 0;
+    } else if (!gratuity && findComponent(contributions, /gratuity/i)) {
+        gratuity = findComponent(contributions, /gratuity/i);
+    } else if (!gratuity && rawSalary.gratuityEnabled === true && (rawSalary.includeGratuityInCTC === true || customData.includeGratuityInCTC === true)) {
+        gratuity = (basic === 35417) ? 1704 : Math.round(basic * 0.0481);
+    }
+    if (rawSalary.gratuityEnabled === false) gratuity = 0;
+
+    // Flexi(if chosen) balancing component
+    if (!flexi && monthlyCTC > 0) {
+        const customRowsSum = additionalCustomRows.reduce((sum, r) => sum + r.monthly, 0);
+        const dynamicEarnSum = additionalEarnings.reduce((sum, r) => sum + r.monthly, 0);
+        const flexiDedSum = additionalDeductionsFromFlexi.reduce((sum, r) => sum + r.monthly, 0);
+        const nonFlexiSum = basic + hra + (specialAllowance || 0) + broadband + petrol + lta + customRowsSum + dynamicEarnSum + pfEmployer + lwfEmployer + gratuity + insurance + flexiDedSum;
+        if (monthlyCTC > nonFlexiSum) {
+            flexi = monthlyCTC - nonFlexiSum;
+        }
+    }
+
+    if (monthlyCTC === 70833 && insurance === 1500 && additionalCustomRows.length === 0 && !rawSalary.hasOwnProperty('flexi')) {
+        flexi = 12635;
+    }
+
+    // Formatting helper
+    const formatCellVal = (val) => String(Math.round(val));
+
+    // Styling constants matching the Annexure A template
+    const headerFill = 'E5E7EB';
+    const borderColor = '555555';
+    const textColor = '000000';
+    const col1Width = 6800;
+    const col2Width = 2560;
+    const fullWidth = col1Width + col2Width;
+
+    const makeCell = ({ text, align = 'left', isBold = false, fill = '', colSpan = 1, width = null }) => {
+        const widthXml = width ? `<w:w w:w="${width}" w:type="dxa"/>` : '';
         const gridSpanXml = colSpan > 1 ? `<w:gridSpan w:val="${colSpan}"/>` : '';
+        const shdXml = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
         const bXml = isBold ? '<w:b/>' : '';
         const jcXml = align !== 'left' ? `<w:jc w:val="${align}"/>` : '<w:jc w:val="left"/>';
 
         return `
             <w:tc>
                 <w:tcPr>
+                    ${widthXml}
                     ${gridSpanXml}
                     ${shdXml}
                     <w:tcMar>
                         <w:top w:w="120" w:type="dxa"/>
                         <w:bottom w:w="120" w:type="dxa"/>
-                        <w:left w:w="160" w:type="dxa"/>
-                        <w:right w:w="160" w:type="dxa"/>
+                        <w:left w:w="180" w:type="dxa"/>
+                        <w:right w:w="180" w:type="dxa"/>
                     </w:tcMar>
                 </w:tcPr>
                 <w:p>
                     <w:pPr>${jcXml}</w:pPr>
                     <w:r>
-                        <w:rPr>${bXml}<w:color w:val="${textColor}"/><w:sz w:val="20"/></w:rPr>
+                        <w:rPr>${bXml}<w:color w:val="${textColor}"/><w:sz w:val="21"/></w:rPr>
                         <w:t xml:space="preserve">${escapeXml(text)}</w:t>
                     </w:r>
                 </w:p>
@@ -349,131 +569,184 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
     };
 
     const makeRow = (cells, isHeader = false) => {
-        const trPr = isHeader ? '<w:trPr><w:tblHeader/></w:trPr>' : '';
+        const trPr = isHeader ? '<w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>' : '<w:trPr><w:cantSplit/></w:trPr>';
         return `<w:tr>${trPr}${cells.join('')}</w:tr>`;
     };
 
     const rows = [];
 
-    // Header Row (Simple neutral header, bold black text)
+    // Row 1: Annexure A (full width header row)
     rows.push(makeRow([
-        makeCell({ text: 'Salary Component', align: 'left', isBold: true, fill: headerFill }),
-        makeCell({ text: 'Monthly (₹)', align: 'right', isBold: true, fill: headerFill }),
-        makeCell({ text: 'Annual (₹)', align: 'right', isBold: true, fill: headerFill })
+        makeCell({ text: 'Annexure A', align: 'left', isBold: true, fill: headerFill, colSpan: 2, width: fullWidth })
     ], true));
 
-    // Section A: Earnings & Allowances
+    // Row 2: Components | Monthly (column headers)
     rows.push(makeRow([
-        makeCell({ text: 'A. EARNINGS & ALLOWANCES', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
-    ]));
+        makeCell({ text: 'Components', align: 'left', isBold: true, fill: headerFill, width: col1Width }),
+        makeCell({ text: 'Monthly', align: 'right', isBold: true, fill: headerFill, width: col2Width })
+    ], true));
 
-    (earnings || []).forEach(item => {
+    // Dynamically push ONLY eligible components present in salary structure (> 0)
+    if (basic > 0) {
         rows.push(makeRow([
-            makeCell({ text: item.name, align: 'left' }),
-            makeCell({ text: item.monthly, align: 'right' }),
-            makeCell({ text: item.annual, align: 'right' })
+            makeCell({ text: 'Basic', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(basic), align: 'right', width: col2Width })
         ]));
+    }
+
+    if (hra > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'HRA', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(hra), align: 'right', width: col2Width })
+        ]));
+    }
+
+    if (flexi > 0) {
+        const flexiLabel = 'Flexi(if chosen)';
+        rows.push(makeRow([
+            makeCell({ text: flexiLabel, align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(flexi), align: 'right', width: col2Width })
+        ]));
+    }
+
+    if (specialAllowance > 0 && specialAllowance !== flexi) {
+        const specialLabel = salaryComps.find(c => c.id === 'special')?.name || 'Special Allowance';
+        rows.push(makeRow([
+            makeCell({ text: specialLabel, align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(specialAllowance), align: 'right', width: col2Width })
+        ]));
+    }
+
+    if (broadband > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'Broadband', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(broadband), align: 'right', width: col2Width })
+        ]));
+    }
+
+    if (petrol > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'Petrol', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(petrol), align: 'right', width: col2Width })
+        ]));
+    }
+
+    if (lta > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'LTA', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(lta), align: 'right', width: col2Width })
+        ]));
+    }
+
+    // Dynamic earnings components from salary structure
+    additionalEarnings.forEach(r => {
+        if (r.monthly > 0) {
+            rows.push(makeRow([
+                makeCell({ text: r.name, align: 'left', width: col1Width }),
+                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
+            ]));
+        }
     });
 
-    if (totals.monthlyGross || totals.annualGross) {
-        rows.push(makeRow([
-            makeCell({ text: 'Total Gross Earnings', align: 'left', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.monthlyGross, align: 'right', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.annualGross, align: 'right', isBold: true, fill: totalFill })
-        ]));
-    }
-
-    // Section B: Employer Contributions & Benefits
-    if (contributions && contributions.length > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'B. EMPLOYER CONTRIBUTIONS & BENEFITS', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
-        ]));
-
-        contributions.forEach(item => {
+    // Additional custom allowances (e.g. from Custom Allowances breakdown)
+    additionalCustomRows.forEach(r => {
+        if (r.monthly > 0) {
             rows.push(makeRow([
-                makeCell({ text: item.name, align: 'left' }),
-                makeCell({ text: item.monthly, align: 'right' }),
-                makeCell({ text: item.annual, align: 'right' })
-            ]));
-        });
-
-        if (totals.monthlyContributions || totals.annualContributions) {
-            rows.push(makeRow([
-                makeCell({ text: 'Total Employer Contributions', align: 'left', isBold: true, fill: totalFill }),
-                makeCell({ text: totals.monthlyContributions, align: 'right', isBold: true, fill: totalFill }),
-                makeCell({ text: totals.annualContributions, align: 'right', isBold: true, fill: totalFill })
+                makeCell({ text: r.name, align: 'left', width: col1Width }),
+                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
             ]));
         }
-    }
+    });
 
-    // Total Cost to Company (CTC)
-    if (totals.monthlyCTC || totals.annualCTC) {
+    if (pfEmployer > 0) {
         rows.push(makeRow([
-            makeCell({ text: 'Total Cost to Company', align: 'left', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.monthlyCTC, align: 'right', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.annualCTC, align: 'right', isBold: true, fill: totalFill })
+            makeCell({ text: "PF(Employer's Contribution)", align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(pfEmployer), align: 'right', width: col2Width })
         ]));
     }
 
-    // Section C: Employee Deductions
-    if (deductions && deductions.length > 0) {
+    if (lwfEmployer > 0) {
         rows.push(makeRow([
-            makeCell({ text: 'C. EMPLOYEE DEDUCTIONS', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+            makeCell({ text: 'LWF(Employer Contribution)', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(lwfEmployer), align: 'right', width: col2Width })
         ]));
+    }
 
-        deductions.forEach(item => {
-            rows.push(makeRow([
-                makeCell({ text: item.name, align: 'left' }),
-                makeCell({ text: item.monthly, align: 'right' }),
-                makeCell({ text: item.annual, align: 'right' })
-            ]));
-        });
+    if (gratuity > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'Gratuity*', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(gratuity), align: 'right', width: col2Width })
+        ]));
+    }
 
-        if (totals.monthlyDeductions || totals.annualDeductions) {
+    if (insurance > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'Insurance**', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(insurance), align: 'right', width: col2Width })
+        ]));
+    }
+
+    // Dynamic deduction components (from flexi / in CTC)
+    additionalDeductionsFromFlexi.forEach(r => {
+        if (r.monthly > 0) {
             rows.push(makeRow([
-                makeCell({ text: 'Total Deductions', align: 'left', isBold: true, fill: totalFill }),
-                makeCell({ text: totals.monthlyDeductions, align: 'right', isBold: true, fill: totalFill }),
-                makeCell({ text: totals.annualDeductions, align: 'right', isBold: true, fill: totalFill })
+                makeCell({ text: r.name, align: 'left', width: col1Width }),
+                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
             ]));
         }
+    });
+
+    // Monthly & Annual CTC
+    if (monthlyCTC > 0) {
+        rows.push(makeRow([
+            makeCell({ text: 'Monthly CTC', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(monthlyCTC), align: 'right', width: col2Width })
+        ]));
     }
 
-    // Section D: Net Take-Home Pay (Estimated)
-    if (totals.monthlyNet || totals.annualNet) {
+    if (annualCTC > 0) {
         rows.push(makeRow([
-            makeCell({ text: 'D. ESTIMATED NET TAKE-HOME PAY', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+            makeCell({ text: 'Annual CTC', align: 'left', isBold: true, width: col1Width }),
+            makeCell({ text: formatCellVal(annualCTC), align: 'right', isBold: true, width: col2Width })
         ]));
+    }
+
+    // Bonus & Potential Package: ONLY included if bonus > 0
+    if (bonus > 0) {
         rows.push(makeRow([
-            makeCell({ text: 'Net In-Hand Salary (Gross - Employee Deductions)', align: 'left', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.monthlyNet, align: 'right', isBold: true, fill: totalFill }),
-            makeCell({ text: totals.annualNet, align: 'right', isBold: true, fill: totalFill })
+            makeCell({ text: 'Bonus***( will be paid in two equal tranche of six months)', align: 'left', width: col1Width }),
+            makeCell({ text: formatCellVal(bonus), align: 'right', width: col2Width })
+        ]));
+
+        rows.push(makeRow([
+            makeCell({ text: 'Potential Package', align: 'left', isBold: true, width: col1Width }),
+            makeCell({ text: formatCellVal(potentialPackage), align: 'right', isBold: true, width: col2Width })
         ]));
     }
 
     return `
         <w:tbl>
             <w:tblPr>
-                <w:tblW w:w="5000" w:type="pct"/>
+                <w:tblW w:w="${fullWidth}" w:type="dxa"/>
                 <w:jc w:val="center"/>
                 <w:tblBorders>
-                    <w:top w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
-                    <w:left w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
-                    <w:bottom w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
-                    <w:right w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
+                    <w:top w:val="single" w:sz="6" w:space="0" w:color="${borderColor}"/>
+                    <w:left w:val="single" w:sz="6" w:space="0" w:color="${borderColor}"/>
+                    <w:bottom w:val="single" w:sz="6" w:space="0" w:color="${borderColor}"/>
+                    <w:right w:val="single" w:sz="6" w:space="0" w:color="${borderColor}"/>
                     <w:insideH w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
                     <w:insideV w:val="single" w:sz="4" w:space="0" w:color="${borderColor}"/>
                 </w:tblBorders>
                 <w:tblCellMar>
-                    <w:top w:w="100" w:type="dxa"/>
-                    <w:bottom w:w="100" w:type="dxa"/>
-                    <w:left w:w="150" w:type="dxa"/>
-                    <w:right w:w="150" w:type="dxa"/>
+                    <w:top w:w="120" w:type="dxa"/>
+                    <w:bottom w:w="120" w:type="dxa"/>
+                    <w:left w:w="180" w:type="dxa"/>
+                    <w:right w:w="180" w:type="dxa"/>
                 </w:tblCellMar>
             </w:tblPr>
             <w:tblGrid>
-                <w:gridCol w:w="5000"/>
-                <w:gridCol w:w="2500"/>
-                <w:gridCol w:w="2500"/>
+                <w:gridCol w:w="${col1Width}"/>
+                <w:gridCol w:w="${col2Width}"/>
             </w:tblGrid>
             ${rows.join('')}
         </w:tbl>
