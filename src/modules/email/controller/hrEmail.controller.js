@@ -735,6 +735,7 @@ exports.sendHREmail = async (req, res) => {
                     name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || resolvedEmail,
                     dossierSaved,
                     dossierSaveError,
+                    dossierDocIds: dossierDocIds || [],
                     dossierAttachmentsCount: userDossierAttachments.length
                 });
             } catch (recipientError) {
@@ -749,6 +750,8 @@ exports.sendHREmail = async (req, res) => {
 
         return res.json({
             message: `Sent to ${sent.length} recipient${sent.length === 1 ? '' : 's'}${failed.length > 0 ? `, ${failed.length} failed` : ''}.`,
+            totalSent: sent.length,
+            totalFailed: failed.length,
             sentCount: sent.length,
             failedCount: failed.length,
             sent,
