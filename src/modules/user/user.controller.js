@@ -14,7 +14,9 @@ const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.servi
 const { buildMasterSalaryStructure, buildPayrollSnapshot, processCalculatedSalary } = require('../payroll/payrollMath');
 const PayrollConfig = require('../payroll/payrollConfig.model');
 const emailService = require('../../services/emailService');
-const { resolveRolesWithInheritance } = require('../../utils/permissionResolver');
+const { resolveRolesWithInheritance, getAllPermissions } = require('../../utils/permissionResolver');
+
+const checkedLivePhotoUsers = new Set();
 
 const getRoleName = (role) => (typeof role === 'string' ? role : role?.name);
 
@@ -711,23 +713,28 @@ const getMyself = async (req, res) => {
         const roleNames = roles.map(role => role.name);
         let permissions = [...new Set(req.user.permissions || [])];
         let hasAllPermissions = permissions.includes('*');
+        const hasTAAccessByPermission = hasDirectTAPermission(permissions);
+        const hasTAAnalyticsAccessByPermission = hasAllPermissions
+            || permissions.includes('ta.manage')
+            || permissions.includes('ta.analytics.global')
+            || permissions.includes('ta.analytics.assigned');
 
-        const [
-            totalPerms,
-            directReportsCount,
-            subordinates,
-            taCount,
-            reportingManagers,
-            company,
-            analyticsViewerCount,
-            dossierProfile
-        ] = await Promise.all([
-            hasAllPermissions ? Promise.resolve(0) : Permission.countDocuments({ key: { $ne: '*' } }),
-            User.countDocuments({ reportingManagers: req.user._id, companyId: effectiveCompanyId }),
-            User.find({ reportingManagers: req.user._id, companyId: effectiveCompanyId })
-                .select('firstName lastName email department')
-                .lean(),
-            HiringRequest.countDocuments({
+        // Resolve reporting managers query cleanly — avoid redundant findById(self) populate
+        const userReportingManagerIds = Array.isArray(req.user.reportingManagers)
+            ? req.user.reportingManagers.filter(Boolean)
+            : [];
+
+        const reportingManagersPromise = userReportingManagerIds.length > 0
+            ? User.find({ _id: { $in: userReportingManagerIds } })
+                .select('firstName lastName email')
+                .lean()
+                .then(managers => ({ reportingManagers: managers }))
+            : Promise.resolve({ reportingManagers: [] });
+
+        // Skip expensive HiringRequest queries if permissions already grant access
+        const taCountPromise = hasTAAccessByPermission
+            ? Promise.resolve(0)
+            : HiringRequest.countDocuments({
                 companyId: effectiveCompanyId,
                 $or: [
                     { createdBy: req.user._id },
@@ -736,37 +743,58 @@ const getMyself = async (req, res) => {
                     { 'ownership.interviewPanel': req.user._id },
                     ...(getAssignedClientNames(req.user).length > 0 ? [{ client: { $in: getAssignedClientNames(req.user) } }] : [])
                 ]
-            }),
-            User.findById(req.user._id).select('reportingManagers').populate('reportingManagers', 'firstName lastName email').lean(),
+            });
+
+        const analyticsViewerCountPromise = hasTAAnalyticsAccessByPermission
+            ? Promise.resolve(0)
+            : HiringRequest.countDocuments({
+                companyId: effectiveCompanyId,
+                analyticsViewers: req.user._id
+            });
+
+        const [
+            subordinates,
+            taCount,
+            reportingManagers,
+            company,
+            analyticsViewerCount,
+            dossierProfile
+        ] = await Promise.all([
+            User.find({ reportingManagers: req.user._id, companyId: effectiveCompanyId })
+                .select('firstName lastName email department')
+                .lean(),
+            taCountPromise,
+            reportingManagersPromise,
             req.company
                 ? Promise.resolve(req.company)
                 : Company.findById(effectiveCompanyId)
                     .select('name subdomain email timezone status enabledModules settings logo themeColor planId address contactPerson')
                     .lean(),
-            HiringRequest.countDocuments({
-                companyId: effectiveCompanyId,
-                analyticsViewers: req.user._id
-            }),
+            analyticsViewerCountPromise,
             EmployeeProfile.findOne({ user: req.user._id })
                 .select('personal contact employment hris documentSubmissionStatus documents +identity.aadhaarNumber +identity.panNumber')
                 .lean()
         ]);
 
+        const directReportsCount = subordinates.length;
+
         if (hasAllPermissions) {
-            const allPermissions = await Permission.find({}).select('key').lean();
+            const allPermissions = await getAllPermissions();
             const enabledModules = company?.enabledModules || [];
             const { filterPermissionsByEnabledModules } = require('../company/enabledModules');
             const filteredAll = filterPermissionsByEnabledModules(allPermissions, enabledModules);
             permissions = [...new Set([...permissions, ...filteredAll.map(p => p.key)])];
-        } else if (totalPerms > 0 && permissions.length >= totalPerms) {
-            hasAllPermissions = true;
+        } else {
+            const allPermissions = await getAllPermissions();
+            const totalPerms = allPermissions.filter(p => p.key !== '*').length;
+            if (totalPerms > 0 && permissions.length >= totalPerms) {
+                hasAllPermissions = true;
+            }
         }
 
         let isInterviewer = false;
 
-        // Final concurrent batch for TA/Interviewer checks if not already determined
-        const hasTAAccessByPermission = hasDirectTAPermission(permissions);
-
+        // Final check for TA/Interviewer checks if not already determined
         if (taCount === 0 && !hasTAAccessByPermission) {
             const interviewCount = await Candidate.countDocuments({
                 'interviewRounds.assignedTo': req.user._id,
@@ -784,7 +812,8 @@ const getMyself = async (req, res) => {
 
         const dossierStatus = checkDossierCompleteness(dossierProfile || {});
 
-        if (!req.user.profilePicture) {
+        const userIdStr = String(req.user._id || '');
+        if (!req.user.profilePicture && !checkedLivePhotoUsers.has(userIdStr)) {
             try {
                 const OnboardingEmployee = require('../onboarding/model/onboardingEmployee.model');
                 const obEmp = await OnboardingEmployee.findOne({
@@ -819,6 +848,7 @@ const getMyself = async (req, res) => {
                         });
                     }
                 }
+                checkedLivePhotoUsers.add(userIdStr);
             } catch (syncErr) {
                 console.error('[getMyself] Live photo sync error:', syncErr.message);
             }

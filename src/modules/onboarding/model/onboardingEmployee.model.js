@@ -256,6 +256,7 @@ const onboardingEmployeeSchema = new mongoose.Schema({
 onboardingEmployeeSchema.index({ companyId: 1, tempEmployeeId: 1 }, { unique: true });
 onboardingEmployeeSchema.index({ companyId: 1, email: 1 });
 onboardingEmployeeSchema.index({ companyId: 1, status: 1 });
+onboardingEmployeeSchema.index({ companyId: 1, transferredToUserId: 1 });
 
 // Keep only the latest 50 audit logs
 onboardingEmployeeSchema.pre('save', function () {

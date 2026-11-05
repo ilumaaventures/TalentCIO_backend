@@ -11,14 +11,20 @@ exports.getConfig = async (req, res) => {
   try {
     const companyId = getCompanyId(req);
     if (!companyId) return res.status(400).json({ message: 'Company ID not found in user request context.' });
-    
-    let config = await PayrollConfig.findOne({ companyId }).lean();
+
+    const [configDoc, company] = await Promise.all([
+      PayrollConfig.findOne({ companyId }).lean(),
+      req.company
+        ? Promise.resolve(req.company)
+        : Company.findById(companyId).select('name address settings.logo settings.workspaceBranding').lean()
+    ]);
+
+    let config = configDoc;
     if (!config) {
       const created = new PayrollConfig({ companyId });
       await created.save();
       config = created.toObject();
     }
-    const company = await Company.findById(companyId).select('name address settings.logo settings.workspaceBranding').lean();
     return res.json({
       ...config,
       company: {

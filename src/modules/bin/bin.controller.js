@@ -14,6 +14,17 @@ const User = require('../user/user.model');
 
 const ENTITY_POPULATE_FIELDS = 'firstName lastName email';
 
+const binSummaryCache = new Map();
+const BIN_SUMMARY_CACHE_TTL_MS = 25000; // 25 seconds
+
+const invalidateBinCache = (companyId) => {
+    if (companyId) {
+        binSummaryCache.delete(String(companyId));
+    } else {
+        binSummaryCache.clear();
+    }
+};
+
 const enforceUserRestorePlanLimit = async (companyId, action, hasConflictingItem) => {
     if (String(action || '').trim().toLowerCase() === 'replace' && hasConflictingItem) {
         return null;
@@ -189,17 +200,28 @@ exports.getBinItems = async (req, res) => {
             });
         }
 
+        const companyKey = String(companyId);
+        const cached = binSummaryCache.get(companyKey);
+        if (cached && (Date.now() - cached.cachedAt) < BIN_SUMMARY_CACHE_TTL_MS) {
+            return res.json(cached.data);
+        }
+
         const keys = getDeletedEntityKeys();
         const groupedEntries = await Promise.all(keys.map(async (key) => {
             const Model = getEntityModel(key);
-            const [items, total] = await Promise.all([
-                Model.find({ companyId, isDeleted: true }, null, { includeDeleted: true })
-                    .sort({ deletedAt: -1 })
-                    .limit(5)
-                    .populate('deletedBy', ENTITY_POPULATE_FIELDS)
-                    .lean(),
-                Model.countDocuments({ companyId, isDeleted: true })
-            ]);
+            if (!Model) return [key, { items: [], total: 0 }];
+
+            const items = await Model.find({ companyId, isDeleted: true }, null, { includeDeleted: true })
+                .sort({ deletedAt: -1 })
+                .limit(5)
+                .populate('deletedBy', ENTITY_POPULATE_FIELDS)
+                .lean();
+
+            let total = items.length;
+            // Only query countDocuments if items hit the limit of 5; otherwise total IS items.length!
+            if (items.length >= 5) {
+                total = await Model.countDocuments({ companyId, isDeleted: true });
+            }
 
             return [key, { items, total }];
         }));
@@ -208,7 +230,10 @@ exports.getBinItems = async (req, res) => {
         const counts = Object.fromEntries(groupedEntries.map(([key, value]) => [key, value.total]));
         const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
 
-        res.json({ groups, counts, total });
+        const responseData = { groups, counts, total };
+        binSummaryCache.set(companyKey, { data: responseData, cachedAt: Date.now() });
+
+        res.json(responseData);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -259,6 +284,7 @@ exports.restoreItem = async (req, res) => {
 
         await item.restore();
         await restoreEntityTree(entity, item, req);
+        invalidateBinCache(req.companyId);
 
         res.json({
             message: conflictingItem
@@ -296,6 +322,7 @@ exports.permanentDeleteItem = async (req, res) => {
         }
 
         await purgeDeletedDocument(entity, item);
+        invalidateBinCache(req.companyId);
         res.json({ message: `${entity} permanently deleted` });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -318,6 +345,7 @@ exports.emptyBin = async (req, res) => {
                 await purgeDeletedDocument(entity, item);
             }
 
+            invalidateBinCache(companyId);
             return res.json({ message: `Bin for ${entity} emptied` });
         }
 
@@ -329,6 +357,7 @@ exports.emptyBin = async (req, res) => {
             }
         }
 
+        invalidateBinCache(companyId);
         res.json({ message: 'Entire bin emptied' });
     } catch (error) {
         res.status(500).json({ message: error.message });
