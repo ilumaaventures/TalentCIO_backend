@@ -575,6 +575,7 @@ const deleteModule = async (req, res) => {
 const getClientProjectsSnapshot = async (req, res) => {
     try {
         const { clientId } = req.params;
+        const { timeRange, startDate, endDate } = req.query;
         if (!clientId || !mongoose.isValidObjectId(clientId)) {
             return res.status(400).json({ message: 'Valid clientId is required' });
         }
@@ -698,6 +699,38 @@ const getClientProjectsSnapshot = async (req, res) => {
 
         const discIds = discussions.map(d => d._id);
 
+        // Date Range Filtering
+        let dateFilterStart = null;
+        let dateFilterEnd = null;
+        const now = new Date();
+
+        if (timeRange === 'this_week') {
+            const day = now.getDay();
+            const diff = now.getDate() - (day === 0 ? 6 : day - 1);
+            dateFilterStart = new Date(now.getFullYear(), now.getMonth(), diff, 0, 0, 0, 0);
+            dateFilterEnd = new Date(now.getFullYear(), now.getMonth(), diff + 6, 23, 59, 59, 999);
+        } else if (timeRange === 'this_month') {
+            dateFilterStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+            dateFilterEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        } else if (timeRange === 'custom') {
+            if (startDate) {
+                if (typeof startDate === 'string' && startDate.includes('-')) {
+                    const [fY, fM, fD] = startDate.split('-').map(Number);
+                    dateFilterStart = new Date(fY, fM - 1, fD, 0, 0, 0, 0);
+                } else {
+                    dateFilterStart = new Date(startDate);
+                }
+            }
+            if (endDate) {
+                if (typeof endDate === 'string' && endDate.includes('-')) {
+                    const [tY, tM, tD] = endDate.split('-').map(Number);
+                    dateFilterEnd = new Date(tY, tM - 1, tD, 23, 59, 59, 999);
+                } else {
+                    dateFilterEnd = new Date(endDate);
+                }
+            }
+        }
+
         // WorkLogs
         const WorkLog = require('../timesheet/workLog.model');
         const orConditions = [
@@ -710,11 +743,19 @@ const getClientProjectsSnapshot = async (req, res) => {
             orConditions.push({ discussion: { $in: discIds } });
         }
 
-        const workLogs = await WorkLog.find({
+        const workLogQuery = {
             companyId: req.companyId,
             isDeleted: { $ne: true },
             $or: orConditions
-        })
+        };
+
+        if (dateFilterStart || dateFilterEnd) {
+            workLogQuery.date = {};
+            if (dateFilterStart) workLogQuery.date.$gte = dateFilterStart;
+            if (dateFilterEnd) workLogQuery.date.$lte = dateFilterEnd;
+        }
+
+        const workLogs = await WorkLog.find(workLogQuery)
             .populate('user', 'firstName lastName email profilePicture profilePhoto')
             .sort({ date: -1 })
             .lean();
@@ -833,7 +874,8 @@ const getClientProjectsSnapshot = async (req, res) => {
             const projectLoggedHours = projWorkLogs.reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
             totalClientLoggedHours += projectLoggedHours;
 
-            const projEstimated = Number(project.estimatedHours) || 0;
+            const taskEstimatedSum = projTasks.reduce((acc, t) => acc + (Number(t.estimatedHours) || 0), 0);
+            const projEstimated = Number(project.estimatedHours) || taskEstimatedSum;
             totalClientEstimatedHours += projEstimated;
 
             const allocatedUserMap = new Map();
@@ -936,6 +978,9 @@ const getClientProjectsSnapshot = async (req, res) => {
             };
         });
 
+                // Sort projects alphabetically (A-Z) by default
+        enrichedProjects.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+
         const topContributors = Array.from(globalUserHoursMap.values())
             .map(c => ({
                 user: c.user,
@@ -961,14 +1006,22 @@ const getClientProjectsSnapshot = async (req, res) => {
             totalTasks: totalClientTasks,
             completedTasks: totalClientCompletedTasks,
             taskCompletionPct: totalClientTasks > 0 ? Math.round((totalClientCompletedTasks / totalClientTasks) * 100) : 0,
-            totalDiscussions: discussions.length
+            totalDiscussions: discussions.length,
+            timeRange: timeRange || 'all',
+            dateFilterStart: dateFilterStart ? dateFilterStart.toISOString() : null,
+            dateFilterEnd: dateFilterEnd ? dateFilterEnd.toISOString() : null
         };
 
         return res.json({
             client: clientDoc,
             summary,
             projects: enrichedProjects,
-            topContributors
+            topContributors,
+            timeFilter: {
+                timeRange: timeRange || 'all',
+                startDate: dateFilterStart ? dateFilterStart.toISOString() : null,
+                endDate: dateFilterEnd ? dateFilterEnd.toISOString() : null
+            }
         });
     } catch (error) {
         console.error('Error in getClientProjectsSnapshot:', error);

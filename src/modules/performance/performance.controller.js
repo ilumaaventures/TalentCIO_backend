@@ -505,13 +505,53 @@ const getEmployeePerformance = async (req, res) => {
 
         // Calculate date cutoff
         let days = 30;
-        if (range === '7d') days = 7;
-        else if (range === '90d') days = 90;
-        else if (range === 'all' || range === 'all_time') days = 3650;
+        let cutoffStart = null;
+        let cutoffEnd = null;
+        const now = new Date();
 
-        const cutoffDate = (range === 'all' || range === 'all_time')
-            ? new Date(0)
-            : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        if (range === 'this_week') {
+            const day = now.getDay();
+            const diff = now.getDate() - (day === 0 ? 6 : day - 1);
+            cutoffStart = new Date(now.getFullYear(), now.getMonth(), diff, 0, 0, 0, 0);
+            cutoffEnd = new Date(now.getFullYear(), now.getMonth(), diff + 6, 23, 59, 59, 999);
+            days = 7;
+        } else if (range === 'this_month') {
+            cutoffStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+            cutoffEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+            days = 31;
+        } else if (range === 'custom') {
+            const { startDate, endDate } = req.query;
+            if (startDate) {
+                if (typeof startDate === 'string' && startDate.includes('-')) {
+                    const [fY, fM, fD] = startDate.split('-').map(Number);
+                    cutoffStart = new Date(fY, fM - 1, fD, 0, 0, 0, 0);
+                } else {
+                    cutoffStart = new Date(startDate);
+                }
+            }
+            if (endDate) {
+                if (typeof endDate === 'string' && endDate.includes('-')) {
+                    const [tY, tM, tD] = endDate.split('-').map(Number);
+                    cutoffEnd = new Date(tY, tM - 1, tD, 23, 59, 59, 999);
+                } else {
+                    const end = new Date(endDate);
+                    end.setHours(23, 59, 59, 999);
+                    cutoffEnd = end;
+                }
+            }
+            days = cutoffStart && cutoffEnd ? Math.max(1, Math.ceil((cutoffEnd - cutoffStart) / (24 * 60 * 60 * 1000))) : 30;
+        } else if (range === 'all' || range === 'all_time') {
+            cutoffStart = new Date(0);
+            days = 3650;
+        } else {
+            if (range === '7d') days = 7;
+            else if (range === '90d') days = 90;
+            cutoffStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        }
+
+        const cutoffDate = cutoffStart || new Date(0);
+        const dateFilter = { $gte: cutoffDate };
+        if (cutoffEnd) dateFilter.$lte = cutoffEnd;
 
         // Fetch all projects where user is explicitly allocated (manager or member)
         const allocatedProjects = await Project.find({
@@ -531,7 +571,7 @@ const getEmployeePerformance = async (req, res) => {
             assignees: userId,
             companyId,
             isDeleted: { $ne: true },
-            updatedAt: { $gte: cutoffDate }
+            updatedAt: dateFilter
         })
             .populate({
                 path: 'module',
@@ -540,7 +580,7 @@ const getEmployeePerformance = async (req, res) => {
             })
             .lean();
 
-        const completedTasks = tasks.filter(t => t.status === 'DONE' && (!t.completedAt || new Date(t.completedAt) >= cutoffDate));
+        const completedTasks = tasks.filter(t => t.status === 'DONE' && (!t.completedAt || (new Date(t.completedAt) >= cutoffDate && (!cutoffEnd || new Date(t.completedAt) <= cutoffEnd))));
         const totalAssigned = tasks.length;
         const totalCompleted = completedTasks.length;
 
@@ -549,7 +589,7 @@ const getEmployeePerformance = async (req, res) => {
             user: userId,
             companyId,
             isDeleted: { $ne: true },
-            date: { $gte: cutoffDate }
+            date: dateFilter
         })
             .populate('project', 'name status client')
             .populate({
@@ -595,7 +635,7 @@ const getEmployeePerformance = async (req, res) => {
                 { supervisor: userId },
                 { participants: userId }
             ],
-            createdAt: { $gte: cutoffDate }
+            createdAt: dateFilter
         }).select('status createdBy supervisor participants').lean();
 
         const discussionsCreated = userDiscussions.filter(d => String(d.createdBy) === String(userId)).length;
