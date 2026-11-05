@@ -7,7 +7,9 @@ const salaryComponentSchema = new mongoose.Schema({
   taxable: { type: Boolean, default: false },
   linkedTo: { type: String, enum: ['ctc_percent', 'basic_percent', 'fixed', 'remainder'], default: 'fixed' },
   linkValue: { type: Number, default: 0 },
-  frequency: { type: String, default: 'monthly' }
+  frequency: { type: String, default: 'monthly' },
+  includeInCTC: { type: Boolean, default: true },
+  deductFromFlexi: { type: Boolean, default: false }
 });
 
 const payrollConfigSchema = new mongoose.Schema({
