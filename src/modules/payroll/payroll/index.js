@@ -222,7 +222,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     }
   }
 
-  const { pfEmployer, pfEmployee, pfBase, gratuity, lwfEmployer, lwfEmployee } = computeStatutoryComponents({
+  const { pfEmployer, pfEmployee, pfBase, gratuity, lwfEmployer, lwfEmployee, pfEmployerInCTC, gratuityInCTC } = computeStatutoryComponents({
     pfEnabled,
     gratuityEnabled,
     lwfEnabled,
@@ -236,7 +236,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? config.defaultInsurance) : 0;
   const employerNPS = roundAmount(source.employerNPS);
 
-  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || [];
+  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || source.customAllowances || [];
   const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
 
   let flexi = 0, broadband = 0, petrol = 0, lta = 0, ltaCap = 0, conveyance = 0, medicalAllowance = 0, specialAllowance = 0;
@@ -285,7 +285,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
             0
           ));
         }
@@ -314,7 +314,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     conveyance = roundAmount(source.salaryStructure?.conveyance);
     medicalAllowance = roundAmount(source.salaryStructure?.medicalAllowance);
     specialAllowance = roundAmount(Math.max(
-      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
       0
     ));
   }
@@ -353,7 +353,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       }
     } else {
       specialAllowance = roundAmount(Math.max(
-        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
         0
       ));
     }
@@ -389,7 +389,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const professionalTax = ptEnabled
     ? (manualPT > 0 ? manualPT : computedPT)
     : 0;
-  const otherDeductions = source.deductions?.otherDeductions || source.otherDeductions || [];
+  const otherDeductions = source.deductions?.otherDeductions || source.otherDeductions || source.customDeductions || [];
   const otherDeductionsSum = roundAmount(otherDeductions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
 
   const deductionsMap = {};
@@ -462,7 +462,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions),
     totalDeductions,
     netTakeHome: roundAmount(Math.max(0, totalEarnings - totalDeductions)),
-    diff: roundAmount(monthlyCTC - (basicMaster + hraMaster + flexi + broadband + petrol + lta + pfEmployer + gratuity + lwfEmployer + insurance + esiEmployer + employerNPS + conveyance + medicalAllowance + specialAllowance)),
+    diff: roundAmount(monthlyCTC - (basicMaster + hraMaster + flexi + broadband + petrol + lta + pfEmployerInCTC + gratuityInCTC + lwfEmployer + insurance + esiEmployer + employerNPS + conveyance + medicalAllowance + specialAllowance)),
     taxRegime,
     declarations,
     taxDetails,
