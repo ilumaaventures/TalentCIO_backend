@@ -15,7 +15,8 @@ const getMonthlyCTCValue = (source = {}) => {
 
 const resolveStrategyMonthlyCTC = (source = {}) => {
   let monthlyCTC = roundAmount(getMonthlyCTCValue(source));
-  const compType = source.compensationType || source.payType || 'monthly_salary';
+  const rawCompType = source.compensationType || source.payType || 'monthly_salary';
+  const compType = rawCompType === 'salaried' ? 'monthly_salary' : rawCompType;
 
   switch (compType) {
     case 'hourly': {

@@ -690,6 +690,11 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
         calculatedSalary[id] = String(val);
       });
     }
+    if (master.deductionsMap) {
+      Object.entries(master.deductionsMap).forEach(([id, val]) => {
+        calculatedSalary[id] = String(val);
+      });
+    }
   }
 
   return { source, master, calculatedSalary };
