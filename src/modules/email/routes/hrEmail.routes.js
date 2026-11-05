@@ -6,6 +6,7 @@ const { requireModule } = require('../../../common/middleware/moduleGuard');
 const {
     getEmployees,
     getTemplates,
+    getRecipientDocuments,
     sendHREmail,
     getHistory
 } = require('../controller/hrEmail.controller');
@@ -41,6 +42,7 @@ router.use(requireModule('hrEmail'));
 
 router.get('/employees', authorize('hr_email.send'), getEmployees);
 router.get('/templates', authorize('hr_email.send'), getTemplates);
+router.get('/recipient-documents', authorize('hr_email.send'), getRecipientDocuments);
 router.post('/send', authorize('hr_email.send'), uploadAttachments, sendHREmail);
 router.get('/history/:userId', authorize('hr_email.send'), getHistory);
 

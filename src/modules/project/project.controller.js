@@ -570,6 +570,412 @@ const deleteModule = async (req, res) => {
     }
 };
 
+
+// --- Client Projects Snapshot ---
+const getClientProjectsSnapshot = async (req, res) => {
+    try {
+        const { clientId } = req.params;
+        if (!clientId || !mongoose.isValidObjectId(clientId)) {
+            return res.status(400).json({ message: 'Valid clientId is required' });
+        }
+
+        const clientDoc = await Client.findOne({ _id: clientId, companyId: req.companyId, isDeleted: { $ne: true } })
+            .select('name companyName nickname status businessUnit')
+            .populate('businessUnit', 'name')
+            .lean();
+
+        if (!clientDoc) {
+            return res.status(404).json({ message: 'Client not found' });
+        }
+
+        const clientObjId = new mongoose.Types.ObjectId(clientId);
+        const projectQuery = {
+            companyId: req.companyId,
+            isDeleted: { $ne: true },
+            $or: [
+                { client: clientObjId },
+                { client: String(clientId) }
+            ]
+        };
+
+        const canViewAll = isAdminUser(req) || hasPermission(req, 'project.read') || hasPermission(req, 'client.read');
+        const canViewTeam = hasPermission(req, 'project.view_team');
+
+        if (!canViewAll) {
+            const orConditions = [];
+            orConditions.push({ manager: req.user._id });
+            orConditions.push({ members: req.user._id });
+
+            const assignedModuleIds = await Task.distinct('module', { assignees: req.user._id, companyId: req.companyId, isDeleted: { $ne: true } });
+            const taskProjectIds = await Module.distinct('project', { _id: { $in: assignedModuleIds }, companyId: req.companyId, isDeleted: { $ne: true } });
+            if (taskProjectIds.length > 0) {
+                orConditions.push({ _id: { $in: taskProjectIds } });
+            }
+
+            if (canViewTeam) {
+                const directReports = await User.find({ reportingManagers: req.user._id, companyId: req.companyId }).select('_id').lean();
+                const reportIds = directReports.map(u => u._id);
+                if (reportIds.length > 0) {
+                    orConditions.push({ manager: { $in: reportIds } });
+                    orConditions.push({ members: { $in: reportIds } });
+                    const teamAssignedModuleIds = await Task.distinct('module', { assignees: { $in: reportIds }, companyId: req.companyId, isDeleted: { $ne: true } });
+                    const teamTaskProjectIds = await Module.distinct('project', { _id: { $in: teamAssignedModuleIds }, companyId: req.companyId, isDeleted: { $ne: true } });
+                    if (teamTaskProjectIds.length > 0) {
+                        orConditions.push({ _id: { $in: teamTaskProjectIds } });
+                    }
+                }
+            }
+
+            projectQuery.$and = [{ $or: orConditions.length > 0 ? orConditions : [{ _id: null }] }];
+        }
+
+        const projects = await Project.find(projectQuery)
+            .populate('businessUnit', 'name')
+            .populate('manager', 'firstName lastName email profilePicture profilePhoto')
+            .populate('members', 'firstName lastName email profilePicture profilePhoto')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        if (projects.length === 0) {
+            return res.json({
+                client: clientDoc,
+                summary: {
+                    totalProjects: 0,
+                    activeProjects: 0,
+                    completedProjects: 0,
+                    onHoldProjects: 0,
+                    totalHoursSpent: 0,
+                    totalEstimatedHours: 0,
+                    totalAllocatedMembers: 0,
+                    totalModules: 0,
+                    totalTasks: 0,
+                    completedTasks: 0,
+                    totalDiscussions: 0
+                },
+                projects: [],
+                topContributors: []
+            });
+        }
+
+        const projectIds = projects.map(p => p._id);
+        const projIdStrs = projectIds.map(id => String(id));
+
+        // Modules
+        const modules = await Module.find({
+            project: { $in: projectIds },
+            companyId: req.companyId,
+            isDeleted: { $ne: true }
+        }).sort({ createdAt: 1 }).lean();
+
+        const moduleIds = modules.map(m => m._id);
+
+        // Tasks
+        const tasks = await Task.find({
+            module: { $in: moduleIds },
+            companyId: req.companyId,
+            isDeleted: { $ne: true }
+        })
+            .populate('assignees', 'firstName lastName email profilePicture profilePhoto')
+            .populate('reporter', 'firstName lastName email profilePicture profilePhoto')
+            .sort({ order: 1, startDate: 1 })
+            .lean();
+
+        const taskIds = tasks.map(t => t._id);
+
+        // Discussions
+        const Discussion = require('../discussion/discussion.model');
+        const discussions = await Discussion.find({
+            project: { $in: projectIds },
+            companyId: req.companyId,
+            isDeleted: { $ne: true }
+        })
+            .populate('createdBy', 'firstName lastName email profilePicture profilePhoto')
+            .populate('supervisor', 'firstName lastName email profilePicture profilePhoto')
+            .populate('visibleToUsers', 'firstName lastName email profilePicture profilePhoto')
+            .populate('module', 'name')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const discIds = discussions.map(d => d._id);
+
+        // WorkLogs
+        const WorkLog = require('../timesheet/workLog.model');
+        const orConditions = [
+            { project: { $in: [...projectIds, ...projIdStrs] } }
+        ];
+        if (taskIds.length > 0) {
+            orConditions.push({ task: { $in: taskIds } });
+        }
+        if (discIds.length > 0) {
+            orConditions.push({ discussion: { $in: discIds } });
+        }
+
+        const workLogs = await WorkLog.find({
+            companyId: req.companyId,
+            isDeleted: { $ne: true },
+            $or: orConditions
+        })
+            .populate('user', 'firstName lastName email profilePicture profilePhoto')
+            .sort({ date: -1 })
+            .lean();
+
+        // Map tasks to modules
+        const moduleMap = new Map();
+        modules.forEach(m => {
+            moduleMap.set(String(m._id), {
+                ...m,
+                tasks: [],
+                taskCounts: { total: 0, completed: 0, inProgress: 0, todo: 0 },
+                loggedHours: 0
+            });
+        });
+
+        const taskLogsMap = new Map();
+        const discLogsMap = new Map();
+        const globalUserHoursMap = new Map();
+
+        workLogs.forEach(log => {
+            const hours = Number(log.hours) || 0;
+            const uId = log.user?._id ? String(log.user._id) : (log.user ? String(log.user) : null);
+            if (uId) {
+                if (!globalUserHoursMap.has(uId)) {
+                    globalUserHoursMap.set(uId, {
+                        user: log.user,
+                        hours: 0,
+                        entriesCount: 0
+                    });
+                }
+                const rec = globalUserHoursMap.get(uId);
+                rec.hours += hours;
+                rec.entriesCount += 1;
+            }
+
+            if (log.task) {
+                const tId = String(log.task);
+                if (!taskLogsMap.has(tId)) taskLogsMap.set(tId, []);
+                taskLogsMap.get(tId).push(log);
+            }
+            if (log.discussion) {
+                const dId = String(log.discussion);
+                if (!discLogsMap.has(dId)) discLogsMap.set(dId, []);
+                discLogsMap.get(dId).push(log);
+            }
+        });
+
+        tasks.forEach(t => {
+            const mId = t.module ? String(t.module) : null;
+            const tLogs = taskLogsMap.get(String(t._id)) || [];
+            const taskLoggedHours = tLogs.reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
+            const enrichedTask = {
+                ...t,
+                loggedHours: taskLoggedHours,
+                workLogsCount: tLogs.length
+            };
+
+            if (mId && moduleMap.has(mId)) {
+                const mod = moduleMap.get(mId);
+                mod.tasks.push(enrichedTask);
+                mod.taskCounts.total += 1;
+                mod.loggedHours += taskLoggedHours;
+
+                const statusUpper = String(t.status || '').toUpperCase();
+                if (statusUpper === 'COMPLETED' || statusUpper === 'DONE') {
+                    mod.taskCounts.completed += 1;
+                } else if (statusUpper.includes('PROGRESS') || statusUpper === 'IN_PROGRESS' || statusUpper === 'REVIEW') {
+                    mod.taskCounts.inProgress += 1;
+                } else {
+                    mod.taskCounts.todo += 1;
+                }
+            }
+        });
+
+        const projectModulesMap = new Map();
+        modules.forEach(m => {
+            const pId = String(m.project);
+            if (!projectModulesMap.has(pId)) projectModulesMap.set(pId, []);
+            projectModulesMap.get(pId).push(moduleMap.get(String(m._id)));
+        });
+
+        const projectDiscussionsMap = new Map();
+        discussions.forEach(d => {
+            const pId = String(d.project);
+            if (!projectDiscussionsMap.has(pId)) projectDiscussionsMap.set(pId, []);
+            const dLogs = discLogsMap.get(String(d._id)) || [];
+            const discLoggedHours = dLogs.reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
+            projectDiscussionsMap.get(pId).push({
+                ...d,
+                loggedHours: discLoggedHours
+            });
+        });
+
+        let totalClientLoggedHours = 0;
+        let totalClientEstimatedHours = 0;
+        let totalClientTasks = 0;
+        let totalClientCompletedTasks = 0;
+        const allClientAllocatedUsers = new Map();
+
+        const enrichedProjects = projects.map(project => {
+            const pIdStr = String(project._id);
+            const projModules = projectModulesMap.get(pIdStr) || [];
+            const projDiscussions = projectDiscussionsMap.get(pIdStr) || [];
+            const projTasks = projModules.flatMap(m => m.tasks || []);
+
+            const projTaskIds = new Set(projTasks.map(t => String(t._id)));
+            const projDiscIds = new Set(projDiscussions.map(d => String(d._id)));
+
+            const projWorkLogs = workLogs.filter(log => {
+                const matchProj = log.project && String(log.project) === pIdStr;
+                const matchTask = log.task && projTaskIds.has(String(log.task));
+                const matchDisc = log.discussion && projDiscIds.has(String(log.discussion));
+                return matchProj || matchTask || matchDisc;
+            });
+
+            const projectLoggedHours = projWorkLogs.reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
+            totalClientLoggedHours += projectLoggedHours;
+
+            const projEstimated = Number(project.estimatedHours) || 0;
+            totalClientEstimatedHours += projEstimated;
+
+            const allocatedUserMap = new Map();
+
+            if (project.manager) {
+                const mgrId = String(project.manager._id || project.manager);
+                allocatedUserMap.set(mgrId, {
+                    user: project.manager,
+                    role: 'Project Manager',
+                    hoursLogged: 0,
+                    assignedTaskCount: 0
+                });
+                allClientAllocatedUsers.set(mgrId, project.manager);
+            }
+
+            (project.members || []).forEach(mem => {
+                const memId = String(mem._id || mem);
+                if (!allocatedUserMap.has(memId)) {
+                    allocatedUserMap.set(memId, {
+                        user: mem,
+                        role: 'Team Member',
+                        hoursLogged: 0,
+                        assignedTaskCount: 0
+                    });
+                }
+                allClientAllocatedUsers.set(memId, mem);
+            });
+
+            projTasks.forEach(task => {
+                (task.assignees || []).forEach(assignee => {
+                    const aId = String(assignee._id || assignee);
+                    if (!allocatedUserMap.has(aId)) {
+                        allocatedUserMap.set(aId, {
+                            user: assignee,
+                            role: 'Task Contributor',
+                            hoursLogged: 0,
+                            assignedTaskCount: 0
+                        });
+                    }
+                    allocatedUserMap.get(aId).assignedTaskCount += 1;
+                    allClientAllocatedUsers.set(aId, assignee);
+                });
+            });
+
+            projWorkLogs.forEach(log => {
+                const uId = log.user?._id ? String(log.user._id) : (log.user ? String(log.user) : null);
+                if (uId) {
+                    if (!allocatedUserMap.has(uId)) {
+                        allocatedUserMap.set(uId, {
+                            user: log.user,
+                            role: 'Contributor',
+                            hoursLogged: 0,
+                            assignedTaskCount: 0
+                        });
+                        allClientAllocatedUsers.set(uId, log.user);
+                    }
+                    allocatedUserMap.get(uId).hoursLogged += (Number(log.hours) || 0);
+                }
+            });
+
+            let completedTasksCount = 0;
+            let inProgressTasksCount = 0;
+            let pendingTasksCount = 0;
+
+            projTasks.forEach(t => {
+                const s = String(t.status || '').toUpperCase();
+                if (s === 'COMPLETED' || s === 'DONE') {
+                    completedTasksCount++;
+                } else if (s.includes('PROGRESS') || s === 'IN_PROGRESS' || s === 'REVIEW') {
+                    inProgressTasksCount++;
+                } else {
+                    pendingTasksCount++;
+                }
+            });
+
+            totalClientTasks += projTasks.length;
+            totalClientCompletedTasks += completedTasksCount;
+
+            const allocatedMembersList = Array.from(allocatedUserMap.values()).sort((a, b) => b.hoursLogged - a.hoursLogged);
+
+            return {
+                ...project,
+                totalLoggedHours: Math.round(projectLoggedHours * 10) / 10,
+                estimatedHours: projEstimated,
+                hoursUtilizationPct: projEstimated > 0 ? Math.round((projectLoggedHours / projEstimated) * 100) : null,
+                taskStats: {
+                    total: projTasks.length,
+                    completed: completedTasksCount,
+                    inProgress: inProgressTasksCount,
+                    pending: pendingTasksCount,
+                    completionPct: projTasks.length > 0 ? Math.round((completedTasksCount / projTasks.length) * 100) : 0
+                },
+                modulesCount: projModules.length,
+                modules: projModules,
+                discussionsCount: projDiscussions.length,
+                discussions: projDiscussions,
+                allocatedMembersCount: allocatedMembersList.length,
+                allocatedMembers: allocatedMembersList,
+                recentWorkLogs: projWorkLogs.slice(0, 10)
+            };
+        });
+
+        const topContributors = Array.from(globalUserHoursMap.values())
+            .map(c => ({
+                user: c.user,
+                hours: Math.round(c.hours * 10) / 10,
+                entriesCount: c.entriesCount
+            }))
+            .sort((a, b) => b.hours - a.hours)
+            .slice(0, 8);
+
+        const activeCount = projects.filter(p => p.status === 'Active' || (p.isActive && !p.status)).length;
+        const completedCount = projects.filter(p => p.status === 'Completed').length;
+        const onHoldCount = projects.filter(p => p.status === 'On Hold').length;
+
+        const summary = {
+            totalProjects: projects.length,
+            activeProjects: activeCount,
+            completedProjects: completedCount,
+            onHoldProjects: onHoldCount,
+            totalHoursSpent: Math.round(totalClientLoggedHours * 10) / 10,
+            totalEstimatedHours: totalClientEstimatedHours,
+            totalAllocatedMembers: allClientAllocatedUsers.size,
+            totalModules: modules.length,
+            totalTasks: totalClientTasks,
+            completedTasks: totalClientCompletedTasks,
+            taskCompletionPct: totalClientTasks > 0 ? Math.round((totalClientCompletedTasks / totalClientTasks) * 100) : 0,
+            totalDiscussions: discussions.length
+        };
+
+        return res.json({
+            client: clientDoc,
+            summary,
+            projects: enrichedProjects,
+            topContributors
+        });
+    } catch (error) {
+        console.error('Error in getClientProjectsSnapshot:', error);
+        return res.status(500).json({ message: 'Failed to fetch client project snapshot', error: error.message });
+    }
+};
+
 // --- Tasks (Delegated to authoritative Task Controller) ---
 const {
     getTasks,
@@ -582,6 +988,7 @@ module.exports = {
     getBusinessUnits, createBusinessUnit, updateBusinessUnit,
     getClients, createClient, updateClient,
     getProjects, createProject, updateProject, deleteProject, getProjectHierarchy,
+    getClientProjectsSnapshot,
     getModules, createModule, updateModule, deleteModule,
     getTasks, createTask, updateTask, deleteTask,
     getEmployees

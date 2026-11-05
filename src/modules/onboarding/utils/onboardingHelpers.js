@@ -438,6 +438,18 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
         }
     }
 
+    // Section D: Net Take-Home Pay (Estimated)
+    if (totals.monthlyNet || totals.annualNet) {
+        rows.push(makeRow([
+            makeCell({ text: 'D. ESTIMATED NET TAKE-HOME PAY', align: 'left', isBold: true, fill: sectionFill, colSpan: 3 })
+        ]));
+        rows.push(makeRow([
+            makeCell({ text: 'Net In-Hand Salary (Gross - Employee Deductions)', align: 'left', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.monthlyNet, align: 'right', isBold: true, fill: totalFill }),
+            makeCell({ text: totals.annualNet, align: 'right', isBold: true, fill: totalFill })
+        ]));
+    }
+
     return `
         <w:tbl>
             <w:tblPr>
@@ -471,34 +483,44 @@ const buildSalaryTableXml = (earnings = [], contributions = [], deductions = [],
 const preprocessDocxXml = (xmlString) => {
     if (!xmlString || typeof xmlString !== 'string') return xmlString;
 
-    // Normalize {salary_table} and {salarytable} without @ to {@salary_table} so users don't break templates
+    // Clean up signature tags so they are plain text placeholders, NEVER rawxml!
     let normalized = xmlString
+        .replace(/\{@employee_signature\}/g, '{employee_signature}')
+        .replace(/\{@candidate_signature\}/g, '{employee_signature}')
+        .replace(/\{candidate_signature\}/g, '{employee_signature}')
+        .replace(/\{@signature\}/g, '{signature}');
+
+    // Normalize direct tags
+    normalized = normalized
         .replace(/\{salary_table\}/g, '{@salary_table}')
         .replace(/\{salarytable\}/g, '{@salary_table}')
         .replace(/\{@salarytable\}/g, '{@salary_table}');
-    normalized = normalized.replace(/\{employee_signature\}/g, '{@employee_signature}');
-    normalized = normalized.replace(/\{candidate_signature\}/g, '{@employee_signature}');
 
     // Only block-level table replacements (e.g. salary_table) should be extracted into their own paragraph
     return normalized.replace(/<w:p(?: [^>]*)?>([\s\S]*?)<\/w:p>/g, (paragraphHtml) => {
-        if (paragraphHtml.includes('{@salary_table}')) {
+        // Check if paragraph contains salary_table in any form (direct or split)
+        if (paragraphHtml.includes('salary_table') || paragraphHtml.includes('salarytable')) {
             const tag = '{@salary_table}';
             const pPrMatch = paragraphHtml.match(/<w:pPr>[\s\S]*?<\/w:pPr>/);
             const pPr = pPrMatch ? pPrMatch[0] : '';
-            let cleanedHtml = paragraphHtml.replace(tag, '');
 
-            let hasActualText = false;
-            const tMatches = [...cleanedHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
-            tMatches.forEach(match => {
-                if (match[1].trim() !== '') {
-                    hasActualText = true;
-                }
-            });
+            // Extract all text inside <w:t> nodes
+            let allText = '';
+            const tMatches = [...paragraphHtml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g)];
+            tMatches.forEach(m => { allText += m[1]; });
 
-            if (!hasActualText) {
+            // Check if there is text other than the salary_table tag itself
+            const strippedText = allText
+                .replace(/\{@?salary_?table\}/gi, '')
+                .trim();
+
+            if (strippedText.length === 0) {
+                // The entire paragraph was just the salary table tag (or split across runs)
                 return `<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
             }
 
+            // If there was other text in the paragraph, keep that text and append a new paragraph for the table
+            let cleanedHtml = paragraphHtml.replace(/\{@?salary_?table\}/gi, '');
             return `${cleanedHtml}<w:p>${pPr}<w:r><w:t>${tag}</w:t></w:r></w:p>`;
         }
         return paragraphHtml;

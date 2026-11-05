@@ -6,7 +6,7 @@ const { authorize, authorizeAny } = require('../../common/middleware/authorize')
 const {
     getBusinessUnits, createBusinessUnit, updateBusinessUnit,
     getClients, createClient, updateClient,
-    getProjects, createProject, updateProject, deleteProject, getProjectHierarchy,
+    getProjects, createProject, updateProject, deleteProject, getProjectHierarchy, getClientProjectsSnapshot,
     getModules, createModule, updateModule, deleteModule,
     getEmployees
 } = require('./project.controller');
@@ -36,6 +36,7 @@ router.post('/clients', authorize('client.create'), requireModule('clients'), cr
 router.put('/clients/:id', authorize('client.update'), requireModule('clients'), updateClient);
 
 // Projects
+router.get('/client/:clientId/snapshot', authorizeAny(['project.read', 'client.read', 'client.update', 'project.view_assigned', 'project.view_team']), requireModule(['projects', 'timesheet', 'attendance']), getClientProjectsSnapshot);
 router.get('/:id/hierarchy', requireModule(['projects', 'timesheet', 'attendance']), getProjectHierarchy);
 router.get('/:id/performance', requireModule(['projects', 'timesheet', 'attendance']), getProjectPerformance);
 router.get('/:id/performance/:userId', requireModule(['projects', 'timesheet', 'attendance']), getProjectMemberPerformance);

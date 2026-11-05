@@ -1041,17 +1041,28 @@ exports.getRoleBootstrap = async (req, res) => {
     try {
         // Role data must always be fresh — never serve from HTTP cache
         res.set('Cache-Control', 'no-cache');
-        const [rawRoles, permissions, company] = await Promise.all([
+        const compObjectId = MongooseObjectId.isValid(req.companyId) ? new MongooseObjectId(req.companyId) : req.companyId;
+        const [rawRoles, permissions, company, userRoleCounts] = await Promise.all([
             Role.find({ companyId: req.companyId }).populate('permissions').lean(),
             getCachedPermissions(), // HIGH-1: use cache instead of Permission.find({}) every time
-            Company.findById(req.companyId).select('enabledModules').lean()
+            Company.findById(req.companyId).select('enabledModules').lean(),
+            User.aggregate([
+                { $match: { companyId: { $in: [req.companyId, compObjectId].filter(Boolean) }, isDeleted: { $ne: true } } },
+                { $unwind: '$roles' },
+                { $group: { _id: '$roles', count: { $sum: 1 } } }
+            ])
         ]);
         const enabledModules = company?.enabledModules || [];
+        const roleMemberCountMap = {};
+        (userRoleCounts || []).forEach(item => {
+            if (item?._id) roleMemberCountMap[item._id.toString()] = item.count;
+        });
 
         const roles = rawRoles.map(role => ({
             ...role,
+            memberCount: roleMemberCountMap[role._id.toString()] || 0,
             permissions: filterPermissionsByEnabledModules((role.permissions || []).filter(isVisiblePermission), enabledModules)
-        }));
+        })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
         const filteredPermissions = filterPermissionsByEnabledModules(permissions.filter(isVisiblePermission), enabledModules);
 

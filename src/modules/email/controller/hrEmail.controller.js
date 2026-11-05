@@ -267,6 +267,61 @@ exports.getTemplates = async (req, res) => {
     }
 };
 
+exports.getRecipientDocuments = async (req, res) => {
+    try {
+        const rawUserIds = req.query.userIds;
+        if (!rawUserIds) {
+            return res.status(400).json({ message: 'No userIds provided.' });
+        }
+        const userIds = String(rawUserIds)
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => mongoose.isValidObjectId(id));
+
+        if (userIds.length === 0) {
+            return res.json({ documentsByUser: {}, availableCategories: [] });
+        }
+
+        const profiles = await EmployeeProfile.find({
+            user: { $in: userIds },
+            companyId: req.companyId
+        })
+            .select('user documents')
+            .lean();
+
+        const documentsByUser = {};
+        const categoriesSet = new Set();
+
+        profiles.forEach((p) => {
+            const uid = String(p.user);
+            const activeDocs = (p.documents || [])
+                .filter((d) => d && d.isDeleted !== true && d.url)
+                .map((d) => {
+                    const cat = d.category || 'Other';
+                    categoriesSet.add(cat);
+                    return {
+                        _id: String(d._id),
+                        title: d.title || d.fileName || 'Document',
+                        fileName: d.fileName || 'document.pdf',
+                        url: d.url,
+                        category: cat,
+                        verificationStatus: d.verificationStatus || 'Verified',
+                        uploadDate: d.uploadDate || d.createdAt
+                    };
+                });
+            documentsByUser[uid] = activeDocs;
+        });
+
+        return res.json({
+            documentsByUser,
+            availableCategories: Array.from(categoriesSet)
+        });
+    } catch (error) {
+        console.error('getRecipientDocuments error:', error);
+        return res.status(500).json({ message: 'Failed to fetch recipient documents.' });
+    }
+};
+
 exports.sendHREmail = async (req, res) => {
     try {
         const requestedFiles = Array.isArray(req.files) ? req.files : [];
@@ -286,6 +341,19 @@ exports.sendHREmail = async (req, res) => {
                 console.error('Failed to parse customEmails:', e);
             }
         }
+
+        let recipientDossierDocs = {};
+        if (req.body?.recipientDossierDocs) {
+            try {
+                recipientDossierDocs = typeof req.body.recipientDossierDocs === 'string'
+                    ? JSON.parse(req.body.recipientDossierDocs)
+                    : req.body.recipientDossierDocs;
+            } catch (e) {
+                console.error('Failed to parse recipientDossierDocs:', e);
+            }
+        }
+        const commonDossierCategory = String(req.body?.commonDossierCategory || '').trim();
+
         const dossierCategory = String(req.body?.dossierCategory || '').trim();
         const notes = String(req.body?.notes || '').trim();
         const cc = String(req.body?.cc || '').trim();
@@ -297,7 +365,7 @@ exports.sendHREmail = async (req, res) => {
         }
 
         if (requestedFiles.length > MAX_ATTACHMENTS || totalAttachmentCount > MAX_ATTACHMENTS) {
-            return res.status(400).json({ message: `A maximum of ${MAX_ATTACHMENTS} attachments is allowed.` });
+            return res.status(400).json({ message: `A maximum of ${MAX_ATTACHMENTS} uploaded attachments is allowed.` });
         }
 
         if (totalAttachmentCount > 0 && dossierSave && !dossierCategory) {
@@ -365,6 +433,20 @@ exports.sendHREmail = async (req, res) => {
         const sent = [];
         const failed = [];
 
+        // Cache for downloaded dossier buffers across users
+        const dossierBufferCache = new Map();
+        const fetchDossierBuffer = async (url, fallbackName) => {
+            if (dossierBufferCache.has(url)) return dossierBufferCache.get(url);
+            const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
+            const payload = {
+                filename: sanitizeFileName(fallbackName, 'document.pdf'),
+                content: Buffer.from(resp.data),
+                contentType: resp.headers['content-type'] || 'application/octet-stream'
+            };
+            dossierBufferCache.set(url, payload);
+            return payload;
+        };
+
         for (const recipientUserId of recipientUserIds) {
             let resolvedEmail = '';
 
@@ -397,6 +479,65 @@ exports.sendHREmail = async (req, res) => {
                     continue;
                 }
 
+                // Resolve dossier documents for this specific recipient
+                const userDossierItems = [];
+                if (recipientDossierDocs && Array.isArray(recipientDossierDocs[recipientUserId])) {
+                    userDossierItems.push(...recipientDossierDocs[recipientUserId]);
+                }
+                if (commonDossierCategory) {
+                    let pDocs = profile?.documents;
+                    if (!pDocs && profile?._id) {
+                        const fullProf = await EmployeeProfile.findById(profile._id).select('documents').lean();
+                        pDocs = fullProf?.documents || [];
+                    }
+                    if (Array.isArray(pDocs)) {
+                        const matches = pDocs.filter((d) =>
+                            d && d.isDeleted !== true && d.url && (
+                                String(d.category || '').toLowerCase() === commonDossierCategory.toLowerCase() ||
+                                String(d.title || '').toLowerCase().includes(commonDossierCategory.toLowerCase())
+                            )
+                        );
+                        matches.forEach((md) => {
+                            if (!userDossierItems.some((item) => String(item._id || item.url) === String(md._id || md.url))) {
+                                userDossierItems.push({
+                                    _id: String(md._id),
+                                    title: md.title || md.fileName,
+                                    fileName: md.fileName,
+                                    url: md.url,
+                                    category: md.category
+                                });
+                            }
+                        });
+                    }
+                }
+
+                const userDossierAttachments = [];
+                for (const item of userDossierItems) {
+                    if (item.url && item.url.startsWith('http')) {
+                        try {
+                            const bufPayload = await fetchDossierBuffer(item.url, item.fileName || item.title);
+                            userDossierAttachments.push({
+                                filename: bufPayload.filename,
+                                content: bufPayload.content,
+                                contentType: bufPayload.contentType,
+                                cloudinaryUrl: item.url,
+                                dossierDocId: item._id || null
+                            });
+                        } catch (fetchErr) {
+                            console.warn(`Failed to fetch dossier attachment for recipient ${recipientUserId}:`, fetchErr.message);
+                        }
+                    }
+                }
+
+                const finalRecipientAttachments = [
+                    ...emailAttachments,
+                    ...userDossierAttachments.map((d) => ({
+                        filename: d.filename,
+                        content: d.content,
+                        contentType: d.contentType
+                    }))
+                ];
+
                 const templateData = buildTemplateData({ user, profile, company });
                 if (customEmails[recipientUserId]) {
                     templateData.email = customEmails[recipientUserId];
@@ -412,7 +553,7 @@ exports.sendHREmail = async (req, res) => {
                     bcc: bcc || undefined,
                     subject: resolvedSubject,
                     html: resolvedHtml,
-                    attachments: emailAttachments
+                    attachments: finalRecipientAttachments
                 });
 
                 if (!emailSent) {
@@ -434,6 +575,12 @@ exports.sendHREmail = async (req, res) => {
                         cloudinaryUrl: item.cloudinaryUrl,
                         publicId: item.publicId,
                         dossierDocId: null
+                    })),
+                    ...userDossierAttachments.map((item) => ({
+                        filename: item.filename,
+                        cloudinaryUrl: item.cloudinaryUrl,
+                        publicId: extractPublicIdFromUrl(item.cloudinaryUrl) || '',
+                        dossierDocId: item.dossierDocId
                     }))
                 ];
                 let dossierDocIds = [];
@@ -480,32 +627,39 @@ exports.sendHREmail = async (req, res) => {
                                         fileName: attachment.filename,
                                         url: attachment.cloudinaryUrl,
                                         uploadDate: new Date(),
-                                        uploadedBy: req.user._id,
                                         verificationStatus: 'Pending Review',
-                                        versionNumber: 1,
-                                        isDeleted: false,
-                                        versionHistory: []
+                                        uploadedBy: req.user._id,
+                                        notes: notes || undefined
                                     });
 
-                                    const insertedDoc = profileDoc.documents[profileDoc.documents.length - 1];
-                                    if (insertedDoc?._id) {
-                                        dossierDocIds.push(insertedDoc._id);
-                                    }
-
+                                    const savedDoc = profileDoc.documents[profileDoc.documents.length - 1];
+                                    const savedDocId = savedDoc?._id || null;
+                                    dossierDocIds.push(savedDocId);
                                     loggedAttachments.push({
                                         filename: attachment.filename,
                                         cloudinaryUrl: attachment.cloudinaryUrl,
-                                        publicId: attachment.publicId || '',
-                                        dossierDocId: insertedDoc?._id || null
+                                        publicId: attachment.publicId,
+                                        dossierDocId: savedDocId
                                     });
                                 });
 
-                                syncDocumentSubmissionStatus(profileDoc);
+                                // Append any dossier attachments to loggedAttachments
+                                userDossierAttachments.forEach((item) => {
+                                    loggedAttachments.push({
+                                        filename: item.filename,
+                                        cloudinaryUrl: item.cloudinaryUrl,
+                                        publicId: extractPublicIdFromUrl(item.cloudinaryUrl) || '',
+                                        dossierDocId: item.dossierDocId
+                                    });
+                                });
+
                                 await profileDoc.save();
+                                await syncDocumentSubmissionStatus(profileDoc);
                                 dossierSaved = true;
                             }
-                        } catch (dossierError) {
-                            dossierSaveError = dossierError.message || 'Failed to save attachments to dossier';
+                        } catch (saveError) {
+                            console.error('Failed to save to dossier:', saveError);
+                            dossierSaveError = saveError.message || 'Failed to save attachments to dossier';
                         }
                     }
                 }
@@ -515,47 +669,50 @@ exports.sendHREmail = async (req, res) => {
                     sentBy: req.user._id,
                     recipientUserId: user._id,
                     recipientEmail: resolvedEmail,
-                    cc,
-                    bcc,
                     subject: resolvedSubject,
                     body: resolvedHtml,
-                    type: 'general',
+                    type: selectedTemplate ? 'template' : 'adhoc',
                     templateId: selectedTemplate?._id || null,
                     templateName: selectedTemplate?.name || '',
                     emailAccountId: emailAccountSnapshot.emailAccountId,
                     emailAccountLabel: emailAccountSnapshot.emailAccountLabel,
                     attachments: loggedAttachments,
-                    dossierCategory: dossierCategory || '',
+                    dossierCategory: dossierCategory || 'Other',
                     dossierSaved,
-                    dossierSaveError,
-                    sentAt: new Date(),
-                    notes
+                    dossierSaveError: dossierSaveError || undefined,
+                    dossierDocIds,
+                    notes: notes || undefined,
+                    sentAt: new Date()
                 });
 
                 sent.push({
-                    userId: user._id,
+                    userId: recipientUserId,
                     email: resolvedEmail,
-                    dossierDocIds
+                    name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || resolvedEmail,
+                    dossierSaved,
+                    dossierSaveError,
+                    dossierAttachmentsCount: userDossierAttachments.length
                 });
-            } catch (error) {
-                console.error(`sendHREmail error for recipient ${recipientUserId}:`, error);
+            } catch (recipientError) {
+                console.error(`Failed to process recipient ${recipientUserId}:`, recipientError);
                 failed.push({
                     userId: recipientUserId,
                     email: resolvedEmail,
-                    reason: error.message || 'Unexpected error while sending email'
+                    reason: recipientError.message || 'Failed to process recipient'
                 });
             }
         }
 
         return res.json({
+            message: `Sent to ${sent.length} recipient${sent.length === 1 ? '' : 's'}${failed.length > 0 ? `, ${failed.length} failed` : ''}.`,
+            sentCount: sent.length,
+            failedCount: failed.length,
             sent,
-            failed,
-            totalSent: sent.length,
-            totalFailed: failed.length
+            failed
         });
     } catch (error) {
         console.error('sendHREmail error:', error);
-        return res.status(500).json({ message: error.message || 'Failed to send HR emails.' });
+        return res.status(500).json({ message: error.message || 'Failed to send HR email.' });
     }
 };
 

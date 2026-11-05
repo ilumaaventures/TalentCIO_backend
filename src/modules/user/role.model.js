@@ -6,6 +6,10 @@ const roleSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    description: {
+        type: String,
+        default: ''
+    },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',
