@@ -16,7 +16,8 @@ const { processCalculatedSalary } = require('../payroll/payrollMath');
 const {
     generateRevisionLetterBuffer,
     generateAndDispatchRevisionLetter,
-    bulkGenerateAndDispatchRevisionLetters
+    bulkGenerateAndDispatchRevisionLetters,
+    getTemplateBuffer
 } = require('./services/revisionLetterService');
 const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.service');
 const Company = require('../company/company.model');
@@ -1603,6 +1604,41 @@ const getEmployeeLeaveBalances = async (req, res) => {
  * GET /api/employees/revisions/templates
  * List available letter templates for revision letters
  */
+
+/**
+ * GET /api/employees/revisions/templates/:templateId/content
+ * Extract raw text content of a revision letter template for per-employee customization
+ */
+const getRevisionTemplateContent = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const templateInfo = await getTemplateBuffer(company, templateId);
+        if (!templateInfo || !templateInfo.buffer) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+
+        const mammoth = require('mammoth');
+        const { value: rawText } = await mammoth.extractRawText({ buffer: templateInfo.buffer });
+        const normalized = (rawText || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/^[ \t]+$/gm, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+        return res.json({
+            templateId,
+            name: templateInfo.name,
+            content: normalized
+        });
+    } catch (error) {
+        console.error('[getRevisionTemplateContent Error]:', error);
+        return res.status(500).json({ message: 'Failed to extract template content' });
+    }
+};
+
 const getRevisionTemplates = async (req, res) => {
     try {
         const company = await Company.findById(req.companyId).select('name settings.onboarding').lean();
@@ -1810,7 +1846,8 @@ const sendRevisionLetter = async (req, res) => {
 const downloadRevisionLetter = async (req, res) => {
     try {
         const { id: employeeId, revisionId } = req.params;
-        const templateId = req.query.templateId || null;
+        const templateId = req.query.templateId || req.body?.templateId || null;
+        const customContent = req.query.customContent || req.body?.customContent || null;
 
         const result = await generateAndDispatchRevisionLetter({
             userId: employeeId,
@@ -1820,7 +1857,8 @@ const downloadRevisionLetter = async (req, res) => {
             options: {
                 sendEmail: false,
                 saveToDossier: false,
-                templateId
+                templateId,
+                customContent
             }
         });
 
@@ -1865,6 +1903,7 @@ const bulkSendRevisionLetters = async (req, res) => {
 
 module.exports = {
     getRevisionTemplates,
+    getRevisionTemplateContent,
     uploadRevisionTemplate,
     deleteRevisionTemplate,
     downloadSampleTemplate,

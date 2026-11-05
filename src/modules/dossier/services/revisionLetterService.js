@@ -78,12 +78,13 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
     let basicVal = Math.round(monthlyCTC * 0.5);
     let hraVal = Math.round(basicVal * 0.5);
     let specialVal = Math.max(0, monthlyCTC - basicVal - hraVal);
+    let master = null;
 
     if (config) {
         try {
             const calculated = processCalculatedSalary(salaryData, config, annualCTC, monthlyCTC);
             if (calculated && calculated.master) {
-                const master = calculated.master;
+                master = calculated.master;
                 const comps = Array.isArray(config.salaryComponents) ? config.salaryComponents : [];
 
                 const getEarningVal = (cId) => {
@@ -216,7 +217,37 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
         annualNet: formatCurrency(netAnnual)
     };
 
-    const salaryTableXml = buildSalaryTableXml(earningsList, contributionsList, deductionsList, totals);
+    const rawSal = salaryData || {};
+    const isNonStructured = rawSal.useSalaryComponents === false || rawSal.payType === 'flat' || rawSal.payType === 'hourly';
+
+    const parseN = (val) => {
+        if (val === undefined || val === null || val === '') return 0;
+        const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+        return isNaN(n) ? 0 : Math.round(n);
+    };
+
+    const tableData = {
+        config: config,
+        salaryComponents: config?.salaryComponents || [],
+        useSalaryComponents: !isNonStructured,
+        rawSalary: rawSal,
+        customAllowances: rawSal.customAllowances || rawSal.otherAllowances || [],
+        basic: isNonStructured ? parseN(rawSal.flatSalary || rawSal.basic || monthlyCTC) : parseN(rawSal.basic || basicVal),
+        hra: isNonStructured ? 0 : parseN(rawSal.hra || hraVal),
+        flexi: isNonStructured ? 0 : parseN(rawSal.flexi || rawSal.flexiAmount || master?.flexi || 0),
+        specialAllowance: isNonStructured ? 0 : parseN(rawSal.special || rawSal.specialAllowance || specialVal || 0),
+        broadband: isNonStructured ? 0 : parseN(rawSal.broadband || master?.broadband || 0),
+        petrol: isNonStructured ? 0 : parseN(rawSal.petrol || master?.petrol || 0),
+        lta: isNonStructured ? 0 : parseN(rawSal.lta || master?.lta || 0),
+        pfEmployer: isNonStructured ? 0 : parseN(rawSal.pfEmployer !== undefined ? rawSal.pfEmployer : (master?.pfEmployer || 0)),
+        lwfEmployer: isNonStructured ? 0 : parseN(rawSal.lwfEmployer !== undefined ? rawSal.lwfEmployer : (master?.lwfEmployer || 0)),
+        gratuity: isNonStructured ? 0 : parseN(rawSal.gratuity !== undefined ? rawSal.gratuity : (master?.gratuity || 0)),
+        insurance: isNonStructured ? 0 : parseN(rawSal.insurance || rawSal.insuranceAmount || master?.insurance || 0),
+        monthlyCTC: monthlyCTC,
+        annualCTC: annualCTC,
+        bonus: parseN(rawSal.bonus ?? rawSal.joiningBonus ?? rawSal.variablePay ?? 0)
+    };
+    const salaryTableXml = buildSalaryTableXml(earningsList, contributionsList, deductionsList, totals, tableData);
 
     return {
         annualCTC,
@@ -375,6 +406,9 @@ const buildRevisionLetterData = ({ user, profile, revision, company, config }) =
         salary_table: breakupDetails.salaryTableXml,
         salaryTable: breakupDetails.salaryTableXml,
         salarytable: breakupDetails.salaryTableXml,
+        annexure_a: breakupDetails.salaryTableXml,
+        annexureA: breakupDetails.salaryTableXml,
+        compensation_table: breakupDetails.salaryTableXml,
         earnings_breakdown: breakupDetails.earningsList || [],
         contributions_breakdown: breakupDetails.contributionsList || [],
         deductions_breakdown: breakupDetails.deductionsList || [],
@@ -429,12 +463,32 @@ const renderDocxZip = (rawBuffer, renderData) => {
 /**
  * Generates the populated DOCX buffer for an employee revision
  */
-const generateRevisionLetterBuffer = async ({ user, profile, revision, company, config, templateId = null }) => {
-    const templateInfo = await getTemplateBuffer(company, templateId);
+const generateRevisionLetterBuffer = async ({
+    user,
+    profile,
+    revision,
+    company,
+    config,
+    templateId = null,
+    customContent = null,
+    options = {}
+}) => {
+    const effectiveTemplateId = templateId || options?.templateId || revision?.metadata?.templateId || null;
+    const templateInfo = await getTemplateBuffer(company, effectiveTemplateId);
     const { renderData, breakupDetails } = buildRevisionLetterData({ user, profile, revision, company, config });
 
     try {
-        const buffer = renderDocxZip(templateInfo.buffer, renderData);
+        let baseBuffer = templateInfo.buffer;
+        const activeCustomContent = customContent || options?.customContent || revision?.metadata?.customTemplateContent;
+        if (activeCustomContent && typeof activeCustomContent === 'string' && activeCustomContent.trim()) {
+            try {
+                const { updateDocxWithText } = require('../../onboarding/controllers/onboardingSettingsController');
+                baseBuffer = updateDocxWithText(baseBuffer, activeCustomContent);
+            } catch (updateErr) {
+                console.warn('[RevisionLetter] Failed to update docx with custom content:', updateErr.message);
+            }
+        }
+        const buffer = renderDocxZip(baseBuffer, renderData);
         buffer.usedTemplateName = templateInfo.name;
         buffer.fallbackUsed = false;
         buffer.breakupDetails = breakupDetails;
@@ -523,12 +577,13 @@ const generateAndDispatchRevisionLetter = async ({
         revision,
         company,
         config,
-        templateId: options.templateId || null
+        templateId: options.templateId || null,
+        customContent: options.customContent || revision?.metadata?.customTemplateContent || null
     });
 
     const safeName = `${user.firstName}_${user.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
     const effectiveDateLabel = formatDateLabel(revision?.effectiveDate);
-    const filename = `Revised_Offer_Letter_${safeName}_${effectiveDateLabel}.docx`;
+    const filename = `${safeName}.docx`;
 
     let fileUrl = '';
     const shouldSaveToDossier = options.saveToDossier !== false;
@@ -548,7 +603,7 @@ const generateAndDispatchRevisionLetter = async ({
                 profile.documents = profile.documents || [];
                 profile.documents.push({
                     category: 'Offer Letter',
-                    title: `Revised Offer Letter - ${formatDate(revision?.effectiveDate || new Date())}`,
+                    title: filename,
                     fileName: filename,
                     url: fileUrl,
                     uploadDate: new Date(),

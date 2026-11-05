@@ -45,7 +45,7 @@ const getSalaryBreakups = async (employee) => {
 
                 comps.filter(c => c.type === 'earning').forEach(c => {
                     const val = getEarningVal(c.id);
-                    if (c.id === 'basic' || c.id === 'hra' || val > 0) {
+                    if (val > 0) {
                         earningsList.push({
                             name: c.name || c.id,
                             monthly: formatCurrency(val),
@@ -57,7 +57,8 @@ const getSalaryBreakups = async (employee) => {
 
                 const prefs = config.displayPreferences || {};
                 const contributionsList = [];
-                if (prefs.showEmployerStatutory !== false) {
+                const isNonStructured = source.useSalaryComponents === false || source.payType === 'flat' || source.payType === 'hourly';
+                if (prefs.showEmployerStatutory !== false && !isNonStructured) {
                     if (prefs.showPFEmployer !== false && master.pfEmployer > 0) {
                         contributionsList.push({
                             name: 'PF Employer Contribution',
@@ -181,10 +182,39 @@ const getSalaryBreakups = async (employee) => {
                     annualNet: formatCurrency(netAnnual)
                 };
 
-                const salaryTableXml = buildSalaryTableXml(earningsList, contributionsList, deductionsList, totals);
+                const rawSal = employee.salary || {};
+                const isNonStructuredSal = rawSal.useSalaryComponents === false || rawSal.payType === 'flat' || rawSal.payType === 'hourly';
+
+                const tableData = {
+                    config: config,
+                    salaryComponents: config?.salaryComponents || [],
+                    useSalaryComponents: !isNonStructuredSal,
+                    displayPreferences: prefs,
+                    rawSalary: rawSal,
+                    customAllowances: rawSal.customAllowances || rawSal.otherAllowances || [],
+                    basic: isNonStructuredSal 
+                        ? (parseFloat(String(rawSal.flatSalary || rawSal.basic || monthlyCTC).replace(/[^0-9.]/g, '')) || monthlyCTC) 
+                        : (parseFloat(String(rawSal.basic !== undefined ? rawSal.basic : (master?.basicMaster || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    hra: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.hra !== undefined ? rawSal.hra : (master?.hraMaster || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    flexi: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.flexi !== undefined ? rawSal.flexi : (rawSal.flexiAmount !== undefined ? rawSal.flexiAmount : (master?.flexi || 0))).replace(/[^0-9.]/g, '')) || 0),
+                    specialAllowance: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.special !== undefined ? rawSal.special : (rawSal.specialAllowance !== undefined ? rawSal.specialAllowance : (master?.specialAllowance || 0))).replace(/[^0-9.]/g, '')) || 0),
+                    broadband: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.broadband !== undefined ? rawSal.broadband : (master?.broadband || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    petrol: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.petrol !== undefined ? rawSal.petrol : (master?.petrol || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    lta: isNonStructuredSal ? 0 : (parseFloat(String(rawSal.lta !== undefined ? rawSal.lta : (master?.lta || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    pfEmployer: (isNonStructuredSal || prefs.showPFEmployer === false) ? 0 : (parseFloat(String(rawSal.pfEmployer !== undefined ? rawSal.pfEmployer : (master?.pfEmployer || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    lwfEmployer: (isNonStructuredSal || prefs.showLWFEmployer === false) ? 0 : (parseFloat(String(rawSal.lwfEmployer !== undefined ? rawSal.lwfEmployer : (master?.lwfEmployer || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    gratuity: (isNonStructuredSal || prefs.showGratuity === false) ? 0 : (parseFloat(String(rawSal.gratuity !== undefined ? rawSal.gratuity : (master?.gratuity || 0)).replace(/[^0-9.]/g, '')) || 0),
+                    insurance: (isNonStructuredSal || prefs.showInsurance === false) ? 0 : (parseFloat(String(rawSal.insurance || rawSal.insuranceAmount || master?.insurance || 0).replace(/[^0-9.]/g, '')) || 0),
+                    monthlyCTC,
+                    annualCTC,
+                    bonus: (parseFloat(String(rawSal.bonus ?? rawSal.joiningBonus ?? rawSal.variablePay ?? 0).replace(/[^0-9.]/g, '')) || 0)
+                };
+                const salaryTableXml = buildSalaryTableXml(earningsList, contributionsList, deductionsList, totals, tableData);
                 breakups['salary_table'] = salaryTableXml;
                 breakups['salaryTable'] = salaryTableXml;
                 breakups['salarytable'] = salaryTableXml;
+                breakups['annexure_a'] = salaryTableXml;
+                breakups['annexureA'] = salaryTableXml;
 
                 if (master.earningsMap) {
                     Object.entries(master.earningsMap).forEach(([id, val]) => {
@@ -231,10 +261,23 @@ const getSalaryBreakups = async (employee) => {
             monthlyNet: formatCurrency(monthlyCTC),
             annualNet: formatCurrency(annualCTC)
         };
-        const fallbackTable = buildSalaryTableXml(fallbackEarnings, [], [], fallbackTotals);
+        const rawSalFallback = employee.salary || {};
+        const fallbackData = {
+            rawSalary: rawSalFallback,
+            customAllowances: rawSalFallback.customAllowances || rawSalFallback.otherAllowances || [],
+            basic,
+            hra,
+            flexi: special,
+            monthlyCTC,
+            annualCTC,
+            bonus: employee.salary?.bonus ?? employee.salary?.joiningBonus ?? employee.salary?.variablePay ?? 0
+        };
+        const fallbackTable = buildSalaryTableXml(fallbackEarnings, [], [], fallbackTotals, fallbackData);
         breakups['salary_table'] = fallbackTable;
         breakups['salaryTable'] = fallbackTable;
         breakups['salarytable'] = fallbackTable;
+        breakups['annexure_a'] = fallbackTable;
+        breakups['annexureA'] = fallbackTable;
     }
 
     return breakups;
@@ -529,7 +572,7 @@ exports.generateOfferLetter = async (req, res) => {
         });
 
         const safeName = fullName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
-        res.setHeader('Content-Disposition', `attachment; filename=OfferLetter_${safeName}.docx`);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}.docx"`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.send(buffer);
 

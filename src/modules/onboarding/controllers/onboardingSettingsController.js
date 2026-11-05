@@ -163,7 +163,24 @@ const DUMMY_TOTALS = {
     annualNet: '₹ 24,76,000'
 };
 
-const DUMMY_SALARY_TABLE_XML = buildSalaryTableXml(DUMMY_EARNINGS, DUMMY_CONTRIBUTIONS, DUMMY_DEDUCTIONS, DUMMY_TOTALS);
+const DUMMY_SALARY_DATA = {
+    basic: 35417,
+    hra: 17708,
+    flexi: 12635,
+    broadband: 0,
+    petrol: 0,
+    lta: 0,
+    pfEmployer: 1800,
+    lwfEmployer: 70,
+    gratuity: 1704,
+    insurance: 1500,
+    monthlyCTC: 70833,
+    annualCTC: 850000,
+    bonus: 50000,
+    potentialPackage: 900000
+};
+
+const DUMMY_SALARY_TABLE_XML = buildSalaryTableXml([], [], [], {}, DUMMY_SALARY_DATA);
 
 const DUMMY_PREVIEW_DATA = {
     offer_date: formatDate(new Date()),
@@ -179,14 +196,22 @@ const DUMMY_PREVIEW_DATA = {
     work_location: 'Bangalore (Hybrid)',
     probation_period: '6 months',
     probationPeriod: '6 months',
-    annual_ctc: '₹ 25,00,000',
-    basic_salary: '₹ 1,00,000',
-    hra: '₹ 40,000',
-    special_allowance: '₹ 68,333',
-    monthly_gross: '₹ 2,08,333',
-    monthly_ctc: '₹ 2,15,000',
+    annual_ctc: '850000',
+    basic_salary: '35417',
+    basic: '35417',
+    hra: '17708',
+    special_allowance: '12635',
+    flexi: '12635',
+    monthly_gross: '65760',
+    monthly_ctc: '70833',
+    bonus: '50000',
+    potential_package: '900000',
     salary_table: DUMMY_SALARY_TABLE_XML,
     salaryTable: DUMMY_SALARY_TABLE_XML,
+    salarytable: DUMMY_SALARY_TABLE_XML,
+    annexure_a: DUMMY_SALARY_TABLE_XML,
+    annexureA: DUMMY_SALARY_TABLE_XML,
+    compensation_table: DUMMY_SALARY_TABLE_XML,
     earnings_breakdown: DUMMY_EARNINGS,
     contributions_breakdown: DUMMY_CONTRIBUTIONS,
     deductions_breakdown: DUMMY_DEDUCTIONS,

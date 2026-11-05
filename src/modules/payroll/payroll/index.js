@@ -222,7 +222,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     }
   }
 
-  const { pfEmployer, pfEmployee, pfBase, gratuity, lwfEmployer, lwfEmployee } = computeStatutoryComponents({
+  const { pfEmployer, pfEmployee, pfBase, gratuity, lwfEmployer, lwfEmployee, pfEmployerInCTC, gratuityInCTC } = computeStatutoryComponents({
     pfEnabled,
     gratuityEnabled,
     lwfEnabled,
@@ -233,10 +233,10 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     includeGratuityInCTC
   });
 
-  const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? config.defaultInsurance) : 0;
+  const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? source.insurance ?? config.defaultInsurance) : 0;
   const employerNPS = roundAmount(source.employerNPS);
 
-  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || [];
+  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || source.customAllowances || [];
   const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
 
   let flexi = 0, broadband = 0, petrol = 0, lta = 0, ltaCap = 0, conveyance = 0, medicalAllowance = 0, specialAllowance = 0;
@@ -246,6 +246,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     if (hasDynamicComponents) {
       ltaCap = roundAmount(basicMaster * config.ltaMaxPercent);
       let sumOfAllNonRemainder = 0;
+      let flexiDeductionsSum = 0;
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo !== 'remainder') {
           let amount = 0;
@@ -279,13 +280,39 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           }
           if (c.id === 'lta') amount = roundAmount(Math.min(amount, ltaCap || amount));
           em[c.id] = amount;
-          sumOfAllNonRemainder += amount;
+          if (c.includeInCTC !== false) {
+            sumOfAllNonRemainder += amount;
+          }
+        }
+      });
+      config.salaryComponents.forEach(c => {
+        if (c.type === 'deduction' && (c.deductFromFlexi === true || c.includeInCTC === true)) {
+          let amount = 0;
+          if (c.linkedTo === 'ctc_percent') {
+            let pct = c.linkValue;
+            const overrideVal = source[c.id + 'Percent'];
+            if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+              pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+            }
+            amount = roundAmount(monthlyCTC * pct);
+          } else if (c.linkedTo === 'basic_percent') {
+            let pct = c.linkValue;
+            const overrideVal = source[c.id + 'Percent'];
+            if (overrideVal !== undefined && overrideVal !== null && Number(overrideVal) > 0) {
+              pct = Number(overrideVal) > 1 ? Number(overrideVal) / 100 : Number(overrideVal);
+            }
+            amount = roundAmount(basicMaster * pct);
+          } else if (c.linkedTo === 'fixed') {
+            let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
+            amount = roundAmount(val);
+          }
+          flexiDeductionsSum += amount;
         }
       });
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
             0
           ));
         }
@@ -314,7 +341,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     conveyance = roundAmount(source.salaryStructure?.conveyance);
     medicalAllowance = roundAmount(source.salaryStructure?.medicalAllowance);
     specialAllowance = roundAmount(Math.max(
-      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
       0
     ));
   }
@@ -353,7 +380,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       }
     } else {
       specialAllowance = roundAmount(Math.max(
-        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployer - gratuity - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
         0
       ));
     }
@@ -389,10 +416,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const professionalTax = ptEnabled
     ? (manualPT > 0 ? manualPT : computedPT)
     : 0;
-  const otherDeductions = source.deductions?.otherDeductions || source.otherDeductions || [];
+  const otherDeductions = source.deductions?.otherDeductions || source.otherDeductions || source.customDeductions || [];
   const otherDeductionsSum = roundAmount(otherDeductions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
 
   const deductionsMap = {};
+  let dynamicGrossDeductionsSum = 0;
+  let dynamicFlexiDeductionsSum = 0;
   if (hasDynamicComponents) {
     config.salaryComponents.forEach(c => {
       if (c.type === 'deduction') {
@@ -412,10 +441,15 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           }
           amount = roundAmount(basicMaster * pct);
         } else if (c.linkedTo === 'fixed') {
-          let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : 0);
+          let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
           amount = roundAmount(val);
         }
         deductionsMap[c.id] = amount;
+        if (c.deductFromFlexi === true || c.includeInCTC === true) {
+          dynamicFlexiDeductionsSum += amount;
+        } else {
+          dynamicGrossDeductionsSum += amount;
+        }
       }
     });
   }
@@ -428,7 +462,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     tds +
     lwfEmployee +
     otherDeductionsSum +
-    dynamicDeductionsSum
+    dynamicGrossDeductionsSum
   );
 
   return {
@@ -457,12 +491,32 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     esiEmployer,
     esiEmployee,
     grossSalary,
+    monthlyGross: grossSalary,
     totalEarnings,
-    totalEmployerContributions,
-    grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions),
+    totalEmployerContributions: roundAmount(pfEmployer + esiEmployer + gratuity + lwfEmployer + insurance + employerNPS + dynamicFlexiDeductionsSum),
+    grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions + dynamicFlexiDeductionsSum),
     totalDeductions,
+    dynamicGrossDeductionsSum,
+    dynamicFlexiDeductionsSum,
     netTakeHome: roundAmount(Math.max(0, totalEarnings - totalDeductions)),
-    diff: roundAmount(monthlyCTC - (basicMaster + hraMaster + flexi + broadband + petrol + lta + pfEmployer + gratuity + lwfEmployer + insurance + esiEmployer + employerNPS + conveyance + medicalAllowance + specialAllowance)),
+    diff: roundAmount(monthlyCTC - (
+      (hasDynamicComponents
+        ? Object.entries(earningsMap).reduce((sum, [id, val]) => {
+            const comp = config.salaryComponents?.find(c => c.id === id);
+            if (comp && comp.includeInCTC === false) return sum;
+            return sum + val;
+          }, 0)
+        : (basicMaster + hraMaster + flexi + broadband + petrol + lta + conveyance + medicalAllowance + specialAllowance)
+      ) +
+      pfEmployerInCTC +
+      gratuityInCTC +
+      lwfEmployer +
+      insurance +
+      esiEmployer +
+      employerNPS +
+      dynamicFlexiDeductionsSum +
+      otherAllowancesSum
+    )),
     taxRegime,
     declarations,
     taxDetails,
@@ -617,7 +671,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
     includeGratuityInCTC: parseBoolVal(calculatedSalary.includeGratuityInCTC, true),
     useSalaryComponents: parseBoolVal(calculatedSalary.useSalaryComponents, true),
     ptState: calculatedSalary.ptState || 'MH',
-    insuranceAmount: parseFloat(calculatedSalary.insuranceAmount) || 0,
+    insuranceAmount: parseFloat(calculatedSalary.insuranceAmount !== undefined ? calculatedSalary.insuranceAmount : calculatedSalary.insurance) || 0,
     employerNPS: parseFloat(calculatedSalary.employerNPS) || 0,
     hourlyRate: parseFloat(calculatedSalary.hourlyRate) || 0,
     hoursWorked: parseFloat(calculatedSalary.hoursWorked) || 160,
@@ -660,6 +714,9 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
         if (customVal === undefined && c.id === 'medical') {
           customVal = calculatedSalary['medicalAllowance'];
         }
+        if (customVal === undefined && (c.id === 'insurance' || c.id === 'insuranceAmount')) {
+          customVal = calculatedSalary['insuranceAmount'] !== undefined ? calculatedSalary['insuranceAmount'] : calculatedSalary['insurance'];
+        }
         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
       }
     });
@@ -687,6 +744,11 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
 
     if (master.earningsMap) {
       Object.entries(master.earningsMap).forEach(([id, val]) => {
+        calculatedSalary[id] = String(val);
+      });
+    }
+    if (master.deductionsMap) {
+      Object.entries(master.deductionsMap).forEach(([id, val]) => {
         calculatedSalary[id] = String(val);
       });
     }
