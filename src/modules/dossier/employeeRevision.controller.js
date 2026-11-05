@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
 const mongoose = require('mongoose');
 const EmployeeRevision = require('./employeeRevision.model');
 const User = require('../user/user.model');
@@ -10,6 +13,11 @@ const LeaveConfig = require('../leave/model/leaveConfig.model');
 const LeaveBalance = require('../leave/model/leaveBalance.model');
 const { creditLeaveBucket } = require('../leave/accrual.service');
 const { processCalculatedSalary } = require('../payroll/payrollMath');
+const {
+    generateRevisionLetterBuffer,
+    generateAndDispatchRevisionLetter,
+    bulkGenerateAndDispatchRevisionLetters
+} = require('./services/revisionLetterService');
 const { dispatchEmployeeWebhook } = require('../payroll/payrollIntegration.service');
 const Company = require('../company/company.model');
 const { hasEnabledModule } = require('../company/enabledModules');
@@ -1251,6 +1259,241 @@ const backfillEmployeeRevisions = async (req, res) => {
 };
 
 /**
+ * Bulk create salary revisions across multiple employees
+ */
+const bulkCreateRevisions = async (req, res) => {
+    try {
+        const {
+            employeeIds = [],
+            effectiveDate,
+            reason,
+            revisionType = 'percentage', // 'percentage' | 'flat' | 'custom'
+            hikePercentage = 0,
+            flatAmount = 0,
+            customSalaries = {}, // { [employeeId]: newAnnualCTC }
+            confirmBackdated = false,
+            metadata = {}
+        } = req.body;
+
+        if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
+            return res.status(400).json({ message: 'At least one employee must be selected' });
+        }
+        if (!effectiveDate) {
+            return res.status(400).json({ message: 'Effective date is required' });
+        }
+
+        const parsedEffectiveDate = new Date(effectiveDate);
+        if (Number.isNaN(parsedEffectiveDate.getTime())) {
+            return res.status(400).json({ message: 'Invalid effective date format' });
+        }
+
+        const isBackdated = isDateInPast(parsedEffectiveDate);
+        if (isBackdated && !confirmBackdated) {
+            return res.status(400).json({
+                code: 'BACKDATED_CONFIRMATION_REQUIRED',
+                message: 'This revision has an effective date in the past. Explicit confirmation is required.',
+                requiresConfirmation: true
+            });
+        }
+
+        const config = await PayrollConfig.findOne({ companyId: req.companyId });
+        const isImmediate = isDateTodayOrPast(parsedEffectiveDate);
+
+        const results = {
+            total: employeeIds.length,
+            successCount: 0,
+            failCount: 0,
+            details: []
+        };
+
+        for (const empId of employeeIds) {
+            try {
+                const user = await User.findOne({ _id: empId, companyId: req.companyId });
+                if (!user) {
+                    results.failCount++;
+                    results.details.push({ employeeId: empId, success: false, message: 'Employee not found' });
+                    continue;
+                }
+
+                const profile = await EmployeeProfile.findOne({ user: user._id, companyId: req.companyId }).select('+compensation.ctc');
+                const currentState = extractEmployeeState(user, profile);
+                const currentAnnualCTC = currentState.annualCTC || 0;
+
+                let newAnnualCTC = currentAnnualCTC;
+                if (revisionType === 'percentage') {
+                    const pct = Number(hikePercentage) || 0;
+                    newAnnualCTC = Math.round(currentAnnualCTC * (1 + pct / 100));
+                } else if (revisionType === 'flat') {
+                    const flat = Number(flatAmount) || 0;
+                    newAnnualCTC = Math.round(currentAnnualCTC + flat);
+                } else if (revisionType === 'custom' && customSalaries[empId]) {
+                    newAnnualCTC = Math.round(Number(customSalaries[empId]) || currentAnnualCTC);
+                }
+
+                const newMonthlyCTC = Math.round(newAnnualCTC / 12);
+                let updatedSalaryBreakup = {
+                    ...(currentState.salaryBreakup || {}),
+                    annualCTC: String(newAnnualCTC),
+                    monthlyCTC: String(newMonthlyCTC)
+                };
+
+                if (config) {
+                    try {
+                        const calculated = processCalculatedSalary(
+                            updatedSalaryBreakup,
+                            config,
+                            newAnnualCTC,
+                            newMonthlyCTC
+                        );
+                        if (calculated && calculated.master) {
+                            updatedSalaryBreakup = {
+                                ...updatedSalaryBreakup,
+                                basic: String(calculated.master.basicMaster || 0),
+                                hra: String(calculated.master.hraMaster || 0),
+                                specialAllowance: String(calculated.master.specialAllowance || 0),
+                                monthlyGross: String(calculated.master.totalEarnings || 0),
+                                netTakeHome: String(calculated.master.netTakeHome || 0),
+                                pfEmployer: String(calculated.master.pfEmployer || 0),
+                                pfEmployee: String(calculated.master.pfEmployee || 0),
+                                esiEmployer: String(calculated.master.esiEmployer || 0),
+                                esiEmployee: String(calculated.master.esiEmployee || 0),
+                                gratuity: String(calculated.master.gratuity || 0),
+                                professionalTax: String(calculated.master.professionalTax || 0),
+                                lwfEmployer: String(calculated.master.lwfEmployer || 0),
+                                lwfEmployee: String(calculated.master.lwfEmployee || 0)
+                            };
+                        }
+                    } catch (calcErr) {
+                        console.warn('[bulkCreateRevisions] Failed to recalculate components for ' + empId + ':', calcErr.message);
+                    }
+                }
+
+                const enrichedChanges = [
+                    {
+                        module: 'compensation',
+                        field: 'annualCTC',
+                        fieldLabel: 'Annual CTC',
+                        previousValue: currentAnnualCTC,
+                        revisedValue: newAnnualCTC,
+                        previousDisplayValue: '₹' + currentAnnualCTC.toLocaleString('en-IN') + '/yr',
+                        revisedDisplayValue: '₹' + newAnnualCTC.toLocaleString('en-IN') + '/yr'
+                    }
+                ];
+
+                if (updatedSalaryBreakup.netTakeHome) {
+                    enrichedChanges.push({
+                        module: 'compensation',
+                        field: 'netTakeHome',
+                        fieldLabel: 'Net Take Home Pay',
+                        previousValue: null,
+                        revisedValue: Number(updatedSalaryBreakup.netTakeHome) || 0,
+                        previousDisplayValue: '—',
+                        revisedDisplayValue: '₹' + Number(updatedSalaryBreakup.netTakeHome).toLocaleString('en-IN') + '/mo'
+                    });
+                }
+
+                const newRevision = new EmployeeRevision({
+                    companyId: req.companyId,
+                    employeeId: user._id,
+                    effectiveDate: parsedEffectiveDate,
+                    status: isImmediate ? 'active' : 'scheduled',
+                    reason: String(reason || 'Bulk Compensation Restructuring').trim(),
+                    changes: enrichedChanges,
+                    metadata: {
+                        ...metadata,
+                        previousSnapshot: currentState,
+                        salaryBreakup: updatedSalaryBreakup
+                    },
+                    createdBy: req.user._id,
+                    appliedAt: isImmediate ? new Date() : null
+                });
+
+                await newRevision.save();
+                if (isImmediate) {
+                    await applyRevisionToEmployee(newRevision, req.companyId);
+                }
+
+                results.successCount++;
+                results.details.push({
+                    employeeId: user._id,
+                    name: (user.firstName + ' ' + (user.lastName || '')).trim(),
+                    previousCTC: currentAnnualCTC,
+                    newCTC: newAnnualCTC,
+                    success: true
+                });
+            } catch (itemErr) {
+                console.error('[bulkCreateRevisions] Failed for ' + empId + ':', itemErr);
+                results.failCount++;
+                results.details.push({ employeeId: empId, success: false, message: itemErr.message });
+            }
+        }
+
+        if (req.body.generateLetters === true && results.successCount > 0) {
+            try {
+                const successfulIds = results.details.filter(d => d.success).map(d => d.employeeId);
+                const letterResults = await bulkGenerateAndDispatchRevisionLetters({
+                    employeeIds: successfulIds,
+                    companyId: req.companyId,
+                    hrUserId: req.user._id,
+                    options: {
+                        templateId: req.body.templateId || null,
+                        emailSubject: req.body.emailSubject || null,
+                        emailBody: req.body.emailBody || null,
+                        sendEmail: req.body.sendEmail !== false,
+                        saveToDossier: req.body.saveToDossier !== false
+                    }
+                });
+                results.letterResults = letterResults;
+            } catch (letterErr) {
+                console.error('[bulkCreateRevisions] Letter dispatch error:', letterErr.message);
+                results.letterError = letterErr.message;
+            }
+        }
+
+        return res.status(200).json({
+            message: 'Bulk revision completed: ' + results.successCount + ' succeeded, ' + results.failCount + ' failed.',
+            ...results
+        });
+    } catch (error) {
+        console.error('[bulkCreateRevisions Error]:', error);
+        res.status(500).json({ message: error.message || 'Failed to process bulk revisions' });
+    }
+};
+
+/**
+ * GET /api/employees/revisions/company
+ * Fetch all revisions across the company with pagination and status filtering
+ */
+const getCompanyRevisions = async (req, res) => {
+    try {
+        const page = Math.max(Number.parseInt(req.query?.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(Number.parseInt(req.query?.limit, 10) || 50, 1), 200);
+        const status = req.query?.status;
+
+        const query = { companyId: req.companyId };
+        if (status && ['active', 'scheduled', 'superseded', 'cancelled'].includes(status)) {
+            query.status = status;
+        }
+
+        const [total, revisions] = await Promise.all([
+            EmployeeRevision.countDocuments(query),
+            EmployeeRevision.find(query)
+                .sort({ effectiveDate: -1, createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit)
+                .populate('employeeId', 'firstName lastName email employeeCode department')
+                .populate('createdBy', 'firstName lastName email profilePicture')
+                .lean()
+        ]);
+
+        return res.json({ revisions, total, page, totalPages: Math.ceil(total / limit) });
+    } catch (error) {
+        console.error('[getCompanyRevisions Error]:', error);
+        return res.status(500).json({ message: 'Failed to fetch company revisions' });
+    }
+};
+
+/**
  * GET /api/employees/:id/leave-balances
  * Fetch all active company leave policies combined with this employee's current LeaveBalance records
  */
@@ -1354,7 +1597,281 @@ const getEmployeeLeaveBalances = async (req, res) => {
     }
 };
 
+
+
+/**
+ * GET /api/employees/revisions/templates
+ * List available letter templates for revision letters
+ */
+const getRevisionTemplates = async (req, res) => {
+    try {
+        const company = await Company.findById(req.companyId).select('name settings.onboarding').lean();
+        const templates = [
+            {
+                _id: 'default',
+                name: 'Built-in Professional Revision Offer Letter',
+                isDefault: true,
+                description: 'Pre-formatted professional compensation revision letter with dynamic salary table.'
+            }
+        ];
+
+        if (company?.settings?.onboarding?.offerLetterTemplateUrl) {
+            templates.push({
+                _id: 'company_offer',
+                name: 'Company Default Offer Letter Template',
+                url: company.settings.onboarding.offerLetterTemplateUrl,
+                isDefault: false
+            });
+        }
+
+        const dynamic = company?.settings?.onboarding?.dynamicTemplates || [];
+        dynamic.forEach(t => {
+            if (!t.isDeleted) {
+                templates.push({
+                    _id: t._id,
+                    name: t.name,
+                    url: t.url,
+                    isRequired: t.isRequired,
+                    createdAt: t.createdAt || t.uploadedAt
+                });
+            }
+        });
+
+        return res.json({ templates });
+    } catch (error) {
+        console.error('[getRevisionTemplates Error]:', error);
+        return res.status(500).json({ message: 'Failed to fetch templates' });
+    }
+};
+
+/**
+ * POST /api/employees/revisions/templates/upload
+ * Upload a custom .docx template for salary revision / offer letters
+ */
+const uploadRevisionTemplate = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No .docx template file uploaded' });
+        }
+
+        const rawName = req.body.name || req.file.originalname || 'Revision Letter Template';
+        const name = rawName.replace(/\.docx$/i, '').trim();
+        const url = req.file.path;
+        const publicId = req.file.filename || req.file.public_id;
+
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+        if (!company.settings) company.settings = {};
+        if (!company.settings.onboarding) company.settings.onboarding = {};
+        if (!company.settings.onboarding.dynamicTemplates) company.settings.onboarding.dynamicTemplates = [];
+
+        company.settings.onboarding.dynamicTemplates.push({
+            name,
+            url,
+            publicId,
+            isRequired: false,
+            isDeleted: false,
+            uploadedAt: new Date()
+        });
+
+        await company.save();
+        const created = company.settings.onboarding.dynamicTemplates[company.settings.onboarding.dynamicTemplates.length - 1];
+
+        return res.status(200).json({
+            message: 'Revision letter template uploaded successfully!',
+            template: created
+        });
+    } catch (error) {
+        console.error('[uploadRevisionTemplate Error]:', error);
+        return res.status(500).json({ message: error.message || 'Failed to upload revision template' });
+    }
+};
+
+/**
+ * DELETE /api/employees/revisions/templates/:templateId
+ * Delete a custom template
+ */
+const deleteRevisionTemplate = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const company = await Company.findById(req.companyId);
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        if (company.settings?.onboarding?.dynamicTemplates) {
+            company.settings.onboarding.dynamicTemplates = company.settings.onboarding.dynamicTemplates.filter(
+                t => String(t._id) !== String(templateId)
+            );
+            await company.save();
+        }
+
+        return res.status(200).json({ message: 'Template removed successfully' });
+    } catch (error) {
+        console.error('[deleteRevisionTemplate Error]:', error);
+        return res.status(500).json({ message: error.message || 'Failed to delete template' });
+    }
+};
+
+/**
+ * GET /api/employees/revisions/templates/sample
+ * Download the default sample revision letter template (.docx) with all placeholder tags
+ */
+const downloadSampleTemplate = async (req, res) => {
+    try {
+        const samplePath = path.join(__dirname, 'templates/defaultRevisionLetter.docx');
+        if (!fs.existsSync(samplePath)) {
+            return res.status(404).json({ message: 'Default sample template not found' });
+        }
+        res.setHeader('Content-Disposition', 'attachment; filename="Sample_Revision_Offer_Letter_Template.docx"');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        return res.sendFile(samplePath);
+    } catch (error) {
+        console.error('[downloadSampleTemplate Error]:', error);
+        return res.status(500).json({ message: 'Failed to download sample template' });
+    }
+};
+
+/**
+ * GET /api/employees/revisions/templates/:templateId/download
+ * Download a custom template file (.docx)
+ */
+const downloadRevisionTemplateFile = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        if (templateId === 'default') {
+            return downloadSampleTemplate(req, res);
+        }
+
+        const company = await Company.findById(req.companyId).select('settings.onboarding').lean();
+        const templates = company?.settings?.onboarding?.dynamicTemplates || [];
+        const template = templates.find(t => String(t._id) === String(templateId));
+
+        let targetUrl = template?.url;
+        if (!targetUrl && templateId === 'company_offer') {
+            targetUrl = company?.settings?.onboarding?.offerLetterTemplateUrl;
+        }
+
+        if (!targetUrl) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+
+        if (targetUrl.startsWith('http')) {
+            const resp = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+            res.setHeader('Content-Disposition', `attachment; filename="${template?.name || 'Template'}.docx"`);
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            return res.send(Buffer.from(resp.data));
+        }
+
+        return res.download(targetUrl, `${template?.name || 'Template'}.docx`);
+    } catch (error) {
+        console.error('[downloadRevisionTemplateFile Error]:', error);
+        return res.status(500).json({ message: 'Failed to download template file' });
+    }
+};
+
+/**
+ * POST /api/employees/:id/revisions/:revisionId/letter
+ * Generate and dispatch (email + dossier save) revised offer letter for an employee
+ */
+const sendRevisionLetter = async (req, res) => {
+    try {
+        const { id: employeeId, revisionId } = req.params;
+        const options = req.body || {};
+
+        const result = await generateAndDispatchRevisionLetter({
+            userId: employeeId,
+            revisionId: revisionId !== 'latest' ? revisionId : null,
+            companyId: req.companyId,
+            hrUserId: req.user._id,
+            options
+        });
+
+        let message = result.emailSent
+            ? 'Revised offer letter generated and sent via email'
+            : 'Revised offer letter generated and saved to dossier';
+        if (result.warning) {
+            message += ` (${result.warning})`;
+        }
+
+        return res.json({
+            message,
+            result
+        });
+    } catch (error) {
+        console.error('[sendRevisionLetter Error]:', error);
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to generate revision letter' });
+    }
+};
+
+/**
+ * GET /api/employees/:id/revisions/:revisionId/letter/download
+ * Download DOCX revision letter
+ */
+const downloadRevisionLetter = async (req, res) => {
+    try {
+        const { id: employeeId, revisionId } = req.params;
+        const templateId = req.query.templateId || null;
+
+        const result = await generateAndDispatchRevisionLetter({
+            userId: employeeId,
+            revisionId: revisionId !== 'latest' ? revisionId : null,
+            companyId: req.companyId,
+            hrUserId: req.user._id,
+            options: {
+                sendEmail: false,
+                saveToDossier: false,
+                templateId
+            }
+        });
+
+        res.setHeader('Content-Disposition', 'attachment; filename="' + result.filename + '"');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        return res.send(result.buffer);
+    } catch (error) {
+        console.error('[downloadRevisionLetter Error]:', error);
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to download revision letter' });
+    }
+};
+
+/**
+ * POST /api/employees/revisions/bulk/letters
+ * Bulk generate and dispatch revised offer letters to multiple employees
+ */
+const bulkSendRevisionLetters = async (req, res) => {
+    try {
+        const { employeeIds, ...options } = req.body;
+        if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
+            return res.status(400).json({ message: 'No employees specified for bulk letter generation' });
+        }
+
+        const results = await bulkGenerateAndDispatchRevisionLetters({
+            employeeIds,
+            companyId: req.companyId,
+            hrUserId: req.user._id,
+            options
+        });
+
+        return res.json({
+            message: 'Processed ' + results.total + ' employees: ' + results.successCount + ' letters sent/generated, ' + results.failCount + ' failed.',
+            ...results
+        });
+    } catch (error) {
+        console.error('[bulkSendRevisionLetters Error]:', error);
+        const detailedMsg = error.details ? error.details.join('; ') : error.message;
+        return res.status(500).json({ message: detailedMsg || 'Failed to process bulk revision letters' });
+    }
+};
+
 module.exports = {
+    getRevisionTemplates,
+    uploadRevisionTemplate,
+    deleteRevisionTemplate,
+    downloadSampleTemplate,
+    downloadRevisionTemplateFile,
+    sendRevisionLetter,
+    downloadRevisionLetter,
+    bulkSendRevisionLetters,
     createRevision,
     getRevisions,
     getRevisionById,
@@ -1362,6 +1879,8 @@ module.exports = {
     updateScheduledRevision,
     cancelScheduledRevision,
     backfillEmployeeRevisions,
+    bulkCreateRevisions,
+    getCompanyRevisions,
     applyRevisionToEmployee,
     extractEmployeeState,
     resolveDisplayValue
