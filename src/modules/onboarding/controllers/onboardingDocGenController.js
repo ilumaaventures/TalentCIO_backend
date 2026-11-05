@@ -572,7 +572,7 @@ exports.generateOfferLetter = async (req, res) => {
         });
 
         const safeName = fullName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
-        res.setHeader('Content-Disposition', `attachment; filename=OfferLetter_${safeName}.docx`);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}.docx"`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.send(buffer);
 

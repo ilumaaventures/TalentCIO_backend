@@ -463,12 +463,32 @@ const renderDocxZip = (rawBuffer, renderData) => {
 /**
  * Generates the populated DOCX buffer for an employee revision
  */
-const generateRevisionLetterBuffer = async ({ user, profile, revision, company, config, templateId = null }) => {
-    const templateInfo = await getTemplateBuffer(company, templateId);
+const generateRevisionLetterBuffer = async ({
+    user,
+    profile,
+    revision,
+    company,
+    config,
+    templateId = null,
+    customContent = null,
+    options = {}
+}) => {
+    const effectiveTemplateId = templateId || options?.templateId || revision?.metadata?.templateId || null;
+    const templateInfo = await getTemplateBuffer(company, effectiveTemplateId);
     const { renderData, breakupDetails } = buildRevisionLetterData({ user, profile, revision, company, config });
 
     try {
-        const buffer = renderDocxZip(templateInfo.buffer, renderData);
+        let baseBuffer = templateInfo.buffer;
+        const activeCustomContent = customContent || options?.customContent || revision?.metadata?.customTemplateContent;
+        if (activeCustomContent && typeof activeCustomContent === 'string' && activeCustomContent.trim()) {
+            try {
+                const { updateDocxWithText } = require('../../onboarding/controllers/onboardingSettingsController');
+                baseBuffer = updateDocxWithText(baseBuffer, activeCustomContent);
+            } catch (updateErr) {
+                console.warn('[RevisionLetter] Failed to update docx with custom content:', updateErr.message);
+            }
+        }
+        const buffer = renderDocxZip(baseBuffer, renderData);
         buffer.usedTemplateName = templateInfo.name;
         buffer.fallbackUsed = false;
         buffer.breakupDetails = breakupDetails;
@@ -557,12 +577,13 @@ const generateAndDispatchRevisionLetter = async ({
         revision,
         company,
         config,
-        templateId: options.templateId || null
+        templateId: options.templateId || null,
+        customContent: options.customContent || revision?.metadata?.customTemplateContent || null
     });
 
     const safeName = `${user.firstName}_${user.lastName || ''}`.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim();
     const effectiveDateLabel = formatDateLabel(revision?.effectiveDate);
-    const filename = `Revised_Offer_Letter_${safeName}_${effectiveDateLabel}.docx`;
+    const filename = `${safeName}.docx`;
 
     let fileUrl = '';
     const shouldSaveToDossier = options.saveToDossier !== false;
@@ -582,7 +603,7 @@ const generateAndDispatchRevisionLetter = async ({
                 profile.documents = profile.documents || [];
                 profile.documents.push({
                     category: 'Offer Letter',
-                    title: `Revised Offer Letter - ${formatDate(revision?.effectiveDate || new Date())}`,
+                    title: filename,
                     fileName: filename,
                     url: fileUrl,
                     uploadDate: new Date(),

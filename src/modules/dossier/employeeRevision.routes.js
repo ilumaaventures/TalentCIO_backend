@@ -14,6 +14,7 @@ const {
     bulkCreateRevisions,
     getCompanyRevisions,
     getRevisionTemplates,
+    getRevisionTemplateContent,
     uploadRevisionTemplate,
     deleteRevisionTemplate,
     downloadSampleTemplate,
@@ -59,6 +60,20 @@ router.get(
     '/revisions/templates',
     authorizeAny(['employee.revision.manage', 'payroll.salary.manage', 'employee.revision.create', 'payroll.config.manage', 'employee.revision.view.others']),
     getRevisionTemplates
+);
+
+// Get template text content for per-employee customization
+router.get(
+    '/revisions/templates/:templateId/content',
+    authorizeAny(['employee.revision.manage', 'payroll.salary.manage', 'employee.revision.create', 'payroll.config.manage', 'employee.revision.view.others']),
+    getRevisionTemplateContent
+);
+
+// Support POST for download with customContent body
+router.post(
+    '/:id/revisions/:revisionId/letter/download',
+    authorizeAny(['employee.revision.view.self', 'employee.revision.view.others', 'employee.revision.manage', 'payroll.salary.manage', 'payroll.salary.view']),
+    downloadRevisionLetter
 );
 
 // Download default sample revision letter template (.docx)
