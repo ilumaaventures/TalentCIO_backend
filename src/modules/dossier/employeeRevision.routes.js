@@ -11,6 +11,7 @@ const {
     updateScheduledRevision,
     cancelScheduledRevision,
     backfillEmployeeRevisions,
+    getBulkEmployeeSalaryData,
     bulkCreateRevisions,
     getCompanyRevisions,
     getRevisionTemplates,
@@ -45,6 +46,13 @@ router.post(
     blockDuringImpersonation,
     authorizeAny(['employee.revision.create', 'employee.revision.manage']),
     backfillEmployeeRevisions
+);
+
+// Bulk fetch active employees with their current compensation profiles for bulk editing
+router.get(
+    '/revisions/bulk-profiles',
+    authorizeAny(['employee.revision.manage', 'employee.revision.view.others', 'payroll.salary.manage', 'payroll.salary.view', 'employee.revision.create']),
+    getBulkEmployeeSalaryData
 );
 
 // Bulk create revisions for multiple employees

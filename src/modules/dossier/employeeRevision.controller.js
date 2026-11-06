@@ -426,6 +426,8 @@ const applyRevisionToEmployee = async (revision, companyId) => {
                 : (profile.compensation?.salaryBreakup || {});
             const newBreakup = { ...existingBreakup, ...calculatedSalary };
             profile.set('compensation.salaryBreakup', newBreakup);
+            profile.markModified('compensation');
+            profile.markModified('compensation.salaryBreakup');
 
             // Record into salaryRevisions array in profile for backwards compatibility
             const salaryRevs = Array.isArray(profile.compensation?.salaryRevisions)
@@ -1260,6 +1262,57 @@ const backfillEmployeeRevisions = async (req, res) => {
 };
 
 /**
+ * Bulk fetch active employees with their current compensation profiles for bulk editing
+ */
+const getBulkEmployeeSalaryData = async (req, res) => {
+    try {
+        const users = await User.find({
+            companyId: req.companyId,
+            isActive: true,
+            isDeleted: { $ne: true }
+        })
+            .select('firstName lastName email employeeCode department designation employeeProfile')
+            .sort({ firstName: 1, lastName: 1 })
+            .lean();
+
+        const userIds = users.map(u => u._id);
+        const profiles = await EmployeeProfile.find({
+            companyId: req.companyId,
+            user: { $in: userIds }
+        })
+            .select('user employment compensation.ctc compensation.payType compensation.salaryBreakup personal')
+            .lean();
+
+        const profileMap = new Map();
+        profiles.forEach(p => {
+            profileMap.set(String(p.user), p);
+        });
+
+        const list = users.map(user => {
+            const profile = profileMap.get(String(user._id)) || {};
+            const state = extractEmployeeState(user, profile);
+            return {
+                _id: user._id,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email,
+                employeeCode: user.employeeCode,
+                department: user.department || state.department || '',
+                designation: user.designation || state.designation || '',
+                annualCTC: state.annualCTC || 0,
+                monthlyCTC: state.monthlyCTC || 0,
+                salaryBreakup: state.salaryBreakup || {}
+            };
+        });
+
+        return res.json({ employees: list, total: list.length });
+    } catch (error) {
+        console.error('[getBulkEmployeeSalaryData Error]:', error);
+        res.status(500).json({ message: error.message || 'Failed to fetch bulk employee salary data' });
+    }
+};
+
+/**
  * Bulk create salary revisions across multiple employees
  */
 const bulkCreateRevisions = async (req, res) => {
@@ -1272,6 +1325,7 @@ const bulkCreateRevisions = async (req, res) => {
             hikePercentage = 0,
             flatAmount = 0,
             customSalaries = {}, // { [employeeId]: newAnnualCTC }
+            customBreakups = {}, // { [employeeId]: salaryBreakupObj }
             confirmBackdated = false,
             metadata = {}
         } = req.body;
@@ -1327,13 +1381,16 @@ const bulkCreateRevisions = async (req, res) => {
                 } else if (revisionType === 'flat') {
                     const flat = Number(flatAmount) || 0;
                     newAnnualCTC = Math.round(currentAnnualCTC + flat);
-                } else if (revisionType === 'custom' && customSalaries[empId]) {
+                } else if (customSalaries && customSalaries[empId] !== undefined) {
                     newAnnualCTC = Math.round(Number(customSalaries[empId]) || currentAnnualCTC);
+                } else if (customBreakups && customBreakups[empId]?.annualCTC !== undefined) {
+                    newAnnualCTC = Math.round(Number(customBreakups[empId].annualCTC) || currentAnnualCTC);
                 }
 
                 const newMonthlyCTC = Math.round(newAnnualCTC / 12);
                 let updatedSalaryBreakup = {
                     ...(currentState.salaryBreakup || {}),
+                    ...(customBreakups && customBreakups[empId] ? customBreakups[empId] : {}),
                     annualCTC: String(newAnnualCTC),
                     monthlyCTC: String(newMonthlyCTC)
                 };
@@ -1390,6 +1447,34 @@ const bulkCreateRevisions = async (req, res) => {
                         revisedDisplayValue: '₹' + newAnnualCTC.toLocaleString('en-IN') + '/yr'
                     }
                 ];
+
+                const statutoryKeys = [
+                    { key: 'pfEnabled', label: 'Provident Fund (PF)' },
+                    { key: 'esiEnabled', label: 'ESI' },
+                    { key: 'ptEnabled', label: 'Professional Tax' },
+                    { key: 'gratuityEnabled', label: 'Gratuity Provision' },
+                    { key: 'lwfEnabled', label: 'Labour Welfare Fund' },
+                    { key: 'tdsEnabled', label: 'TDS Deduction' },
+                    { key: 'ltaEnabled', label: 'Leave Travel Allowance (LTA)' },
+                    { key: 'includePfInCTC', label: 'Include PF in CTC' },
+                    { key: 'includeGratuityInCTC', label: 'Include Gratuity in CTC' }
+                ];
+
+                for (const stat of statutoryKeys) {
+                    const prevVal = currentState.salaryBreakup?.[stat.key];
+                    const nextVal = updatedSalaryBreakup[stat.key];
+                    if (nextVal !== undefined && prevVal !== undefined && String(prevVal) !== String(nextVal)) {
+                        enrichedChanges.push({
+                            module: 'compensation',
+                            field: stat.key,
+                            fieldLabel: stat.label,
+                            previousValue: prevVal,
+                            revisedValue: nextVal,
+                            previousDisplayValue: prevVal ? 'Enabled' : 'Disabled',
+                            revisedDisplayValue: nextVal ? 'Enabled' : 'Disabled'
+                        });
+                    }
+                }
 
                 if (updatedSalaryBreakup.netTakeHome) {
                     enrichedChanges.push({
@@ -1928,6 +2013,7 @@ module.exports = {
     updateScheduledRevision,
     cancelScheduledRevision,
     backfillEmployeeRevisions,
+    getBulkEmployeeSalaryData,
     bulkCreateRevisions,
     getCompanyRevisions,
     applyRevisionToEmployee,

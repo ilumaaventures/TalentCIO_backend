@@ -243,8 +243,22 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? source.insurance ?? config.defaultInsurance) : 0;
   const employerNPS = roundAmount(source.employerNPS);
 
-  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || source.customAllowances || [];
-  const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  const isInsuranceComp = (c) => c && (
+    c.id === 'medical_insurance' ||
+    c.id === 'insurance' ||
+    (c.name && c.name.toLowerCase().includes('insurance'))
+  );
+
+  const hasFlexiInsuranceDeduction = config.salaryComponents?.some(c =>
+    c.type === 'deduction' &&
+    isInsuranceComp(c) &&
+    (c.deductFromFlexi === true || c.includeInCTC === true)
+  );
+  const flexiInsuranceAmount = hasFlexiInsuranceDeduction ? 0 : insurance;
+
+  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || (Array.isArray(source.customAllowances) ? source.customAllowances : []);
+  const customAllowanceVal = (!Array.isArray(source.customAllowances) && !isNaN(Number(source.customAllowances))) ? Number(source.customAllowances) : 0;
+  const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) + customAllowanceVal);
 
   let flexi = 0, broadband = 0, petrol = 0, lta = 0, ltaCap = 0, conveyance = 0, medicalAllowance = 0, specialAllowance = 0;
 
@@ -280,6 +294,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             if (c.id === 'medical' && val === 0) {
               val = source.medicalAllowance !== undefined ? source.medicalAllowance : (source.salaryStructure?.medicalAllowance !== undefined ? source.salaryStructure.medicalAllowance : 0);
             }
+            if (c.id === 'meal' && val === 0) {
+              val = source.mealAllowance !== undefined ? source.mealAllowance : (source.salaryStructure?.mealAllowance !== undefined ? source.salaryStructure.mealAllowance : 0);
+            }
             if (c.id === 'flexi' && val === 0) {
               val = source.flexiAmount !== undefined ? source.flexiAmount : (source.salaryStructure?.flexiAmount !== undefined ? source.salaryStructure.flexiAmount : 0);
             }
@@ -289,6 +306,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             if (!ltaEnabled) {
               amount = 0;
             } else {
+              if (source.lta !== undefined && source.lta !== null && source.lta !== '') {
+                amount = roundAmount(source.lta);
+              }
               amount = roundAmount(Math.min(amount, ltaCap || amount));
             }
           }
@@ -317,15 +337,22 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             amount = roundAmount(basicMaster * pct);
           } else if (c.linkedTo === 'fixed') {
             let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
+            if (isInsuranceComp(c) && (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined)) {
+              const explicitIns = source.insuranceAmount ?? source.insurance ?? source.medical_insurance;
+              if (val === 0 || val === undefined || (source.insuranceAmount !== undefined && val !== explicitIns)) {
+                val = explicitIns;
+              }
+            }
             amount = roundAmount(val);
           }
           flexiDeductionsSum += amount;
         }
       });
+
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - flexiInsuranceAmount - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
             0
           ));
         }
@@ -455,6 +482,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           amount = roundAmount(basicMaster * pct);
         } else if (c.linkedTo === 'fixed') {
           let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
+          if (isInsuranceComp(c) && (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined)) {
+            const explicitIns = source.insuranceAmount ?? source.insurance ?? source.medical_insurance;
+            if (val === 0 || val === undefined || (source.insuranceAmount !== undefined && val !== explicitIns)) {
+              val = explicitIns;
+            }
+          }
           amount = roundAmount(val);
         }
         deductionsMap[c.id] = amount;
@@ -506,7 +539,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     grossSalary,
     monthlyGross: grossSalary,
     totalEarnings,
-    totalEmployerContributions: roundAmount(pfEmployer + esiEmployer + gratuity + lwfEmployer + insurance + employerNPS + dynamicFlexiDeductionsSum),
+    totalEmployerContributions: roundAmount(pfEmployer + esiEmployer + gratuity + lwfEmployer + flexiInsuranceAmount + employerNPS + dynamicFlexiDeductionsSum),
     grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions + dynamicFlexiDeductionsSum),
     totalDeductions,
     dynamicGrossDeductionsSum,
@@ -524,7 +557,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       pfEmployerInCTC +
       gratuityInCTC +
       lwfEmployer +
-      insurance +
+      flexiInsuranceAmount +
       esiEmployer +
       employerNPS +
       dynamicFlexiDeductionsSum +
