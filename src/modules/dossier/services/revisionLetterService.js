@@ -137,6 +137,35 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
                             annual: formatCurrency(master.lwfEmployer * 12)
                         });
                     }
+                    const addedContributionIds = new Set();
+                    const hasDynamicInsurance = comps.some(c =>
+                        c.type === 'deduction' &&
+                        (c.id === 'insurance' || c.id === 'medical_insurance' || (c.name && c.name.toLowerCase().includes('insurance'))) &&
+                        (c.deductFromFlexi || c.includeInCTC)
+                    );
+
+                    if (prefs.showInsurance !== false && master.insurance > 0 && !hasDynamicInsurance) {
+                        contributionsList.push({
+                            name: 'Medical Insurance',
+                            monthly: formatCurrency(master.insurance),
+                            annual: formatCurrency(master.insurance * 12)
+                        });
+                        addedContributionIds.add('insurance');
+                        addedContributionIds.add('medical_insurance');
+                    }
+                    // Dynamic Flexi benefit deductions (funded via CTC remainder)
+                    comps.filter(c => c.type === 'deduction' && (c.deductFromFlexi || c.includeInCTC)).forEach(c => {
+                        if (addedContributionIds.has(c.id)) return;
+                        const val = master.deductionsMap?.[c.id] || 0;
+                        if (val > 0) {
+                            contributionsList.push({
+                                name: `${c.name || c.id} (Flexi Benefit)`,
+                                monthly: formatCurrency(val),
+                                annual: formatCurrency(val * 12)
+                            });
+                            addedContributionIds.add(c.id);
+                        }
+                    });
                 }
 
                 const payroll = buildPayrollSnapshot(salaryData, config, {
@@ -144,44 +173,75 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
                     paidDays: config.defaultWorkingDays || 26
                 }, {}, new Date().getMonth() + 1, new Date().getFullYear());
 
-                if (prefs.showEmployeeDeductions !== false && payroll && payroll.deductions) {
-                    if (prefs.showPFEmployee !== false && payroll.deductions.pfEmployee > 0) {
+                if (prefs.showEmployeeDeductions !== false && master) {
+                    const pfEmp = payroll?.pfEmployee !== undefined ? payroll.pfEmployee : (master.pfEmployee || 0);
+                    if (prefs.showPFEmployee !== false && pfEmp > 0) {
                         deductionsList.push({
                             name: 'PF Employee Contribution',
-                            monthly: formatCurrency(payroll.deductions.pfEmployee),
-                            annual: formatCurrency(payroll.deductions.pfEmployee * 12)
+                            monthly: formatCurrency(pfEmp),
+                            annual: formatCurrency(pfEmp * 12)
                         });
                     }
-                    if (prefs.showESIEmployee !== false && payroll.deductions.esiEmployee > 0) {
+                    const esiEmp = payroll?.esiEmployee !== undefined ? payroll.esiEmployee : (master.esiEmployee || 0);
+                    if (prefs.showESIEmployee !== false && esiEmp > 0) {
                         deductionsList.push({
                             name: 'ESI Employee Contribution',
-                            monthly: formatCurrency(payroll.deductions.esiEmployee),
-                            annual: formatCurrency(payroll.deductions.esiEmployee * 12)
+                            monthly: formatCurrency(esiEmp),
+                            annual: formatCurrency(esiEmp * 12)
                         });
                     }
-                    if (prefs.showProfessionalTax !== false && payroll.deductions.professionalTax > 0) {
+                    const pt = payroll?.professionalTax !== undefined ? payroll.professionalTax : (master.professionalTax || 0);
+                    if (prefs.showProfessionalTax !== false && pt > 0) {
                         deductionsList.push({
                             name: 'Professional Tax (PT)',
-                            monthly: formatCurrency(payroll.deductions.professionalTax),
-                            annual: formatCurrency(payroll.deductions.professionalTax * 12)
+                            monthly: formatCurrency(pt),
+                            annual: formatCurrency(pt * 12)
                         });
                     }
-                    if (prefs.showLWFEmployee !== false && payroll.deductions.lwfEmployee > 0) {
+                    const lwfEmp = payroll?.lwfEmployee !== undefined ? payroll.lwfEmployee : (master.lwfEmployee || 0);
+                    if (prefs.showLWFEmployee !== false && lwfEmp > 0) {
                         deductionsList.push({
                             name: 'LWF Employee Share',
-                            monthly: formatCurrency(payroll.deductions.lwfEmployee),
-                            annual: formatCurrency(payroll.deductions.lwfEmployee * 12)
+                            monthly: formatCurrency(lwfEmp),
+                            annual: formatCurrency(lwfEmp * 12)
                         });
                     }
+                    // Dynamic gross deductions
+                    comps.filter(c => c.type === 'deduction' && !c.deductFromFlexi && !c.includeInCTC).forEach(c => {
+                        const val = master.deductionsMap?.[c.id] || 0;
+                        if (val > 0) {
+                            deductionsList.push({
+                                name: c.name || c.id,
+                                monthly: formatCurrency(val),
+                                annual: formatCurrency(val * 12)
+                            });
+                        }
+                    });
+                    // Custom employee deductions
+                    const customDeds = salaryData.customDeductions || [];
+                    customDeds.forEach(d => {
+                        const amt = parseFloat(d.amount) || 0;
+                        if (amt > 0) {
+                            deductionsList.push({
+                                name: d.name || 'Custom Deduction',
+                                monthly: formatCurrency(amt),
+                                annual: formatCurrency(amt * 12)
+                            });
+                        }
+                    });
                 }
 
                 totalMonthlyGross = master.totalEarnings || monthlyCTC;
                 totalAnnualGross = totalMonthlyGross * 12;
 
-                totalMonthlyContrib = (master.pfEmployer || 0) + (master.esiEmployer || 0) + (master.gratuity || 0) + (master.lwfEmployer || 0);
+                totalMonthlyContrib = master.totalEmployerContributions !== undefined
+                    ? master.totalEmployerContributions
+                    : ((master.pfEmployer || 0) + (master.esiEmployer || 0) + (master.gratuity || 0) + (master.lwfEmployer || 0) + (hasDynamicInsurance ? 0 : (master.insurance || 0)) + (master.dynamicFlexiDeductionsSum || 0));
                 totalAnnualContrib = totalMonthlyContrib * 12;
 
-                totalMonthlyDeductions = (payroll?.deductions?.pfEmployee || 0) + (payroll?.deductions?.esiEmployee || 0) + (payroll?.deductions?.professionalTax || 0) + (payroll?.deductions?.lwfEmployee || 0);
+                totalMonthlyDeductions = master.totalDeductions !== undefined
+                    ? master.totalDeductions
+                    : deductionsList.reduce((sum, d) => sum + (parseFloat(String(d.monthly).replace(/[^0-9.]/g, '')) || 0), 0);
                 totalAnnualDeductions = totalMonthlyDeductions * 12;
 
                 netMonthly = master.netTakeHome || Math.max(0, totalMonthlyGross - totalMonthlyDeductions);

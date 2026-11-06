@@ -70,23 +70,23 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const useComponents = source.useSalaryComponents !== false && !isIntern && !isHourly && !isFlat && !isNonSalariedType;
 
   const STRATEGY_DEFAULTS = {
-    monthly_salary: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true },
-    attendance_based: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true },
-    salary_plus_commission: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true },
-    weekly_salary: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true },
-    weekly_wage: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true },
+    monthly_salary: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true, ltaEligible: true },
+    attendance_based: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true, ltaEligible: true },
+    salary_plus_commission: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true, ltaEligible: true },
+    weekly_salary: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true, ltaEligible: true },
+    weekly_wage: { pfEligible: true, esiEligible: true, ptApplicable: true, gratuityEligible: true, lwfApplicable: true, ltaEligible: true },
 
-    hourly: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    daily_wage: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    piece_rate: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    project_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    flat_project: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    milestone: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    milestone_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    timesheet_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    commission_only: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    retainer: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
-    stipend_intern: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false },
+    hourly: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    daily_wage: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    piece_rate: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    project_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    flat_project: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    milestone: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    milestone_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    timesheet_based: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    commission_only: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    retainer: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
+    stipend_intern: { pfEligible: false, esiEligible: false, ptApplicable: false, gratuityEligible: false, lwfApplicable: false, ltaEligible: false },
   };
 
   const compDefaults = (config.compensationTypeDefaults && config.compensationTypeDefaults[compType]) || {};
@@ -97,6 +97,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     ptApplicable: !isNonSalariedType && !isIntern && !isHourly && !isFlat && !isNonStructuredExplicit,
     gratuityEligible: !isNonSalariedType && !isIntern && !isHourly && !isFlat && !isNonStructuredExplicit,
     lwfApplicable: !isNonSalariedType && !isIntern && !isHourly && !isFlat && !isNonStructuredExplicit,
+    ltaEligible: !isNonSalariedType && !isIntern && !isHourly && !isFlat && !isNonStructuredExplicit,
   };
 
   const resolveStatutory = (sourceVal, overrideVal, baseVal) => {
@@ -149,6 +150,11 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     source.gratuityEnabled !== undefined ? source.gratuityEnabled : source.gratuityEligible,
     compDefaults.gratuityEligible !== undefined ? compDefaults.gratuityEligible : compDefaults.gratuityEnabled,
     baseDefaults.gratuityEligible
+  );
+  const ltaEnabled = resolveStatutory(
+    source.ltaEnabled !== undefined ? source.ltaEnabled : source.ltaEligible,
+    compDefaults.ltaEligible !== undefined ? compDefaults.ltaEligible : compDefaults.ltaEnabled,
+    baseDefaults.ltaEligible ?? true
   );
   const includePfInCTC = pfEnabled && source.includePfInCTC === true;
   const includeGratuityInCTC = gratuityEnabled && source.includeGratuityInCTC !== false;
@@ -225,6 +231,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const { pfEmployer, pfEmployee, pfBase, gratuity, lwfEmployer, lwfEmployee, pfEmployerInCTC, gratuityInCTC } = computeStatutoryComponents({
     pfEnabled,
     gratuityEnabled,
+    ltaEnabled,
     lwfEnabled,
     monthlyCTC,
     basicMaster,
@@ -236,8 +243,22 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   const insurance = monthlyCTC > 0 ? roundAmount(source.insuranceAmount ?? source.insurance ?? config.defaultInsurance) : 0;
   const employerNPS = roundAmount(source.employerNPS);
 
-  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || source.customAllowances || [];
-  const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  const isInsuranceComp = (c) => c && (
+    c.id === 'medical_insurance' ||
+    c.id === 'insurance' ||
+    (c.name && c.name.toLowerCase().includes('insurance'))
+  );
+
+  const hasFlexiInsuranceDeduction = config.salaryComponents?.some(c =>
+    c.type === 'deduction' &&
+    isInsuranceComp(c) &&
+    (c.deductFromFlexi === true || c.includeInCTC === true)
+  );
+  const flexiInsuranceAmount = hasFlexiInsuranceDeduction ? 0 : insurance;
+
+  const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || (Array.isArray(source.customAllowances) ? source.customAllowances : []);
+  const customAllowanceVal = (!Array.isArray(source.customAllowances) && !isNaN(Number(source.customAllowances))) ? Number(source.customAllowances) : 0;
+  const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) + customAllowanceVal);
 
   let flexi = 0, broadband = 0, petrol = 0, lta = 0, ltaCap = 0, conveyance = 0, medicalAllowance = 0, specialAllowance = 0;
 
@@ -273,12 +294,24 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             if (c.id === 'medical' && val === 0) {
               val = source.medicalAllowance !== undefined ? source.medicalAllowance : (source.salaryStructure?.medicalAllowance !== undefined ? source.salaryStructure.medicalAllowance : 0);
             }
+            if (c.id === 'meal' && val === 0) {
+              val = source.mealAllowance !== undefined ? source.mealAllowance : (source.salaryStructure?.mealAllowance !== undefined ? source.salaryStructure.mealAllowance : 0);
+            }
             if (c.id === 'flexi' && val === 0) {
               val = source.flexiAmount !== undefined ? source.flexiAmount : (source.salaryStructure?.flexiAmount !== undefined ? source.salaryStructure.flexiAmount : 0);
             }
             amount = roundAmount(val);
           }
-          if (c.id === 'lta') amount = roundAmount(Math.min(amount, ltaCap || amount));
+          if (c.id === 'lta') {
+            if (!ltaEnabled) {
+              amount = 0;
+            } else {
+              if (source.lta !== undefined && source.lta !== null && source.lta !== '') {
+                amount = roundAmount(source.lta);
+              }
+              amount = roundAmount(Math.min(amount, ltaCap || amount));
+            }
+          }
           em[c.id] = amount;
           if (c.includeInCTC !== false) {
             sumOfAllNonRemainder += amount;
@@ -304,15 +337,23 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             amount = roundAmount(basicMaster * pct);
           } else if (c.linkedTo === 'fixed') {
             let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
+            if (isInsuranceComp(c)) {
+              if (source[c.id] === undefined || source[c.id] === null || source[c.id] === '') {
+                if (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined) {
+                  val = source.insuranceAmount ?? source.insurance ?? source.medical_insurance ?? 0;
+                }
+              }
+            }
             amount = roundAmount(val);
           }
           flexiDeductionsSum += amount;
         }
       });
+
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - flexiInsuranceAmount - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
             0
           ));
         }
@@ -335,9 +376,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     flexi = roundAmount(source.flexiAmount);
     broadband = roundAmount(source.broadband);
     petrol = roundAmount(source.petrol);
-    const ltaRequested = roundAmount(source.lta);
+    const ltaRequested = ltaEnabled ? roundAmount(source.lta) : 0;
     ltaCap = roundAmount(basicMaster * config.ltaMaxPercent);
-    lta = roundAmount(Math.min(ltaRequested, ltaCap || ltaRequested));
+    lta = ltaEnabled ? roundAmount(Math.min(ltaRequested, ltaCap || ltaRequested)) : 0;
     conveyance = roundAmount(source.salaryStructure?.conveyance);
     medicalAllowance = roundAmount(source.salaryStructure?.medicalAllowance);
     specialAllowance = roundAmount(Math.max(
@@ -442,6 +483,13 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           amount = roundAmount(basicMaster * pct);
         } else if (c.linkedTo === 'fixed') {
           let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
+          if (isInsuranceComp(c)) {
+            if (source[c.id] === undefined || source[c.id] === null || source[c.id] === '') {
+              if (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined) {
+                val = source.insuranceAmount ?? source.insurance ?? source.medical_insurance ?? 0;
+              }
+            }
+          }
           amount = roundAmount(val);
         }
         deductionsMap[c.id] = amount;
@@ -493,7 +541,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     grossSalary,
     monthlyGross: grossSalary,
     totalEarnings,
-    totalEmployerContributions: roundAmount(pfEmployer + esiEmployer + gratuity + lwfEmployer + insurance + employerNPS + dynamicFlexiDeductionsSum),
+    totalEmployerContributions: roundAmount(pfEmployer + esiEmployer + gratuity + lwfEmployer + flexiInsuranceAmount + employerNPS + dynamicFlexiDeductionsSum),
     grossTotalSalary: roundAmount(totalEarnings + totalEmployerContributions + dynamicFlexiDeductionsSum),
     totalDeductions,
     dynamicGrossDeductionsSum,
@@ -511,7 +559,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       pfEmployerInCTC +
       gratuityInCTC +
       lwfEmployer +
-      insurance +
+      flexiInsuranceAmount +
       esiEmployer +
       employerNPS +
       dynamicFlexiDeductionsSum +
@@ -527,6 +575,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     ptEnabled,
     lwfEnabled,
     gratuityEnabled,
+    ltaEnabled,
     includePfInCTC,
     includeGratuityInCTC,
     useSalaryComponents: source.useSalaryComponents !== false,
@@ -667,6 +716,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
     lwfEnabled: parseBoolVal(calculatedSalary.lwfEnabled, true),
     gratuityEnabled: parseBoolVal(calculatedSalary.gratuityEnabled, true),
     tdsEnabled: parseBoolVal(calculatedSalary.tdsEnabled, true),
+    ltaEnabled: parseBoolVal(calculatedSalary.ltaEnabled, true),
     includePfInCTC: parseBoolVal(calculatedSalary.includePfInCTC, false),
     includeGratuityInCTC: parseBoolVal(calculatedSalary.includeGratuityInCTC, true),
     useSalaryComponents: parseBoolVal(calculatedSalary.useSalaryComponents, true),
@@ -697,6 +747,7 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
   calculatedSalary.lwfEnabled = source.lwfEnabled;
   calculatedSalary.gratuityEnabled = source.gratuityEnabled;
   calculatedSalary.tdsEnabled = source.tdsEnabled;
+  calculatedSalary.ltaEnabled = source.ltaEnabled;
   calculatedSalary.includePfInCTC = source.includePfInCTC;
   calculatedSalary.includeGratuityInCTC = source.includeGratuityInCTC;
   calculatedSalary.useSalaryComponents = source.useSalaryComponents;

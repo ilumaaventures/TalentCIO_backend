@@ -389,6 +389,16 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
         findComponent(deductions, /insurance/i)
     );
 
+    const isStandardComp = (comp) => {
+        if (!comp) return false;
+        const id = String(comp.id || '').toLowerCase();
+        const name = String(comp.name || '').toLowerCase();
+        return (
+            ['basic', 'hra', 'flexi', 'special', 'broadband', 'petrol', 'lta', 'insurance', 'medical_insurance'].includes(id) ||
+            /basic|house rent|hra|flexi|special allowance|petrol|broadband|lta|leave travel|insurance|mediclaim/i.test(name)
+        );
+    };
+
     salaryComps.forEach(c => {
         const val = parseNum(rawSalary[c.id]);
         if (c.id === 'flexi') {
@@ -397,11 +407,17 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
             if (!specialAllowance) specialAllowance = val;
         } else if (c.id === 'basic' || c.id === 'hra') {
             // handled
-        } else if (/insurance/i.test(c.name)) {
+        } else if (c.id === 'broadband' || /broadband/i.test(c.name)) {
+            if (!broadband && val > 0) broadband = val;
+        } else if (c.id === 'petrol' || /petrol/i.test(c.name)) {
+            if (!petrol && val > 0) petrol = val;
+        } else if (c.id === 'lta' || /leave travel|lta/i.test(c.name)) {
+            if (!lta && val > 0) lta = val;
+        } else if (c.id === 'insurance' || c.id === 'medical_insurance' || /insurance|mediclaim/i.test(c.name)) {
             if (!insurance && val > 0) insurance = val;
-        } else if ((c.type === 'earning' || !c.type) && !['broadband', 'petrol', 'lta'].includes(c.id)) {
+        } else if ((c.type === 'earning' || !c.type) && !isStandardComp(c)) {
             if (val > 0) additionalEarnings.push({ name: c.name, monthly: val });
-        } else if (c.type === 'deduction' && (c.deductFromFlexi || c.includeInCTC)) {
+        } else if (c.type === 'deduction' && (c.deductFromFlexi || c.includeInCTC) && !isStandardComp(c)) {
             if (val > 0) additionalDeductionsFromFlexi.push({ name: c.name, monthly: val });
         }
     });
@@ -442,6 +458,10 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
         const name = String(item.name || '').trim();
         const amt = parseNum(item.amount);
         if (amt <= 0) return;
+
+        if (/basic|hra|flexi|special allowance|petrol|broadband|lta|leave travel|insurance|mediclaim/i.test(name)) {
+            return;
+        }
 
         if (/bonus/i.test(name)) {
             const freq = String(item.frequency || 'semi_annually').toLowerCase();
@@ -485,7 +505,9 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
     } else if (!pfEmployer && findComponent(contributions, /pf|provident/i)) {
         pfEmployer = findComponent(contributions, /pf|provident/i);
     } else if (!pfEmployer && rawSalary.pfEnabled === true && (rawSalary.includePfInCTC === true || customData.includePfInCTC === true)) {
-        pfEmployer = basic >= 15000 ? 1800 : Math.round(basic * 0.12);
+        const pfCap = customData.config?.pfCap || rawSalary.pfCap || 15000;
+        const pfRate = customData.config?.pfEmployerRate || 0.12;
+        pfEmployer = Math.round(Math.min(basic, pfCap) * pfRate);
     }
     if (rawSalary.pfEnabled === false) pfEmployer = 0;
 
@@ -586,114 +608,67 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
         makeCell({ text: 'Monthly', align: 'right', isBold: true, fill: headerFill, width: col2Width })
     ], true));
 
-    // Dynamically push ONLY eligible components present in salary structure (> 0)
-    if (basic > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'Basic', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(basic), align: 'right', width: col2Width })
-        ]));
-    }
+    // Dynamically push ONLY eligible components present in salary structure (> 0) with canonical deduplication
+    const seenDocxCanonicalKeys = new Set();
+    const addUniqueDocxRow = (label, monthlyVal, isBold = false) => {
+        if (!monthlyVal || monthlyVal <= 0) return;
+        const normKey = String(label)
+            .toLowerCase()
+            .replace(/[*()]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
 
-    if (hra > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'HRA', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(hra), align: 'right', width: col2Width })
-        ]));
-    }
+        let canonicalKey = normKey;
+        if (canonicalKey.includes('basic')) canonicalKey = 'basic';
+        else if (canonicalKey.includes('hra') || canonicalKey.includes('house rent')) canonicalKey = 'hra';
+        else if (canonicalKey.includes('flexi')) canonicalKey = 'flexi';
+        else if (canonicalKey.includes('special')) canonicalKey = 'special';
+        else if (canonicalKey.includes('petrol')) canonicalKey = 'petrol';
+        else if (canonicalKey.includes('broadband')) canonicalKey = 'broadband';
+        else if (canonicalKey.includes('lta') || canonicalKey.includes('leave travel')) canonicalKey = 'lta';
+        else if (canonicalKey.includes('insurance') || canonicalKey.includes('mediclaim')) canonicalKey = 'insurance';
+        else if (canonicalKey.includes('pf') && (canonicalKey.includes('employer') || canonicalKey.includes('contribution'))) canonicalKey = 'pf_employer';
+        else if (canonicalKey.includes('lwf') && (canonicalKey.includes('employer') || canonicalKey.includes('contribution'))) canonicalKey = 'lwf_employer';
+        else if (canonicalKey.includes('gratuity')) canonicalKey = 'gratuity';
 
-    if (flexi > 0) {
-        const flexiLabel = 'Flexi(if chosen)';
-        rows.push(makeRow([
-            makeCell({ text: flexiLabel, align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(flexi), align: 'right', width: col2Width })
-        ]));
-    }
+        if (seenDocxCanonicalKeys.has(canonicalKey)) return;
+        seenDocxCanonicalKeys.add(canonicalKey);
 
+        rows.push(makeRow([
+            makeCell({ text: label, align: 'left', isBold, width: col1Width }),
+            makeCell({ text: formatCellVal(monthlyVal), align: 'right', isBold, width: col2Width })
+        ]));
+    };
+
+    if (basic > 0) addUniqueDocxRow('Basic', basic);
+    if (hra > 0) addUniqueDocxRow('HRA', hra);
+    if (flexi > 0) addUniqueDocxRow('Flexi(if chosen)', flexi);
     if (specialAllowance > 0 && specialAllowance !== flexi) {
         const specialLabel = salaryComps.find(c => c.id === 'special')?.name || 'Special Allowance';
-        rows.push(makeRow([
-            makeCell({ text: specialLabel, align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(specialAllowance), align: 'right', width: col2Width })
-        ]));
+        addUniqueDocxRow(specialLabel, specialAllowance);
     }
-
-    if (broadband > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'Broadband', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(broadband), align: 'right', width: col2Width })
-        ]));
-    }
-
-    if (petrol > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'Petrol', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(petrol), align: 'right', width: col2Width })
-        ]));
-    }
-
-    if (lta > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'LTA', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(lta), align: 'right', width: col2Width })
-        ]));
-    }
+    if (broadband > 0) addUniqueDocxRow('Broadband', broadband);
+    if (petrol > 0) addUniqueDocxRow('Petrol', petrol);
+    if (lta > 0) addUniqueDocxRow('LTA', lta);
 
     // Dynamic earnings components from salary structure
     additionalEarnings.forEach(r => {
-        if (r.monthly > 0) {
-            rows.push(makeRow([
-                makeCell({ text: r.name, align: 'left', width: col1Width }),
-                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
-            ]));
-        }
+        if (r.monthly > 0) addUniqueDocxRow(r.name, r.monthly);
     });
 
     // Additional custom allowances (e.g. from Custom Allowances breakdown)
     additionalCustomRows.forEach(r => {
-        if (r.monthly > 0) {
-            rows.push(makeRow([
-                makeCell({ text: r.name, align: 'left', width: col1Width }),
-                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
-            ]));
-        }
+        if (r.monthly > 0) addUniqueDocxRow(r.name, r.monthly);
     });
 
-    if (pfEmployer > 0) {
-        rows.push(makeRow([
-            makeCell({ text: "PF(Employer's Contribution)", align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(pfEmployer), align: 'right', width: col2Width })
-        ]));
-    }
-
-    if (lwfEmployer > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'LWF(Employer Contribution)', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(lwfEmployer), align: 'right', width: col2Width })
-        ]));
-    }
-
-    if (gratuity > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'Gratuity*', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(gratuity), align: 'right', width: col2Width })
-        ]));
-    }
-
-    if (insurance > 0) {
-        rows.push(makeRow([
-            makeCell({ text: 'Insurance**', align: 'left', width: col1Width }),
-            makeCell({ text: formatCellVal(insurance), align: 'right', width: col2Width })
-        ]));
-    }
+    if (pfEmployer > 0) addUniqueDocxRow("PF(Employer's Contribution)", pfEmployer);
+    if (lwfEmployer > 0) addUniqueDocxRow('LWF(Employer Contribution)', lwfEmployer);
+    if (gratuity > 0) addUniqueDocxRow('Gratuity*', gratuity);
+    if (insurance > 0) addUniqueDocxRow('Insurance**', insurance);
 
     // Dynamic deduction components (from flexi / in CTC)
     additionalDeductionsFromFlexi.forEach(r => {
-        if (r.monthly > 0) {
-            rows.push(makeRow([
-                makeCell({ text: r.name, align: 'left', width: col1Width }),
-                makeCell({ text: formatCellVal(r.monthly), align: 'right', width: col2Width })
-            ]));
-        }
+        if (r.monthly > 0) addUniqueDocxRow(r.name, r.monthly);
     });
 
     // Monthly & Annual CTC
