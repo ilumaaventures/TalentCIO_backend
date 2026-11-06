@@ -1363,6 +1363,16 @@ const bulkCreateRevisions = async (req, res) => {
                                 lwfEmployer: String(calculated.master.lwfEmployer || 0),
                                 lwfEmployee: String(calculated.master.lwfEmployee || 0)
                             };
+                            if (calculated.master.earningsMap) {
+                                Object.entries(calculated.master.earningsMap).forEach(([id, val]) => {
+                                    updatedSalaryBreakup[id] = String(val);
+                                });
+                            }
+                            if (calculated.master.deductionsMap) {
+                                Object.entries(calculated.master.deductionsMap).forEach(([id, val]) => {
+                                    updatedSalaryBreakup[id] = String(val);
+                                });
+                            }
                         }
                     } catch (calcErr) {
                         console.warn('[bulkCreateRevisions] Failed to recalculate components for ' + empId + ':', calcErr.message);

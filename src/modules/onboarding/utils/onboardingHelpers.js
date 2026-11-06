@@ -485,7 +485,9 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
     } else if (!pfEmployer && findComponent(contributions, /pf|provident/i)) {
         pfEmployer = findComponent(contributions, /pf|provident/i);
     } else if (!pfEmployer && rawSalary.pfEnabled === true && (rawSalary.includePfInCTC === true || customData.includePfInCTC === true)) {
-        pfEmployer = basic >= 15000 ? 1800 : Math.round(basic * 0.12);
+        const pfCap = customData.config?.pfCap || rawSalary.pfCap || 15000;
+        const pfRate = customData.config?.pfEmployerRate || 0.12;
+        pfEmployer = Math.round(Math.min(basic, pfCap) * pfRate);
     }
     if (rawSalary.pfEnabled === false) pfEmployer = 0;
 
