@@ -86,7 +86,7 @@ router.delete('/company-settings/branding/logo', admin, removeOwnCompanyLogo);
 
 // Custom Employment Types
 router.get('/employment-types', getCustomEmploymentTypes);
-router.post('/employment-types', addCustomEmploymentType);
-router.delete('/employment-types/:name', deleteCustomEmploymentType);
+router.post('/employment-types', admin, addCustomEmploymentType);
+router.delete('/employment-types/:name', admin, deleteCustomEmploymentType);
 
 module.exports = router;

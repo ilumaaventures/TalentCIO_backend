@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireModule } = require('../../common/middleware/moduleGuard');
 const { protect } = require('../../common/middleware/authMiddleware');
+const { authorize } = require('../../common/middleware/authorize');
 const { getDossier } = require('./controllers/dossierProfileController');
 const { submitHRIS, updateSection } = require('./controllers/dossierSectionController');
 const { addDocument, deleteDocument, verifyDocument, revokeDocumentVerification, verifyAllDocuments, submitDocuments } = require('./controllers/dossierDocumentController');
@@ -16,13 +17,13 @@ router.use(protect);
 // Global guard removed to allow basic profile viewing in Profile section
 // Specific guards applied below
 
-router.get('/requests', requireModule('employeeDossier'), getHRISRequests);
-router.get('/export-excel', requireModule('employeeDossier'), exportHRISExcel);
+router.get('/requests', requireModule('employeeDossier'), authorize('dossier.approve', 'dossier.view'), getHRISRequests);
+router.get('/export-excel', requireModule('employeeDossier'), authorize('dossier.export'), exportHRISExcel);
 router.get('/proxy-pdf', requireModule('employeeDossier'), proxyPdf); 
 
 router.patch('/:userId/submit-hris', requireModule('employeeDossier'), submitHRIS);
-router.patch('/:userId/approve-hris', requireModule('employeeDossier'), approveHRIS);
-router.patch('/:userId/reject-hris', requireModule('employeeDossier'), rejectHRIS);
+router.patch('/:userId/approve-hris', requireModule('employeeDossier'), authorize('dossier.approve'), approveHRIS);
+router.patch('/:userId/reject-hris', requireModule('employeeDossier'), authorize('dossier.approve'), rejectHRIS);
 
 const uploadMiddleware = (req, res, next) => {
     if (!process.env.CLOUDINARY_CLOUD_NAME) {
@@ -44,9 +45,9 @@ const uploadMiddleware = (req, res, next) => {
 };
 
 router.post('/:userId/documents', requireModule('employeeDossier'), uploadMiddleware, addDocument);
-router.patch('/:userId/documents/:docId/verify', requireModule('employeeDossier'), verifyDocument);
-router.patch('/:userId/documents/:docId/revoke', requireModule('employeeDossier'), revokeDocumentVerification);
-router.patch('/:userId/documents/verify-all', requireModule('employeeDossier'), verifyAllDocuments);
+router.patch('/:userId/documents/:docId/verify', requireModule('employeeDossier'), authorize('dossier.verify_documents'), verifyDocument);
+router.patch('/:userId/documents/:docId/revoke', requireModule('employeeDossier'), authorize('dossier.verify_documents'), revokeDocumentVerification);
+router.patch('/:userId/documents/verify-all', requireModule('employeeDossier'), authorize('dossier.verify_documents'), verifyAllDocuments);
 router.patch('/:userId/documents/submit', requireModule('employeeDossier'), submitDocuments);
 router.delete('/:userId/documents/:docId', requireModule('employeeDossier'), deleteDocument);
 router.get('/:userId/history', requireModule('employeeDossier'), getDossierHistory);

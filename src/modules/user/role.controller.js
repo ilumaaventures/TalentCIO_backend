@@ -172,7 +172,12 @@ const getPermissions = async (req, res) => {
             else if (curr.key.startsWith('discussion.')) groupName = 'DISCUSSIONS';
             else if (curr.key.startsWith('dossier.') || curr.key.startsWith('employee.revision.') || groupName === 'DOSSIER') groupName = 'EMPLOYEE DOSSIER';
             else if (curr.key.startsWith('leave.')) groupName = 'LEAVES';
+            else if (curr.key.startsWith('meeting.')) groupName = 'MEETINGS';
             else if (curr.key.startsWith('crm.')) groupName = 'SALES CRM';
+            else if (curr.key.startsWith('reimbursement.')) groupName = 'REIMBURSEMENTS';
+            else if (curr.key.startsWith('ess_document.')) groupName = 'ESS DOCUMENTS';
+            else if (curr.key.startsWith('pms.') || groupName === 'PERFORMANCE') groupName = 'PERFORMANCE';
+            else if (curr.key.startsWith('org_chart.') || curr.key.startsWith('org.chart.') || curr.key.startsWith('department.') || curr.key.startsWith('designation.')) groupName = 'ORGANIZATION';
 
             if (!acc[groupName]) acc[groupName] = [];
             acc[groupName].push(curr);

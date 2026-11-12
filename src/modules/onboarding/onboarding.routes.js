@@ -152,12 +152,14 @@ const ONBOARDING_REQUEST_PERMISSIONS = ['onboarding.document.request', 'onboardi
 const ONBOARDING_REVIEW_PERMISSIONS = ['onboarding.document.review', 'onboarding.manage'];
 const ONBOARDING_CREDENTIAL_PERMISSIONS = ['onboarding.credential.manage', 'onboarding.manage'];
 const ONBOARDING_COMPLETE_PERMISSIONS = ['onboarding.complete', 'onboarding.manage'];
+const ONBOARDING_SETTINGS_PERMISSIONS = ['onboarding.manage'];
 
 const requireOnboardingView = authorize(ONBOARDING_VIEW_PERMISSIONS);
 const requireOnboardingRequest = authorize(ONBOARDING_REQUEST_PERMISSIONS);
 const requireOnboardingReview = authorize(ONBOARDING_REVIEW_PERMISSIONS);
 const requireOnboardingCredentialManage = authorize(ONBOARDING_CREDENTIAL_PERMISSIONS);
 const requireOnboardingComplete = authorize(ONBOARDING_COMPLETE_PERMISSIONS);
+const requireOnboardingSettings = authorize(ONBOARDING_SETTINGS_PERMISSIONS);
 const requireOnboardingRequestOrCredentialManage = authorize([
     ...new Set([...ONBOARDING_REQUEST_PERMISSIONS, ...ONBOARDING_CREDENTIAL_PERMISSIONS])
 ]);
@@ -205,21 +207,21 @@ router.post('/email-history/:id/resend', protect, requireOnboardingRequest, onbo
 
 // --- Settings & Templates ---
 router.get('/settings', protect, requireOnboardingView, onboardingController.getOnboardingSettings);
-router.post('/settings/templates', protect, requireOnboardingRequest, onboardingController.updateTemplate);
-router.post('/settings/templates/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.uploadAndSetTemplate);
-router.post('/settings/templates/dynamic/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addDynamicTemplate);
+router.post('/settings/templates', protect, requireOnboardingSettings, onboardingController.updateTemplate);
+router.post('/settings/templates/upload', protect, requireOnboardingSettings, upload.single('document'), onboardingController.uploadAndSetTemplate);
+router.post('/settings/templates/dynamic/upload', protect, requireOnboardingSettings, upload.single('document'), onboardingController.addDynamicTemplate);
 router.get('/settings/templates/dynamic/:templateId/content', protect, requireOnboardingView, onboardingController.getDynamicTemplateContent);
 router.post('/settings/templates/dynamic/:templateId/preview-buffer', protect, requireOnboardingView, onboardingController.generateTemplatePreviewBuffer);
-router.put('/settings/templates/dynamic/:templateId', protect, requireOnboardingRequest, upload.single('document'), onboardingController.updateDynamicTemplate);
-router.delete('/settings/templates/dynamic/:templateId', protect, requireOnboardingRequest, onboardingController.deleteDynamicTemplate);
+router.put('/settings/templates/dynamic/:templateId', protect, requireOnboardingSettings, upload.single('document'), onboardingController.updateDynamicTemplate);
+router.delete('/settings/templates/dynamic/:templateId', protect, requireOnboardingSettings, onboardingController.deleteDynamicTemplate);
 router.get('/settings/templates/:type/preview', protect, requireOnboardingView, onboardingController.getTemplatePreview);
-router.delete('/settings/templates/:type', protect, requireOnboardingRequest, onboardingController.deleteBaseTemplate);
+router.delete('/settings/templates/:type', protect, requireOnboardingSettings, onboardingController.deleteBaseTemplate);
 router.get('/settings/templates/:type/download', protect, requireOnboardingView, onboardingController.downloadTemplate);
 
 // --- Policies ---
-router.post('/settings/policies/upload', protect, requireOnboardingRequest, upload.single('document'), onboardingController.addPolicy);
-router.put('/settings/policies/:policyId', protect, requireOnboardingRequest, upload.single('document'), onboardingController.updatePolicy);
-router.delete('/settings/policies/:policyId', protect, requireOnboardingRequest, onboardingController.deletePolicy);
+router.post('/settings/policies/upload', protect, requireOnboardingSettings, upload.single('document'), onboardingController.addPolicy);
+router.put('/settings/policies/:policyId', protect, requireOnboardingSettings, upload.single('document'), onboardingController.updatePolicy);
+router.delete('/settings/policies/:policyId', protect, requireOnboardingSettings, onboardingController.deletePolicy);
 
 // ==========================================
 // EMPLOYEE SELF-SERVICE ROUTES (Public / Onboarding Token)

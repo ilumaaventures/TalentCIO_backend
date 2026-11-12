@@ -1,5 +1,19 @@
 const Meeting = require('./meeting.model');
 
+const isAdminOrHasMeetingPermission = (user, permKey) => {
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const isSystemOrAdmin = roles.some(r => {
+        const name = typeof r === 'string' ? r : r?.name;
+        return ['Admin', 'System Admin', 'Super Admin', 'HR Admin'].includes(name) || Boolean(r?.isSystem);
+    });
+    if (isSystemOrAdmin) return true;
+    if (user?.permissions?.includes('*')) return true;
+    if (user?.permissions?.includes('admin')) return true;
+    if (user?.permissions?.includes(permKey)) return true;
+    if (user?.permissions?.includes('meeting.manage')) return true;
+    return roles.some(r => r?.permissions?.some(p => p.key === permKey || p.key === 'meeting.manage'));
+};
+
 // Get all meetings (can be filtered by type, date, or user's involvement)
 const getMeetings = async (req, res) => {
     try {
@@ -11,8 +25,7 @@ const getMeetings = async (req, res) => {
         // Security/Access Control:
         // Admin or Global Read can see all.
         // Otherwise, see meetings where user is host, attendee, or absentee.
-        const canViewAll = req.user.roles.some(r => r.name === 'Admin') ||
-            req.user.roles.some(r => r.permissions.some(p => p.key === 'meeting.read'));
+        const canViewAll = isAdminOrHasMeetingPermission(req.user, 'meeting.read');
 
         if (!canViewAll) {
             query.$or = [
@@ -47,8 +60,7 @@ const getMeetingById = async (req, res) => {
         if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
 
         // Check access
-        const canViewAll = req.user.roles.some(r => r.name === 'Admin') ||
-            req.user.roles.some(r => r.permissions.some(p => p.key === 'meeting.read'));
+        const canViewAll = isAdminOrHasMeetingPermission(req.user, 'meeting.read');
 
         const isParticipant =
             meeting.host._id.toString() === req.user._id.toString() ||
@@ -68,6 +80,11 @@ const getMeetingById = async (req, res) => {
 // Create a new meeting
 const createMeeting = async (req, res) => {
     try {
+        const canCreate = isAdminOrHasMeetingPermission(req.user, 'meeting.create');
+        if (!canCreate) {
+            return res.status(403).json({ message: 'Not authorized to create meetings' });
+        }
+
         // Auto-assign host to the user creating it if not provided
         if (!req.body.host) {
             req.body.host = req.user._id;
@@ -87,8 +104,7 @@ const updateMeeting = async (req, res) => {
         if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
 
         // Authorization: Admin or Host can update
-        const canEditAll = req.user.roles.some(r => r.name === 'Admin') ||
-            req.user.roles.some(r => r.permissions.some(p => p.key === 'meeting.edit'));
+        const canEditAll = isAdminOrHasMeetingPermission(req.user, 'meeting.edit');
 
         if (!canEditAll && meeting.host.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Not authorized to update this meeting' });
@@ -112,8 +128,7 @@ const deleteMeeting = async (req, res) => {
         if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
 
         // Authorization
-        const canDeleteAll = req.user.roles.some(r => r.name === 'Admin') ||
-            req.user.roles.some(r => r.permissions.some(p => p.key === 'meeting.delete'));
+        const canDeleteAll = isAdminOrHasMeetingPermission(req.user, 'meeting.delete');
 
         if (!canDeleteAll && meeting.host.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Not authorized to delete this meeting' });

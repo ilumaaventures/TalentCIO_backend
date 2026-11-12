@@ -8,6 +8,16 @@ const { calculateLeaveDays } = require('../leave.utils');
 const NotificationService = require('../../../services/notificationService');
 const { deductBucketsFIFO } = require('../accrual.service');
 
+const isAdminLeaveUser = (user) => (
+    user?.roles?.some(r => {
+        const name = typeof r === 'string' ? r : r?.name;
+        return ['Admin', 'System Admin', 'Super Admin', 'HR Admin'].includes(name) || Boolean(r?.isSystem);
+    }) ||
+    user?.permissions?.includes('*') ||
+    user?.permissions?.includes('admin') ||
+    user?.permissions?.includes('leave.manage')
+);
+
 const parseBoolean = (value) => {
     if (typeof value === 'boolean') return value;
     if (typeof value === 'string') return value.toLowerCase() === 'true';
@@ -349,9 +359,7 @@ const getMyBalances = async (req, res) => {
 // @access  Private (Manager)
 const getManagerApprovals = async (req, res) => {
     try {
-        const isAdmin = req.user.roles && req.user.roles.some(r =>
-            (typeof r === 'string' ? r : r.name) === 'Admin'
-        );
+        const isAdmin = isAdminLeaveUser(req.user) || req.user.permissions?.includes('leave.view_all');
 
         const { status, userIds } = req.query;
         let query = { companyId: req.companyId };
@@ -433,12 +441,15 @@ const updateLeaveStatus = async (req, res) => {
             return res.status(404).json({ message: 'Employee not found' });
         }
         const isManager = employee.reportingManagers.some(rm => rm.toString() === managerId.toString());
-        const isAdmin = req.user.roles && req.user.roles.some(r =>
-            (typeof r === 'string' ? r : r.name) === 'Admin'
-        );
+        const isAdmin = isAdminLeaveUser(req.user) || req.user.permissions?.includes('leave.approve');
 
         if (!isManager && !isAdmin) {
             return res.status(403).json({ message: 'Not authorized to approve this request' });
+        }
+
+        const isSelf = request.user.toString() === managerId.toString();
+        if (isSelf && !isAdmin) {
+            return res.status(403).json({ message: 'You cannot approve your own leave request' });
         }
 
         // Double check: if already processed

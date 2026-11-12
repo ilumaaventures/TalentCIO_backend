@@ -15,6 +15,7 @@ const { buildMasterSalaryStructure, buildPayrollSnapshot, processCalculatedSalar
 const PayrollConfig = require('../payroll/payrollConfig.model');
 const emailService = require('../../services/emailService');
 const { resolveRolesWithInheritance, getAllPermissions } = require('../../utils/permissionResolver');
+const { invalidateAuthUserCache } = require('../../common/middleware/authMiddleware');
 
 const checkedLivePhotoUsers = new Set();
 
@@ -411,14 +412,42 @@ const createUser = async (req, res) => {
 const updateUserRole = async (req, res) => {
     const { roleId } = req.body;
     try {
+        if (!roleId || !mongoose.Types.ObjectId.isValid(roleId)) {
+            return res.status(400).json({ message: 'Valid roleId is required' });
+        }
+
+        const role = await Role.findOne({ _id: roleId, companyId: req.companyId });
+        if (!role) {
+            return res.status(400).json({ message: 'Invalid role for this company' });
+        }
+
         const user = await User.findOne({ _id: req.params.id, companyId: req.companyId });
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        // Prevent modification of Protected Primary Admin role
+        if (await isProtectedPrimaryAdminUser(user, req.companyId)) {
+            return res.status(403).json({ message: 'The primary admin role cannot be modified.' });
+        }
+
+        // Prevent self-role elevation by non-admin users
+        const isSelf = String(user._id) === String(req.user._id);
+        const callerIsAdmin = (req.user?.roles || []).some((r) => {
+            const rName = typeof r === 'string' ? r : r?.name;
+            return r?.isSystem || ['Admin', 'System Admin', 'Super Admin'].includes(rName);
+        }) || (req.user?.permissions || []).includes('*') || (req.user?.permissions || []).includes('admin');
+
+        if (isSelf && !callerIsAdmin) {
+            return res.status(403).json({ message: 'Cannot elevate your own role.' });
+        }
+
         user.roles = [roleId];
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
         await user.save();
+
+        invalidateAuthUserCache(user._id);
 
         res.json({ message: 'User role updated' });
     } catch (error) {
@@ -546,15 +575,33 @@ const updateUser = async (req, res) => {
         if (roleId) {
             // Only update role if it's different and valid
             const currentRoleId = user.roles && user.roles.length > 0 ? user.roles[0].toString() : null;
-            if (currentRoleId !== roleId) {
-                const role = await Role.findOne({ _id: roleId, companyId: req.companyId });
-                if (role) {
-                    user.roles = [roleId];
+            if (currentRoleId !== String(roleId)) {
+                if (await isProtectedPrimaryAdminUser(user, req.companyId)) {
+                    return res.status(403).json({ message: 'The primary admin role cannot be modified.' });
                 }
+
+                const role = await Role.findOne({ _id: roleId, companyId: req.companyId });
+                if (!role) {
+                    return res.status(400).json({ message: 'Invalid role for this company.' });
+                }
+
+                const isSelf = String(user._id) === String(req.user._id);
+                const callerIsAdmin = (req.user?.roles || []).some((r) => {
+                    const rName = typeof r === 'string' ? r : r?.name;
+                    return r?.isSystem || ['Admin', 'System Admin', 'Super Admin'].includes(rName);
+                }) || (req.user?.permissions || []).includes('*') || (req.user?.permissions || []).includes('admin');
+
+                if (isSelf && !callerIsAdmin) {
+                    return res.status(403).json({ message: 'Cannot elevate your own role.' });
+                }
+
+                user.roles = [roleId];
+                user.tokenVersion = (user.tokenVersion || 0) + 1;
             }
         }
 
         await user.save();
+        invalidateAuthUserCache(user._id);
 
         // Sync to EmployeeProfile & Salary Details
         try {

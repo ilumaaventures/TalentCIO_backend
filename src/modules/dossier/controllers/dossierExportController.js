@@ -2,6 +2,7 @@ const axios = require('axios');
 const { cloudinary } = require('../../../config/cloudinary');
 const { extractPublicIdFromUrl } = require('../../../utils/cloudinaryHelper');
 const EmployeeProfile = require('../employeeProfile.model');
+const { checkIsAdmin, hasPermission } = require('../utils/dossierHelpers');
 
 exports.proxyPdf = async (req, res) => {
     try {
@@ -123,6 +124,12 @@ exports.proxyPdf = async (req, res) => {
 
 exports.exportHRISExcel = async (req, res) => {
     try {
+        const isAdmin = checkIsAdmin(req.user);
+        const canExport = isAdmin || hasPermission(req.user, 'dossier.export');
+        if (!canExport) {
+            return res.status(403).json({ message: 'Not authorized to export HRIS data. Missing dossier.export permission.' });
+        }
+
         const ExcelJS = require('exceljs');
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('HRIS Data');

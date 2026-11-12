@@ -86,12 +86,14 @@ const canAccessDiscussion = (discussion, user) => {
 
 const canEditDiscussion = (discussion, user) => (
     isDiscussionAdmin(user) ||
+    (user?.permissions || []).includes('discussion.edit') ||
     idsMatch(discussion?.createdBy?._id || discussion?.createdBy, user?._id) ||
     isSupervisor(discussion, user?._id)
 );
 
 const canDeleteDiscussion = (discussion, user) => (
     isDiscussionAdmin(user) ||
+    (user?.permissions || []).includes('discussion.delete') ||
     idsMatch(discussion?.createdBy?._id || discussion?.createdBy, user?._id)
 );
 

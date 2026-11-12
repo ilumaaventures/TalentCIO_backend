@@ -9,6 +9,27 @@ const {
     applyPresentOnlyRecord
 } = require('../utils/attendanceHelpers');
 
+const isAdminAttendanceUser = (user) => (
+    user?.roles?.some(r => {
+        const name = typeof r === 'string' ? r : r?.name;
+        return ['Admin', 'HR Admin', 'System Admin', 'Super Admin'].includes(name) || Boolean(r?.isSystem);
+    }) ||
+    user?.permissions?.includes('*') ||
+    user?.permissions?.includes('attendance.manage') ||
+    user?.permissions?.includes('attendance.update_others')
+);
+
+const isApproverAttendanceUser = (user) => (
+    isAdminAttendanceUser(user) ||
+    user?.permissions?.includes('attendance.approve')
+);
+
+const isViewerAttendanceUser = (user) => (
+    isAdminAttendanceUser(user) ||
+    user?.permissions?.includes('attendance.view') ||
+    user?.permissions?.includes('attendance.view_others')
+);
+
 exports.getMyAttendance = async (req, res) => {
     try {
         const { month } = req.query;
@@ -32,12 +53,7 @@ exports.getAttendanceByMonth = async (req, res) => {
         const { month, year, userId } = req.query;
         let query = { companyId: req.companyId };
         
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || 
-          req.user.permissions?.includes('attendance.view') ||
-          req.user.permissions?.includes('attendance.update_others');
+        const isAdmin = isViewerAttendanceUser(req.user);
 
         if (userId) {
             const isManager = (await User.findById(userId))?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
@@ -81,10 +97,7 @@ exports.createAttendance = async (req, res) => {
         const { date, clockIn, clockOut, userId, location, source } = req.body;
         const targetUserId = userId || req.user._id;
 
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('attendance.update_others');
+        const isAdmin = isAdminAttendanceUser(req.user);
 
         const isSelf = targetUserId.toString() === req.user._id.toString();
         
@@ -190,10 +203,7 @@ exports.updateAttendance = async (req, res) => {
         const attendance = await Attendance.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
         if (!attendance) return res.status(404).json({ message: 'Attendance record not found' });
         
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('attendance.update_others');
+        const isAdmin = isAdminAttendanceUser(req.user);
 
         const isOwner = attendance.user?._id.toString() === req.user._id.toString();
         const isManager = attendance.user?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
@@ -261,15 +271,10 @@ exports.deleteAttendance = async (req, res) => {
         const attendance = await Attendance.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
         if (!attendance) return res.status(404).json({ message: 'Attendance record not found' });
 
-        const isAdmin = req.user.roles?.some(r =>
-            (typeof r === 'string' && r === 'Admin') ||
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('attendance.update_others');
-
-        const isOwner = attendance.user?._id.toString() === req.user._id.toString();
+        const isAdmin = isAdminAttendanceUser(req.user);
         const isManager = attendance.user?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
-        if (!isOwner && !isManager && !isAdmin) {
+        if (!isManager && !isAdmin) {
             return res.status(403).json({ message: 'Not authorized to delete this attendance record' });
         }
 
@@ -301,15 +306,16 @@ exports.approveAttendance = async (req, res) => {
         const attendance = await Attendance.findOne({ _id: req.params.id, companyId: req.companyId }).populate('user');
         if (!attendance) return res.status(404).json({ message: 'Attendance record not found' });
 
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*');
-
+        const isAdmin = isApproverAttendanceUser(req.user);
         const isManager = attendance.user?.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
         if (!isAdmin && !isManager) {
             return res.status(403).json({ message: 'Not authorized to approve this attendance' });
+        }
+
+        const isSelf = attendance.user?._id?.toString() === req.user._id.toString();
+        if (isSelf && !isAdmin) {
+            return res.status(403).json({ message: 'You cannot approve your own attendance' });
         }
 
         attendance.approvalStatus = 'APPROVED';
@@ -325,10 +331,7 @@ exports.approveAttendance = async (req, res) => {
 
 exports.getPendingRequests = async (req, res) => {
     try {
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*');
+        const isAdmin = isApproverAttendanceUser(req.user);
 
         let query = { companyId: req.companyId, approvalStatus: 'PENDING' };
 
