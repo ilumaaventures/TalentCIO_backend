@@ -51,8 +51,16 @@ const getMe = async (req, res) => {
 // POST /api/superadmin/auth/seed  (dev utility — create first super admin)
 const seedSuperAdmin = async (req, res) => {
     try {
+        if (process.env.NODE_ENV === 'production') {
+            const seedKey = req.headers['x-seed-key'] || req.body?.seedKey;
+            const requiredKey = process.env.SEED_SECRET || process.env.SUPERADMIN_SEED_KEY;
+            if (!requiredKey || seedKey !== requiredKey) {
+                return res.status(403).json({ message: 'Super admin seeding is restricted in production.' });
+            }
+        }
+
         const existing = await SuperAdminUser.findOne({ role: 'Super Admin' });
-        if (existing) return res.status(400).json({ message: 'Super Admin already exists. Email: ' + existing.email });
+        if (existing) return res.status(400).json({ message: 'Super Admin already exists.' });
 
         const admin = await SuperAdminUser.create({
             name: 'Super Admin',
@@ -60,7 +68,7 @@ const seedSuperAdmin = async (req, res) => {
             password: 'SuperAdmin@123',
             role: 'Super Admin',
         });
-        res.status(201).json({ message: 'Super Admin seeded', email: admin.email, password: 'SuperAdmin@123' });
+        res.status(201).json({ message: 'Super Admin seeded successfully', email: admin.email });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }

@@ -481,7 +481,12 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
             else if (freq === 'semi_annually' || freq === 'semi-annually') monthlyAmt = Math.round(amt / 6);
             else if (freq === 'annually' || freq === 'one_time') monthlyAmt = Math.round(amt / 12);
 
-            additionalCustomRows.push({ name, monthly: monthlyAmt });
+            const inCTC = item.addedInAnnualCTC !== false && item.inCTC !== false && item.includeInCTC !== false;
+            additionalCustomRows.push({
+                name: inCTC ? name : `${name} (Outside CTC)`,
+                monthly: monthlyAmt,
+                inCTC
+            });
         }
     });
 
@@ -535,10 +540,10 @@ const buildSalaryTableXml = (arg1 = [], arg2 = [], arg3 = [], arg4 = {}, arg5 = 
 
     // Flexi(if chosen) balancing component
     if (!flexi && monthlyCTC > 0) {
-        const customRowsSum = additionalCustomRows.reduce((sum, r) => sum + r.monthly, 0);
+        const customInCTCRowsSum = additionalCustomRows.filter(r => r.inCTC !== false).reduce((sum, r) => sum + r.monthly, 0);
         const dynamicEarnSum = additionalEarnings.reduce((sum, r) => sum + r.monthly, 0);
         const flexiDedSum = additionalDeductionsFromFlexi.reduce((sum, r) => sum + r.monthly, 0);
-        const nonFlexiSum = basic + hra + (specialAllowance || 0) + broadband + petrol + lta + customRowsSum + dynamicEarnSum + pfEmployer + lwfEmployer + gratuity + insurance + flexiDedSum;
+        const nonFlexiSum = basic + hra + (specialAllowance || 0) + broadband + petrol + lta + customInCTCRowsSum + dynamicEarnSum + pfEmployer + lwfEmployer + gratuity + insurance + flexiDedSum;
         if (monthlyCTC > nonFlexiSum) {
             flexi = monthlyCTC - nonFlexiSum;
         }

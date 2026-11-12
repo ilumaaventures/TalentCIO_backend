@@ -70,12 +70,12 @@ const multer = require('multer');
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 const analyticsCandidatePermissions = ['ta.analytics.assigned', 'ta.analytics.global'];
 const candidateViewPermissions = ['ta.candidate.view', 'ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.view', 'ta.manage', ...analyticsCandidatePermissions];
-const candidateCreatePermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.create', 'ta.interview.evaluate', ...analyticsCandidatePermissions];
-const candidateEditPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit', ...analyticsCandidatePermissions];
-const candidateDecisionPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision', 'ta.interview.evaluate'];
-const candidateTransferPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer'];
-const interviewSchedulingPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit', ...analyticsCandidatePermissions];
-const interviewEvaluationPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.interview.evaluate', 'ta.super_approve'];
+const candidateCreatePermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.create', 'ta.create', 'ta.manage'];
+const candidateEditPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.edit', 'ta.edit', 'ta.manage'];
+const candidateDecisionPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.make_decision', 'ta.manage'];
+const candidateTransferPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.manage'];
+const interviewSchedulingPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.interview.schedule', 'ta.candidate.edit', 'ta.edit', 'ta.manage'];
+const interviewEvaluationPermissions = ['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.interview.evaluate', 'ta.super_approve', 'ta.manage'];
 
 router.use(protect);
 router.use(requireModule('talentAcquisition'));
@@ -98,7 +98,7 @@ router.delete('/sources/:id', protect, authorizeAny(['ta.candidate.manage.assign
 // CRUD operations
 router.get('/global/public-applications/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchPublicApplications);
 router.get('/global/search', protect, authorizeAny(candidateViewPermissions), candidateController.globalSearchCandidates);
-router.post('/', protect, candidateController.createCandidate);
+router.post('/', protect, authorizeAny(candidateCreatePermissions), candidateController.createCandidate);
 router.get('/:hiringRequestId/card-filters', protect, candidateController.getCandidateCardFilters);
 router.get('/:hiringRequestId/round-summary', protect, candidateController.getCandidateRoundSummary);
 router.get('/:hiringRequestId/interview-details', protect, candidateController.getCandidateInterviewDetails);

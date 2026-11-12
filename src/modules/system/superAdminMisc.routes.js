@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { protectSuperAdmin } = require('../../common/middleware/superAdminAuth');
+const { protectSuperAdmin, requirePermission } = require('../../common/middleware/superAdminAuth');
 const { getLogs } = require('./activityLog.controller');
 const { listAllModules } = require('../company/module.controller');
 const cleanupStaleIndexes = require('../../services/indexCleanup');
 
 router.use(protectSuperAdmin);
-router.get('/logs', getLogs);
+router.get('/logs', requirePermission('viewLogs'), getLogs);
 router.get('/modules', listAllModules);
-router.post('/cleanup-indexes', async (req, res) => {
+router.post('/cleanup-indexes', requirePermission('manageCompanies'), async (req, res) => {
     try {
         const report = await cleanupStaleIndexes();
         res.json({ message: 'Index cleanup completed', report });

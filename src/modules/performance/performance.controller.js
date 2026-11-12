@@ -474,7 +474,7 @@ const getEmployeePerformance = async (req, res) => {
         const roleNames = userRoles.map(r => (typeof r === 'string' ? r : r?.name || '')).filter(Boolean);
         const isHrOrAdmin = isAdminOrManager(req.user) ||
             hasAllPerms ||
-            roleNames.some(r => /admin|hr|super/i.test(r)) ||
+            roleNames.some(r => ['admin', 'system admin', 'super admin', 'hr', 'hr admin', 'hr manager'].includes(String(r).trim().toLowerCase())) ||
             userPermissions.includes('pms.view.all') ||
             userPermissions.includes('pms.can.edit.all') ||
             (userPermissions.includes('project.userperformance.view') && userPermissions.includes('user.read'));
@@ -487,7 +487,7 @@ const getEmployeePerformance = async (req, res) => {
             } else if (
                 userPermissions.includes('project.view_team') ||
                 userPermissions.includes('pms.manage.team') ||
-                roleNames.some(r => /manager/i.test(r))
+                roleNames.some(r => ['manager', 'project manager', 'general manager', 'team lead'].includes(String(r).trim().toLowerCase()))
             ) {
                 isAuthorizedManager = true;
             }

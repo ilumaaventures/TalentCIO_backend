@@ -2,6 +2,7 @@ const express = require('express');
 const { requireModule } = require('../../common/middleware/moduleGuard');
 const router = express.Router();
 const { protect } = require('../../common/middleware/authMiddleware');
+const { authorize } = require('../../common/middleware/authorize');
 const {
     createQuery,
     getAllQueries,
@@ -23,20 +24,24 @@ const { getHelpdeskBootstrap } = require('../system/pageBootstrap.controller');
 router.use(protect);
 router.use(requireModule('helpdesk'));
 
+const helpdeskAdmin = authorize('helpdesk.manage', 'helpdesk.types.manage', 'admin');
+const helpdeskViewAll = authorize('helpdesk.manage', 'helpdesk.view_all', 'admin');
+const helpdeskAnalytics = authorize('helpdesk.manage', 'helpdesk.analytics.view', 'admin');
+
 // Query Type Routes (Admin mostly, but get is open)
 router.get('/types', getQueryTypes);
-router.post('/types', addQueryType);
-router.put('/types/:id', updateQueryType);
-router.delete('/types/:id', deleteQueryType);
+router.post('/types', helpdeskAdmin, addQueryType);
+router.put('/types/:id', helpdeskAdmin, updateQueryType);
+router.delete('/types/:id', helpdeskAdmin, deleteQueryType);
 
 // Ticket routes
 router.post('/', createQuery);
 router.get('/bootstrap', getHelpdeskBootstrap);
-router.get('/analytics/dashboard', getHelpdeskAnalytics);
-router.get('/all', getAllQueries); // Must be above /:id
+router.get('/analytics/dashboard', helpdeskAnalytics, getHelpdeskAnalytics);
+router.get('/all', helpdeskViewAll, getAllQueries); // Must be above /:id
 router.get('/my-queries', getMyQueries);
 router.get('/assigned', getAssignedQueries);
-router.get('/escalated', getEscalatedQueries);
+router.get('/escalated', helpdeskViewAll, getEscalatedQueries);
 router.get('/:id', getQueryById);
 router.put('/:id/close', updateQueryStatus); // Specialized close route
 router.post('/:id/comments', addComment);

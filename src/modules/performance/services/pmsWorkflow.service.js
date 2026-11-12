@@ -112,7 +112,7 @@ const isUserHr = (user) => {
     isUserAdminOrSuper(user) ||
     roles.some((r) => {
       const name = typeof r === 'string' ? r : r?.name;
-      return String(name || '').toLowerCase().includes('hr');
+      return /\bhr\b/i.test(String(name || ''));
     }) ||
     user?.permissions?.includes('pms.hr.evaluate') ||
     user?.permissions?.includes('pms.calibration.manage')

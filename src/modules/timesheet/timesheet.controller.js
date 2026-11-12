@@ -11,12 +11,18 @@ const NotificationService = require('../../services/notificationService');
 const { buildTimesheetPeriodRange, getTimesheetPeriodIdForDate } = require('./timesheetPeriod');
 const { parseDateAsIST } = require('../../modules/attendance/attendancePolicy');
 
-const canUpdateFutureRecords = (user) => (
-    user?.roles?.some(r =>
-        (typeof r === 'string' && r === 'Admin') ||
-        (typeof r === 'object' && r.name === 'Admin')
-    ) ||
+const isAdminTimesheetUser = (user) => (
+    user?.roles?.some(r => {
+        const name = typeof r === 'string' ? r : r?.name;
+        return ['Admin', 'System Admin', 'Super Admin', 'HR Admin'].includes(name) || Boolean(r?.isSystem);
+    }) ||
     user?.permissions?.includes('*') ||
+    user?.permissions?.includes('admin') ||
+    user?.permissions?.includes('timesheet.manage')
+);
+
+const canUpdateFutureRecords = (user) => (
+    isAdminTimesheetUser(user) ||
     user?.permissions?.includes('attendance.update_future')
 );
 
@@ -157,11 +163,7 @@ const addEntry = async (req, res) => {
     try {
         // 1. Resolve Target User
         let targetUserId = req.user._id;
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || 
-          req.user.permissions?.includes('admin');
+        const isAdmin = isAdminTimesheetUser(req.user);
         const canUpdateOthers = isAdmin || req.user.permissions?.includes('timesheet.update_others');
 
         if (userId && canUpdateOthers) {
@@ -341,10 +343,7 @@ const getProjects = async (req, res) => {
         let targetUserId = req.user._id;
 
         // Check Permissions for viewing other's projects
-        const isAdmin = (req.user.roles?.some(r => {
-            const roleName = typeof r === 'string' ? r : r?.name;
-            return roleName === 'Admin' || roleName === 'System Admin' || roleName === 'Super Admin';
-        }) || req.user.permissions?.includes('*') || req.user.permissions?.includes('admin'));
+        const isAdmin = isAdminTimesheetUser(req.user);
 
         const canViewOthers = isAdmin || 
             req.user.permissions?.includes('timesheet.view') || 
@@ -429,10 +428,7 @@ const getUserTimesheet = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const canViewAll = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || 
+        const canViewAll = isAdminTimesheetUser(req.user) || 
              req.user.permissions?.includes('timesheet.view') ||
              req.user.permissions?.includes('timesheet.update_others') ||
              req.user.permissions?.includes('attendance.view');
@@ -525,11 +521,7 @@ const getPendingTimesheets = async (req, res) => {
         let timesheets;
 
         // Check if user is Admin or has full approve + view permission
-        // req.user.roles is populated with Role objects
-        const canViewAllPending = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || (
+        const canViewAllPending = isAdminTimesheetUser(req.user) || (
             req.user.permissions?.includes('timesheet.approve') &&
             req.user.permissions?.includes('timesheet.view')
         );
@@ -620,13 +612,15 @@ const approveTimesheet = async (req, res) => {
         const targetUser = timesheet.user;
         const isManager = targetUser.reportingManagers?.some(m => m.toString() === req.user._id.toString());
 
-        const isAdmin = req.user.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') || req.user.permissions?.includes('timesheet.approve');
+        const isAdmin = isAdminTimesheetUser(req.user) || req.user.permissions?.includes('timesheet.approve');
 
         if (!isManager && !isAdmin) {
             return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        const isSelf = String(timesheet.user?._id || timesheet.user) === String(req.user._id);
+        if (isSelf && !isAdmin) {
+            return res.status(403).json({ message: 'You cannot approve your own timesheet' });
         }
 
         if (timesheet.status !== 'SUBMITTED') {
@@ -785,11 +779,7 @@ const updateEntry = async (req, res) => {
 
         const isOwner = owner._id.toString() === requestor._id.toString();
         const isManager = owner.reportingManagers?.some(m => m.toString() === requestor._id.toString());
-        const isTrueAdmin = requestor.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || requestor.permissions?.includes('*') || 
-          requestor.permissions?.includes('admin');
+        const isTrueAdmin = isAdminTimesheetUser(requestor);
         const canUpdateOthers = isTrueAdmin || requestor.permissions?.includes('timesheet.update_others');
 
         if (!isOwner && !isManager && !canUpdateOthers) {
@@ -875,11 +865,7 @@ const deleteEntry = async (req, res) => {
 
         const isOwner = ownerId === requestor._id.toString();
         const isManager = Boolean(owner?.reportingManagers?.some(m => m.toString() === requestor._id.toString()));
-        const isTrueAdmin = requestor.roles?.some(r => 
-            (typeof r === 'string' && r === 'Admin') || 
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || requestor.permissions?.includes('*') || 
-          requestor.permissions?.includes('admin');
+        const isTrueAdmin = isAdminTimesheetUser(requestor);
         const canUpdateOthers = isTrueAdmin || requestor.permissions?.includes('timesheet.update_others');
 
         if (!isOwner && !isManager && !canUpdateOthers) {
@@ -916,10 +902,7 @@ const getTeamTimesheetReport = async (req, res) => {
 
         if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
-        const hasFullView = req.user.roles?.some(r =>
-            (typeof r === 'string' && r === 'Admin') ||
-            (typeof r === 'object' && r.name === 'Admin')
-        ) || req.user.permissions?.includes('*') ||
+        const hasFullView = isAdminTimesheetUser(req.user) ||
              req.user.permissions?.includes('timesheet.view') ||
              req.user.permissions?.includes('attendance.view_all');
 

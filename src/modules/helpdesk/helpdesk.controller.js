@@ -10,8 +10,30 @@ const setPrivateCache = (res, maxAgeSeconds = 30) => {
     res.set('Cache-Control', `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`);
 };
 
-const isAdminUser = (user) =>
-    user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+const isAdminUser = (user) => {
+    if (!user) return false;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    if (perms.includes('*') || perms.includes('admin') || perms.includes('helpdesk.manage')) return true;
+    const roles = Array.isArray(user.roles) ? user.roles : [];
+    return roles.some((r) => {
+        const name = typeof r === 'string' ? r : r?.name;
+        const lower = String(name || '').trim().toLowerCase();
+        return lower === 'admin' || lower === 'system' || lower === 'system admin' || lower === 'super admin' || r?.isSystem === true;
+    });
+};
+
+const isResolverUser = (user) => {
+    if (!user) return false;
+    if (isAdminUser(user)) return true;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    if (perms.includes('helpdesk.resolve') || perms.includes('helpdesk.manage')) return true;
+    const roles = Array.isArray(user.roles) ? user.roles : [];
+    return roles.some((r) => {
+        const name = typeof r === 'string' ? r : r?.name;
+        const lower = String(name || '').trim().toLowerCase();
+        return lower === 'hr' || lower === 'hr admin' || lower === 'supervisor' || lower === 'support';
+    });
+};
 
 const buildRequestError = (message, statusCode = 400) => {
     const error = new Error(message);
@@ -478,7 +500,7 @@ exports.getAllQueries = async (req, res) => {
     try {
         // Caching disabled for real-time visibility consistency
         // setPrivateCache(res, 20);
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isAdmin = isAdminUser(req.user);
 
         console.log(`[HelpDesk Debug] User: ${req.user.email}, Roles: ${JSON.stringify(req.user.roles.map(r => r.name || r))}, IsAdmin: ${isAdmin}, CompanyId: ${req.companyId}`);
 
@@ -522,7 +544,7 @@ exports.getEscalatedQueries = async (req, res) => {
     try {
         // Caching disabled for real-time visibility consistency
         // setPrivateCache(res, 20);
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isAdmin = isAdminUser(req.user);
         if (!isAdmin) return res.status(403).json({ success: false, message: 'Admins only' });
 
         const queries = await HelpdeskQuery.find({ status: 'Escalated', companyId: req.companyId })
@@ -622,7 +644,7 @@ exports.updateQueryStatus = async (req, res) => {
 
         const originalStatus = query.status;
 
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isAdmin = isAdminUser(req.user);
         const isAssignee = query.assignedTo?.toString() === req.user._id.toString();
         const isRaiser = query.raisedBy?.toString() === req.user._id.toString();
 
@@ -861,7 +883,7 @@ exports.addComment = async (req, res) => {
 
         if (!query) return res.status(404).json({ success: false, message: 'Query not found' });
 
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
+        const isAdmin = isAdminUser(req.user);
         const isAssignee = query.assignedTo?.toString() === req.user._id.toString();
         const isOriginalAssignee = query.originalAssignee?.toString() === req.user._id.toString();
         const isRaiser = query.raisedBy?.toString() === req.user._id.toString();
@@ -926,8 +948,8 @@ exports.getHelpdeskAnalytics = async (req, res) => {
         const mongoose = require('mongoose');
         const companyId = req.companyId;
 
-        const isAdmin = req.user.roles.some(r => ['Admin', 'System'].includes(r.name || r) || r.isSystem === true);
-        const isResolverRole = req.user.roles.some(r => ['HR', 'Supervisor', 'Admin', 'System'].includes(r.name || r));
+        const isAdmin = isAdminUser(req.user);
+        const isResolverRole = isResolverUser(req.user);
         if (!isAdmin && !isResolverRole) {
             return res.status(403).json({ success: false, message: 'Admins or resolvers only' });
         }

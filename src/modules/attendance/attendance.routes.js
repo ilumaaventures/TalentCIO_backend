@@ -49,7 +49,7 @@ router.get('/me', getMyAttendance);
 router.get('/history', getAttendanceByMonth);
 router.get('/team-report', getTeamAttendanceReport);
 router.post('/team-report', getTeamAttendanceReport);
-router.get('/export-excel', authorize('attendance.export|attendance.view_others|user.read'), exportTeamAttendanceExcel);
+router.get('/export-excel', authorize('attendance.export', 'attendance.view_others', 'attendance.view', 'user.read'), exportTeamAttendanceExcel);
 router.get('/approvals', getPendingRequests);
 router.put('/flexible-off', updateCustomFlexibleOffDays);
 

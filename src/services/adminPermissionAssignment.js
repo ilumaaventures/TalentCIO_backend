@@ -2,10 +2,9 @@ const Role = require('../modules/user/role.model');
 
 const ADMIN_ROLE_FILTER = {
     $or: [
-        { name: 'Admin' },
-        { name: 'System Admin' },
-        { name: 'Super Admin' },
-        { isSystem: true }
+        { isSystem: true },
+        { companyId: null },
+        { name: { $in: ['Admin', 'System Admin', 'Super Admin'] }, isSystem: true }
     ],
     isDeleted: { $ne: true }
 };
@@ -47,8 +46,13 @@ const assignPermissionsToRolesByName = async (roleNames = [], permissionIds = []
         return { matchedCount: 0, modifiedCount: 0 };
     }
 
+    // Only update system template roles, NOT tenant-customized non-system roles
     return Role.updateMany(
-        { name: { $in: normalizedRoleNames }, isDeleted: { $ne: true } },
+        {
+            name: { $in: normalizedRoleNames },
+            $or: [{ isSystem: true }, { companyId: null }],
+            isDeleted: { $ne: true }
+        },
         { $addToSet: { permissions: { $each: normalizedPermissionIds } } }
     );
 };

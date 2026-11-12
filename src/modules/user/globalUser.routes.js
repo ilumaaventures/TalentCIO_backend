@@ -8,9 +8,9 @@ router.use(protectSuperAdmin);
 
 router.get('/', getAllUsers);
 router.post('/:id/impersonate', requirePermission('impersonateUsers'), superAdminImpersonateUser);
-router.patch('/:id/deactivate', deactivateUser);
-router.post('/:id/reset-password', resetPassword);
-router.patch('/:id/role', changeRole);
+router.patch('/:id/deactivate', requirePermission('manageUsers'), deactivateUser);
+router.post('/:id/reset-password', requirePermission('manageUsers'), resetPassword);
+router.patch('/:id/role', requirePermission('manageUsers'), changeRole);
 
 module.exports = router;
 

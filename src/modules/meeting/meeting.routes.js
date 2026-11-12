@@ -2,6 +2,7 @@ const express = require('express');
 const { requireModule } = require('../../common/middleware/moduleGuard');
 const router = express.Router();
 const { protect } = require('../../common/middleware/authMiddleware');
+const { authorizeAny } = require('../../common/middleware/authorize');
 const {
     getMeetings,
     getMeetingById,
@@ -16,7 +17,7 @@ router.use(requireModule('meetingsOfMinutes'));
 
 router.get('/', getMeetings);
 router.get('/:id', getMeetingById);
-router.post('/', createMeeting);
+router.post('/', authorizeAny(['meeting.create', 'meeting.manage']), createMeeting);
 router.put('/:id', updateMeeting);
 router.delete('/:id', deleteMeeting);
 

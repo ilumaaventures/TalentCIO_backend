@@ -229,7 +229,7 @@ router.post('/email-history/:id/resend', protect, authorizeAny(['ta.view', 'ta.m
 // Analytics
 router.get('/analytics/global', protect, requireTAAnalyticsAccess, taController.getGlobalAnalytics);
 router.get('/analytics/client/:clientName', protect, requireTAAnalyticsAccess, taController.getClientAnalytics);
-router.get('/analytics/interviews', protect, taController.getInterviewAnalytics);
+router.get('/analytics/interviews', protect, requireTAAnalyticsAccess, taController.getInterviewAnalytics);
 
 // Clients list for TA
 router.get('/clients', protect, taController.getTAClients);

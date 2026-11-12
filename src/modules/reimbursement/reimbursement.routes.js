@@ -12,7 +12,7 @@ const router = express.Router();
 /** Admin / HR / Finance roles that can manage all claims */
 const manageReimbursements = authorizeRoleOrPermission({
     roles:       ['Admin', 'HR Admin', 'System Admin'],
-    permissions: ['reimbursement.manage']
+    permissions: ['reimbursement.manage', 'reimbursement.approval', 'reimbursement.view_all']
 });
 
 /** Finance team marks payment done */
@@ -51,7 +51,7 @@ router.post('/', handleReceiptUpload, controller.submitClaim);
 
 // Approver & Company queues
 router.get('/pending-approvals',  controller.getPendingApprovals);
-router.get('/all',                controller.getAllClaims);
+router.get('/all',                manageReimbursements, controller.getAllClaims);
 
 // ─── Parameterized routes (/:id) ──────────────────────────────────────────────
 

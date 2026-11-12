@@ -18,8 +18,17 @@ const isSuperAdmin = (user) => (
     }) || (user?.permissions || []).includes('*') || (user?.permissions || []).includes('admin')
 );
 
-const authorizeAny = (permissionKeys = []) => {
-    const requiredPermissions = Array.isArray(permissionKeys) ? permissionKeys : [permissionKeys];
+const flattenPermissions = (permissions) => {
+    const list = Array.isArray(permissions) ? permissions : [permissions];
+    return list
+        .flat(Infinity)
+        .flatMap((p) => (typeof p === 'string' && p.includes('|') ? p.split('|') : p))
+        .map((p) => (typeof p === 'string' ? p.trim() : p))
+        .filter(Boolean);
+};
+
+const authorizeAny = (...permissionKeys) => {
+    const requiredPermissions = flattenPermissions(permissionKeys);
 
     return (req, res, next) => {
         if (!req.user) {
@@ -43,8 +52,8 @@ const authorizeAny = (permissionKeys = []) => {
     };
 };
 
-const authorizeAll = (permissionKeys = []) => {
-    const requiredPermissions = Array.isArray(permissionKeys) ? permissionKeys : [permissionKeys];
+const authorizeAll = (...permissionKeys) => {
+    const requiredPermissions = flattenPermissions(permissionKeys);
 
     return (req, res, next) => {
         if (!req.user) {
@@ -68,8 +77,10 @@ const authorizeAll = (permissionKeys = []) => {
     };
 };
 
-const authorizeRoleOrPermission = ({ roles = [], permissions = [] } = {}) => (
-    (req, res, next) => {
+const authorizeRoleOrPermission = ({ roles = [], permissions = [] } = {}) => {
+    const normalizedPermissions = flattenPermissions(permissions);
+
+    return (req, res, next) => {
         if (!req.user) {
             return res.status(401).json({ message: 'User not authenticated' });
         }
@@ -80,7 +91,7 @@ const authorizeRoleOrPermission = ({ roles = [], permissions = [] } = {}) => (
 
         const hasRole = roles.length > 0 && hasMatchingRole(req.user, roles);
         const userPermissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-        const hasPermission = permissions.length > 0 && permissions.some((permissionKey) => userPermissions.includes(permissionKey));
+        const hasPermission = normalizedPermissions.length > 0 && normalizedPermissions.some((permissionKey) => userPermissions.includes(permissionKey));
 
         if (hasRole || hasPermission) {
             return next();
@@ -89,8 +100,8 @@ const authorizeRoleOrPermission = ({ roles = [], permissions = [] } = {}) => (
         return res.status(403).json({
             message: 'Forbidden: You do not meet the required role or permission requirements'
         });
-    }
-);
+    };
+};
 
 const authorize = authorizeAny;
 
