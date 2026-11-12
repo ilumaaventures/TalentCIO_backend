@@ -106,6 +106,21 @@ const computeSalaryBreakupDetails = (salaryData = {}, config = null) => {
                     }
                 });
 
+                // Custom allowances from salaryData
+                const customAllowances = Array.isArray(salaryData.customAllowances) ? salaryData.customAllowances : (Array.isArray(salaryData.otherAllowances) ? salaryData.otherAllowances : []);
+                customAllowances.forEach(item => {
+                    const amt = parseFloat(item.amount) || 0;
+                    if (amt > 0) {
+                        const inCTC = item.addedInAnnualCTC !== false && item.inCTC !== false && item.includeInCTC !== false;
+                        earningsList.push({
+                            name: inCTC ? (item.name || 'Custom Allowance') : `${item.name || 'Custom Allowance'} (Outside CTC)`,
+                            monthly: formatCurrency(amt),
+                            annual: formatCurrency(amt * 12),
+                            inCTC
+                        });
+                    }
+                });
+
                 const prefs = config.displayPreferences || {};
 
                 if (prefs.showEmployerStatutory !== false) {
@@ -646,8 +661,9 @@ const generateAndDispatchRevisionLetter = async ({
     const filename = `${safeName}.docx`;
 
     let fileUrl = '';
-    const shouldSaveToDossier = options.saveToDossier !== false;
-    const shouldSendEmail = options.sendEmail !== false;
+    const shouldSaveToDossier = options.saveToDossier === true || options.saveToDossier === 'true';
+    const shouldSendEmail = options.sendEmail === true || options.sendEmail === 'true';
+    let dossierSaved = false;
 
     // 1. Upload to Cloudinary & Save to Dossier
     if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -671,9 +687,29 @@ const generateAndDispatchRevisionLetter = async ({
                     uploadedBy: hrUserId || user._id
                 });
                 await profile.save();
+                dossierSaved = true;
             }
         } catch (uploadErr) {
             console.error('Failed to upload revision letter to Cloudinary:', uploadErr);
+        }
+    }
+
+    if (shouldSaveToDossier && !dossierSaved) {
+        try {
+            profile.documents = profile.documents || [];
+            profile.documents.push({
+                category: 'Offer Letter',
+                title: filename,
+                fileName: filename,
+                url: fileUrl || `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${docxBuffer.toString('base64')}`,
+                uploadDate: new Date(),
+                verificationStatus: 'Verified',
+                uploadedBy: hrUserId || user._id
+            });
+            await profile.save();
+            dossierSaved = true;
+        } catch (saveErr) {
+            console.error('Failed to save revision letter to dossier:', saveErr);
         }
     }
 
@@ -752,6 +788,7 @@ const generateAndDispatchRevisionLetter = async ({
         fileUrl,
         emailSent,
         emailError,
+        dossierSaved,
         buffer: docxBuffer,
         fallbackUsed: docxBuffer?.fallbackUsed || false,
         warning: docxBuffer?.warning || null

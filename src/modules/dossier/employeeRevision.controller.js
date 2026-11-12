@@ -412,11 +412,11 @@ const applyRevisionToEmployee = async (revision, companyId) => {
             }
         }
 
-        if (annualCTC > 0 || monthlyCTC > 0) {
+        if (annualCTC >= 0 || monthlyCTC >= 0 || salaryModified || revision.metadata?.salaryBreakup) {
             processCalculatedSalary(calculatedSalary, config, annualCTC, monthlyCTC);
 
             const previousCTC = profile.compensation?.ctc ? profile.compensation.ctc * 12 : 0;
-            const newCTC = calculatedSalary.annualCTC ? parseFloat(calculatedSalary.annualCTC) / 12 : monthlyCTC;
+            const newCTC = calculatedSalary.annualCTC !== undefined ? (parseFloat(calculatedSalary.annualCTC) || 0) / 12 : (monthlyCTC || 0);
 
             profile.set('compensation.ctc', newCTC);
             profile.set('compensation.payType', calculatedSalary.payType || 'salaried');
@@ -1382,9 +1382,11 @@ const bulkCreateRevisions = async (req, res) => {
                     const flat = Number(flatAmount) || 0;
                     newAnnualCTC = Math.round(currentAnnualCTC + flat);
                 } else if (customSalaries && customSalaries[empId] !== undefined) {
-                    newAnnualCTC = Math.round(Number(customSalaries[empId]) || currentAnnualCTC);
+                    const parsedCustom = Number(customSalaries[empId]);
+                    newAnnualCTC = !isNaN(parsedCustom) ? Math.round(parsedCustom) : currentAnnualCTC;
                 } else if (customBreakups && customBreakups[empId]?.annualCTC !== undefined) {
-                    newAnnualCTC = Math.round(Number(customBreakups[empId].annualCTC) || currentAnnualCTC);
+                    const parsedBreakup = Number(customBreakups[empId].annualCTC);
+                    newAnnualCTC = !isNaN(parsedBreakup) ? Math.round(parsedBreakup) : currentAnnualCTC;
                 }
 
                 const newMonthlyCTC = Math.round(newAnnualCTC / 12);
@@ -1535,8 +1537,8 @@ const bulkCreateRevisions = async (req, res) => {
                         templateId: req.body.templateId || null,
                         emailSubject: req.body.emailSubject || null,
                         emailBody: req.body.emailBody || null,
-                        sendEmail: req.body.sendEmail !== false,
-                        saveToDossier: req.body.saveToDossier !== false
+                        sendEmail: req.body.sendEmail === true || req.body.sendEmail === 'true',
+                        saveToDossier: req.body.saveToDossier === true || req.body.saveToDossier === 'true'
                     }
                 });
                 results.letterResults = letterResults;
@@ -1916,9 +1918,16 @@ const sendRevisionLetter = async (req, res) => {
             options
         });
 
-        let message = result.emailSent
-            ? 'Revised offer letter generated and sent via email'
-            : 'Revised offer letter generated and saved to dossier';
+        let message = '';
+        if (result.emailSent && result.dossierSaved) {
+            message = 'Revised offer letter generated, emailed to employee, and saved to dossier';
+        } else if (result.emailSent) {
+            message = 'Revised offer letter generated and sent via email';
+        } else if (result.dossierSaved) {
+            message = 'Revised offer letter generated and saved to dossier';
+        } else {
+            message = 'Revised offer letter generated successfully';
+        }
         if (result.warning) {
             message += ` (${result.warning})`;
         }

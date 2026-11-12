@@ -258,7 +258,97 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
 
   const otherAllowances = source.salaryStructure?.otherAllowances || source.otherAllowances || (Array.isArray(source.customAllowances) ? source.customAllowances : []);
   const customAllowanceVal = (!Array.isArray(source.customAllowances) && !isNaN(Number(source.customAllowances))) ? Number(source.customAllowances) : 0;
-  const otherAllowancesSum = roundAmount(otherAllowances.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) + customAllowanceVal);
+  const customAllowInCTC = source.customAllowancesInCTC !== false;
+
+  const isBonusOrNonMonthly = (item) => {
+    if (!item) return false;
+    const name = String(item.name || '').trim().toLowerCase();
+    const freq = String(item.frequency || '').toLowerCase();
+    return /bonus|variable|joining/i.test(name) || ['semi_annually', 'semi-annually', 'quarterly', 'annually', 'one_time'].includes(freq);
+  };
+
+  const getAnnualItemVal = (item) => {
+    const amt = Number(item.amount) || 0;
+    const freq = String(item.frequency || 'semi_annually').toLowerCase();
+    if (freq === 'semi_annually' || freq === 'semi-annually') return amt * 2;
+    if (freq === 'quarterly') return amt * 4;
+    if (freq === 'monthly') return amt * 12;
+    return amt;
+  };
+
+  // Monthly allowances: regular monthly additions that affect monthly gross & net take-home
+  const monthlyOtherAllowances = otherAllowances.filter(item => item && !isBonusOrNonMonthly(item));
+  // Annual/Bonus allowances: added into Annual CTC, NOT into monthly gross or take-home
+  const annualBonusAllowances = otherAllowances.filter(item => item && isBonusOrNonMonthly(item));
+
+  const otherAllowancesInCTC = monthlyOtherAllowances.filter(item => item && (item.addedInAnnualCTC !== false && item.inCTC !== false && item.includeInCTC !== false));
+  const otherAllowancesInCTCSum = roundAmount(
+    otherAllowancesInCTC.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) +
+    (customAllowInCTC ? customAllowanceVal : 0)
+  );
+
+  const otherAllowancesOutsideCTC = monthlyOtherAllowances.filter(item => item && (item.addedInAnnualCTC === false || item.inCTC === false || item.includeInCTC === false));
+  const otherAllowancesOutsideCTCSum = roundAmount(
+    otherAllowancesOutsideCTC.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) +
+    (!customAllowInCTC ? customAllowanceVal : 0)
+  );
+
+  const otherAllowancesSum = roundAmount(otherAllowancesInCTCSum + otherAllowancesOutsideCTCSum);
+
+  const annualBonusInCTC = annualBonusAllowances.filter(item => item.addedInAnnualCTC !== false && item.inCTC !== false && item.includeInCTC !== false);
+  const annualBonusInCTCSum = roundAmount(
+    annualBonusInCTC.reduce((sum, item) => sum + getAnnualItemVal(item), 0)
+  );
+  const annualBonusOutsideCTC = annualBonusAllowances.filter(item => item.addedInAnnualCTC === false || item.inCTC === false || item.includeInCTC === false);
+  const annualBonusOutsideCTCSum = roundAmount(
+    annualBonusOutsideCTC.reduce((sum, item) => sum + getAnnualItemVal(item), 0)
+  );
+  const totalAnnualBonus = roundAmount(annualBonusInCTCSum + annualBonusOutsideCTCSum);
+
+  const isComponentEnabled = (c) => {
+    if (!c) return false;
+    const cid = (c.id || '').toLowerCase();
+    const cname = (c.name || '').toLowerCase();
+
+    // LTA check (both earning and deduction)
+    if (cid === 'lta' || cname === 'lta' || cname === 'leave travel allowance' || cname.includes('leave travel')) {
+      if (!ltaEnabled) return false;
+    }
+
+    // Statutory checks
+    if (cid === 'pf' || cname === 'provident fund' || cname === 'pf') {
+      if (!pfEnabled) return false;
+    }
+    if (cid === 'esi' || cname === 'employee state insurance' || cname === 'esi') {
+      if (!esiEnabled) return false;
+    }
+    if (cid === 'pt' || cid === 'professional_tax' || cname === 'professional tax') {
+      if (!ptEnabled) return false;
+    }
+    if (cid === 'gratuity' || cname === 'gratuity') {
+      if (!gratuityEnabled) return false;
+    }
+    if (cid === 'lwf' || cname === 'labour welfare fund' || cname === 'lwf') {
+      if (!lwfEnabled) return false;
+    }
+
+    // Direct flag checks on source: e.g. source[c.id + 'Enabled'], source[c.id + 'Eligible']
+    if (source[c.id + 'Enabled'] !== undefined && !parseBoolVal(source[c.id + 'Enabled'], true)) return false;
+    if (source[c.id + 'Eligible'] !== undefined && !parseBoolVal(source[c.id + 'Eligible'], true)) return false;
+    if (source[c.id] === false) return false;
+
+    // Direct flag checks inside salaryStructure / deductions
+    if (source.salaryStructure && source.salaryStructure[c.id + 'Enabled'] !== undefined && !parseBoolVal(source.salaryStructure[c.id + 'Enabled'], true)) return false;
+    if (source.salaryStructure && source.salaryStructure[c.id + 'Eligible'] !== undefined && !parseBoolVal(source.salaryStructure[c.id + 'Eligible'], true)) return false;
+    if (source.deductions && source.deductions[c.id + 'Enabled'] !== undefined && !parseBoolVal(source.deductions[c.id + 'Enabled'], true)) return false;
+    if (source.deductions && source.deductions[c.id + 'Eligible'] !== undefined && !parseBoolVal(source.deductions[c.id + 'Eligible'], true)) return false;
+
+    // Disabled / exempt list checks
+    if (Array.isArray(source.disabledComponents) && (source.disabledComponents.includes(c.id) || source.disabledComponents.includes(c.name))) return false;
+    if (Array.isArray(source.exemptComponents) && (source.exemptComponents.includes(c.id) || source.exemptComponents.includes(c.name))) return false;
+
+    return true;
+  };
 
   let flexi = 0, broadband = 0, petrol = 0, lta = 0, ltaCap = 0, conveyance = 0, medicalAllowance = 0, specialAllowance = 0;
 
@@ -270,6 +360,10 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       let flexiDeductionsSum = 0;
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo !== 'remainder') {
+          if (!isComponentEnabled(c)) {
+            em[c.id] = 0;
+            return;
+          }
           let amount = 0;
           if (c.id === 'basic') {
             amount = basicMaster;
@@ -302,11 +396,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
             }
             amount = roundAmount(val);
           }
-          if (c.id === 'lta') {
+          const isLta = c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel'));
+          if (isLta) {
             if (!ltaEnabled) {
               amount = 0;
             } else {
-              if (source.lta !== undefined && source.lta !== null && source.lta !== '') {
+              if (c.linkedTo === 'fixed' && source.lta !== undefined && source.lta !== null && source.lta !== '') {
                 amount = roundAmount(source.lta);
               }
               amount = roundAmount(Math.min(amount, ltaCap || amount));
@@ -320,6 +415,9 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       });
       config.salaryComponents.forEach(c => {
         if (c.type === 'deduction' && (c.deductFromFlexi === true || c.includeInCTC === true)) {
+          if (!isComponentEnabled(c)) {
+            return;
+          }
           let amount = 0;
           if (c.linkedTo === 'ctc_percent') {
             let pct = c.linkValue;
@@ -338,13 +436,28 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
           } else if (c.linkedTo === 'fixed') {
             let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
             if (isInsuranceComp(c)) {
-              if (source[c.id] === undefined || source[c.id] === null || source[c.id] === '') {
-                if (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined) {
-                  val = source.insuranceAmount ?? source.insurance ?? source.medical_insurance ?? 0;
-                }
+              const insOverride = source.insuranceAmount !== undefined ? source.insuranceAmount
+                : (source.insurance !== undefined ? source.insurance
+                : (source.medical_insurance !== undefined ? source.medical_insurance : undefined));
+              if (insOverride !== undefined && insOverride !== null && insOverride !== '') {
+                val = insOverride;
+              } else if (insOverride === 0 || insOverride === '0' || insOverride === '') {
+                val = 0;
               }
             }
+            const isLta = c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel'));
+            if (isLta && (source.lta !== undefined && source.lta !== null && source.lta !== '')) {
+              val = source.lta;
+            }
             amount = roundAmount(val);
+          }
+          const isLta = c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel'));
+          if (isLta) {
+            if (!ltaEnabled) {
+              amount = 0;
+            } else if (ltaCap > 0) {
+              amount = roundAmount(Math.min(amount, ltaCap));
+            }
           }
           flexiDeductionsSum += amount;
         }
@@ -352,8 +465,12 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
 
       config.salaryComponents.forEach(c => {
         if (c.type === 'earning' && c.linkedTo === 'remainder') {
+          if (!isComponentEnabled(c)) {
+            em[c.id] = 0;
+            return;
+          }
           em[c.id] = roundAmount(Math.max(
-            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - flexiInsuranceAmount - esiEmployerPlaceholder - employerNPS - otherAllowancesSum,
+            monthlyCTC - sumOfAllNonRemainder - flexiDeductionsSum - pfEmployerInCTC - gratuityInCTC - lwfEmployer - flexiInsuranceAmount - esiEmployerPlaceholder - employerNPS - otherAllowancesInCTCSum,
             0
           ));
         }
@@ -364,11 +481,13 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
 
   let earningsMap = computeEarnings(0);
 
+  const ltaComp = config.salaryComponents?.find(c => c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel')));
+
   if (hasDynamicComponents) {
     flexi = earningsMap['flexi'] || 0;
     broadband = earningsMap['broadband'] || 0;
     petrol = earningsMap['petrol'] || 0;
-    lta = earningsMap['lta'] || 0;
+    lta = ltaEnabled ? (earningsMap[ltaComp?.id || 'lta'] || 0) : 0;
     conveyance = earningsMap['conveyance'] || 0;
     medicalAllowance = earningsMap['medical'] || 0;
     specialAllowance = earningsMap['special'] || 0;
@@ -382,7 +501,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     conveyance = roundAmount(source.salaryStructure?.conveyance);
     medicalAllowance = roundAmount(source.salaryStructure?.medicalAllowance);
     specialAllowance = roundAmount(Math.max(
-      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+      monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - employerNPS - conveyance - medicalAllowance - otherAllowancesInCTCSum,
       0
     ));
   }
@@ -410,7 +529,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       flexi = earningsMap['flexi'] || 0;
       broadband = earningsMap['broadband'] || 0;
       petrol = earningsMap['petrol'] || 0;
-      lta = earningsMap['lta'] || 0;
+      lta = ltaEnabled ? (earningsMap[ltaComp?.id || 'lta'] || 0) : 0;
       conveyance = earningsMap['conveyance'] || 0;
       medicalAllowance = earningsMap['medical'] || 0;
       specialAllowance = earningsMap['special'] || 0;
@@ -421,7 +540,7 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
       }
     } else {
       specialAllowance = roundAmount(Math.max(
-        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesSum,
+        monthlyCTC - basicMaster - hraMaster - flexi - broadband - petrol - lta - pfEmployerInCTC - gratuityInCTC - lwfEmployer - insurance - esiEmployer - employerNPS - conveyance - medicalAllowance - otherAllowancesInCTCSum,
         0
       ));
     }
@@ -466,6 +585,10 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
   if (hasDynamicComponents) {
     config.salaryComponents.forEach(c => {
       if (c.type === 'deduction') {
+        if (!isComponentEnabled(c)) {
+          deductionsMap[c.id] = 0;
+          return;
+        }
         let amount = 0;
         if (c.linkedTo === 'ctc_percent') {
           let pct = c.linkValue;
@@ -484,13 +607,28 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
         } else if (c.linkedTo === 'fixed') {
           let val = source[c.id] !== undefined ? source[c.id] : (source.deductions?.[c.id] !== undefined ? source.deductions[c.id] : (source.salaryStructure?.[c.id] !== undefined ? source.salaryStructure[c.id] : (c.linkValue || 0)));
           if (isInsuranceComp(c)) {
-            if (source[c.id] === undefined || source[c.id] === null || source[c.id] === '') {
-              if (source.insuranceAmount !== undefined || source.insurance !== undefined || source.medical_insurance !== undefined) {
-                val = source.insuranceAmount ?? source.insurance ?? source.medical_insurance ?? 0;
-              }
+            const insOverride = source.insuranceAmount !== undefined ? source.insuranceAmount
+              : (source.insurance !== undefined ? source.insurance
+              : (source.medical_insurance !== undefined ? source.medical_insurance : undefined));
+            if (insOverride !== undefined && insOverride !== null && insOverride !== '') {
+              val = insOverride;
+            } else if (insOverride === 0 || insOverride === '0' || insOverride === '') {
+              val = 0;
             }
           }
+          const isLta = c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel'));
+          if (isLta && (source.lta !== undefined && source.lta !== null && source.lta !== '')) {
+            val = source.lta;
+          }
           amount = roundAmount(val);
+        }
+        const isLta = c.id === 'lta' || (c.name && c.name.toLowerCase() === 'lta') || (c.name && c.name.toLowerCase().includes('leave travel'));
+        if (isLta) {
+          if (!ltaEnabled) {
+            amount = 0;
+          } else if (ltaCap > 0) {
+            amount = roundAmount(Math.min(amount, ltaCap));
+          }
         }
         deductionsMap[c.id] = amount;
         if (c.deductFromFlexi === true || c.includeInCTC === true) {
@@ -500,6 +638,18 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
         }
       }
     });
+  }
+  if (hasDynamicComponents && ltaComp && ltaComp.type === 'deduction') {
+    lta = ltaEnabled ? (deductionsMap[ltaComp.id] || 0) : 0;
+  }
+  if (!ltaEnabled) {
+    lta = 0;
+    if (ltaComp) {
+      if (earningsMap[ltaComp.id] !== undefined) earningsMap[ltaComp.id] = 0;
+      if (deductionsMap[ltaComp.id] !== undefined) deductionsMap[ltaComp.id] = 0;
+    }
+    if (earningsMap['lta'] !== undefined) earningsMap['lta'] = 0;
+    if (deductionsMap['lta'] !== undefined) deductionsMap['lta'] = 0;
   }
   const dynamicDeductionsSum = roundAmount(Object.values(deductionsMap).reduce((sum, v) => sum + v, 0));
 
@@ -581,6 +731,10 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     useSalaryComponents: source.useSalaryComponents !== false,
     earningsMap,
     deductionsMap,
+    annualBonus: totalAnnualBonus,
+    annualBonusInCTC: annualBonusInCTCSum,
+    totalAnnualCTC: roundAmount(monthlyCTC * 12 + annualBonusInCTCSum),
+    potentialPackage: roundAmount(monthlyCTC * 12 + totalAnnualBonus),
   };
 };
 
@@ -765,8 +919,21 @@ const processCalculatedSalary = (calculatedSalary = {}, config = {}, annualCTC, 
         if (customVal === undefined && c.id === 'medical') {
           customVal = calculatedSalary['medicalAllowance'];
         }
-        if (customVal === undefined && (c.id === 'insurance' || c.id === 'insuranceAmount')) {
-          customVal = calculatedSalary['insuranceAmount'] !== undefined ? calculatedSalary['insuranceAmount'] : calculatedSalary['insurance'];
+        const isIns = c.id === 'medical_insurance' || c.id === 'insurance' || c.id === 'insuranceAmount' || (c.name && c.name.toLowerCase().includes('insurance'));
+        if (isIns) {
+          const insVal = calculatedSalary.insuranceAmount !== undefined ? calculatedSalary.insuranceAmount
+            : (calculatedSalary.insurance !== undefined ? calculatedSalary.insurance
+            : (calculatedSalary.medical_insurance !== undefined ? calculatedSalary.medical_insurance : undefined));
+          if (insVal !== undefined && insVal !== null && insVal !== '') {
+            customVal = insVal;
+          } else if (insVal === 0 || insVal === '0' || insVal === '') {
+            customVal = 0;
+          }
+          const finalInsStr = String(parseFloat(customVal) || 0);
+          calculatedSalary.insuranceAmount = finalInsStr;
+          calculatedSalary.insurance = finalInsStr;
+          calculatedSalary.medical_insurance = finalInsStr;
+          calculatedSalary[c.id] = finalInsStr;
         }
         source[c.id] = customVal !== undefined ? parseFloat(customVal) || 0 : (c.linkValue || 0);
       }
