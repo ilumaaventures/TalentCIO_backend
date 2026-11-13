@@ -95,15 +95,20 @@ const verifyGoogleCredential = async (idToken) => {
     };
 };
 
-const buildPublicJobsQuery = ({ location, type, department, search }) => {
+const buildPublicJobsQuery = ({ location, type, department, search }, isResourceGateway = false) => {
     const query = {
-        isPublic: true,
         status: { $in: ['Approved', 'Closed'] },
         $or: [
             { reopenedToId: { $exists: false } },
             { reopenedToId: null }
         ]
     };
+
+    if (isResourceGateway) {
+        query.isResourceGatewayPublic = true;
+    } else {
+        query.isPublic = true;
+    }
 
     if (location) {
         query['requirements.location'] = location;
@@ -506,10 +511,7 @@ exports.getResourceGatewayJobs = async (req, res) => {
     try {
         const pageNumber = Math.max(parseInt(req.query.page, 10) || 1, 1);
         const limitNumber = Math.max(parseInt(req.query.limit, 10) || 12, 1);
-        const query = {
-            ...buildPublicJobsQuery(req.query),
-            isResourceGatewayPublic: true
-        };
+        const query = buildPublicJobsQuery(req.query, true);
 
         const allEligibleJobs = await HiringRequest.find(query)
             .select('requestId roleDetails requirements hiringDetails client clientConfidential companyId createdAt publicJobTitle publicJobDescription isResourceGatewayPublic')
@@ -572,7 +574,6 @@ exports.getResourceGatewayJobById = async (req, res) => {
 
         const job = await HiringRequest.findOne({
             _id: id,
-            isPublic: true,
             isResourceGatewayPublic: true,
             status: { $in: ['Approved', 'Closed'] }
         })
@@ -600,9 +601,12 @@ exports.applyToJob = async (req, res) => {
 
         const job = await HiringRequest.findOne({
             _id: id,
-            isPublic: true,
+            $or: [
+                { isPublic: true },
+                { isResourceGatewayPublic: true }
+            ],
             status: { $in: ['Approved', 'Closed'] }
-        }).select('companyId');
+        }).select('companyId isPublic isResourceGatewayPublic');
 
         if (!job) {
             return res.status(404).json({ message: 'This position is no longer accepting applications' });
@@ -710,7 +714,7 @@ exports.applyToJob = async (req, res) => {
             source: (source && String(source).trim())
                 || (req.headers.referer && (req.headers.referer.toLowerCase().includes('resource-gateway') || req.headers.referer.toLowerCase().includes('rg')))
                 || (req.headers.origin && (req.headers.origin.toLowerCase().includes('resource-gateway') || req.headers.origin.toLowerCase().includes('rg')))
-                || 'Public Job Board',
+                || (!job.isPublic && job.isResourceGatewayPublic ? 'Resource Gateway' : 'Public Job Board'),
             profileSnapshot: profileSnapshot || undefined
         });
 
@@ -1778,7 +1782,7 @@ exports.applicantGetMyApplications = async (req, res) => {
             .sort({ createdAt: -1 })
             .populate({
                 path: 'hiringRequestId',
-                select: 'roleDetails requirements hiringDetails client companyId requestId isPublic status',
+                select: 'roleDetails requirements hiringDetails client companyId requestId isPublic isResourceGatewayPublic status',
                 populate: {
                     path: 'companyId',
                     select: 'name settings.logo subdomain'

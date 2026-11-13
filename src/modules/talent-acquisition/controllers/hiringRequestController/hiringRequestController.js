@@ -162,7 +162,7 @@ exports.createHiringRequest = async (req, res) => {
             isPublic: req.body.isPublic !== undefined ? Boolean(req.body.isPublic) : (previousReq ? Boolean(previousReq.isPublic) : false),
             isJobVisible: req.body.isJobVisible !== undefined ? Boolean(req.body.isJobVisible) : (previousReq ? Boolean(previousReq.isJobVisible ?? previousReq.isPublic) : false),
             isResourceGatewayPublic: req.body.isResourceGatewayPublic !== undefined ? Boolean(req.body.isResourceGatewayPublic) : (previousReq ? Boolean(previousReq.isResourceGatewayPublic) : false),
-            wasEverPublished: req.body.wasEverPublished !== undefined ? Boolean(req.body.wasEverPublished) : (previousReq ? Boolean(previousReq.wasEverPublished || previousReq.isPublic) : false),
+            wasEverPublished: req.body.wasEverPublished !== undefined ? Boolean(req.body.wasEverPublished) : (previousReq ? Boolean(previousReq.wasEverPublished || previousReq.isPublic || previousReq.isResourceGatewayPublic) : false),
             roleDetails: {
                 department: 'General',
                 employmentType: 'Full-time',
@@ -1237,9 +1237,14 @@ exports.toggleJobVisibility = async (req, res) => {
         const resDoc = populatedRequest?.toObject ? populatedRequest.toObject() : (populatedRequest || hiringRequest);
         resDoc.isResourceGatewayEnabledForCompany = isRgEnabled;
 
-        const actionMsg = req.body.isResourceGatewayPublic !== undefined
-            ? `Job ${hiringRequest.isResourceGatewayPublic ? 'published to' : 'removed from'} Resource Gateway successfully`
-            : `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`;
+        let actionMsg;
+        if (req.body.isResourceGatewayPublic !== undefined && req.body.isPublic === undefined && req.body.isJobVisible === undefined) {
+            actionMsg = `Job ${hiringRequest.isResourceGatewayPublic ? 'published to' : 'removed from'} Resource Gateway successfully`;
+        } else if (req.body.isPublic !== undefined || req.body.isJobVisible !== undefined) {
+            actionMsg = `Job visibility ${isJobVisible ? 'enabled' : 'disabled'} successfully`;
+        } else {
+            actionMsg = 'Job visibility updated successfully';
+        }
 
         res.json({
             message: actionMsg,

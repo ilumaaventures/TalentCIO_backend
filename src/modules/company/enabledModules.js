@@ -2,6 +2,7 @@ const LEGACY_PROJECT_MODULE_ID = 'projectManagement';
 const PROJECTS_MODULE_ID = 'projects';
 const BUSINESS_UNITS_MODULE_ID = 'businessUnits';
 const CLIENTS_MODULE_ID = 'clients';
+const PAYROLL_MODULE_ID = 'payroll';
 
 const ALL_COMPANY_MODULES = [
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
@@ -27,7 +28,8 @@ const ALL_COMPANY_MODULES = [
     { id: 'clientPortal', label: 'Client Portal', icon: 'ShieldCheck' },
     { id: 'crm', label: 'Sales CRM', icon: 'TrendingUp' },
     { id: 'performance', label: 'Performance Management', icon: 'Award' },
-    { id: 'talentCard', label: 'Talent Card', icon: 'Award' }
+    { id: 'talentCard', label: 'Talent Card', icon: 'Award' },
+    { id: PAYROLL_MODULE_ID, label: 'Payroll', icon: 'BadgeDollarSign' }
 ];
 
 const normalizeEnabledModules = (moduleIds = []) => {
@@ -64,6 +66,10 @@ const normalizeEnabledModules = (moduleIds = []) => {
         normalizedIds.add('talentCard');
     }
 
+    if (normalizedIds.has('Payroll') || normalizedIds.has('PAYROLL')) {
+        normalizedIds.add(PAYROLL_MODULE_ID);
+    }
+
     return Array.from(normalizedIds);
 };
 
@@ -88,6 +94,10 @@ const hasEnabledModule = (moduleIds = [], targetModuleId = '') => {
 
     if (targetModuleId === 'talentCard' || targetModuleId === 'talentcard') {
         return normalizedIds.includes('talentCard') || normalizedIds.includes('talentcard');
+    }
+
+    if (targetModuleId === 'payroll' || targetModuleId === 'Payroll' || targetModuleId === 'PAYROLL') {
+        return normalizedIds.includes(PAYROLL_MODULE_ID);
     }
 
     return normalizedIds.includes(targetModuleId);
@@ -123,6 +133,7 @@ const filterPermissionsByEnabledModules = (permissions = [], enabledModules = []
         if (key.startsWith('client_portal.')) return enabled.has('clientPortal');
         if (key.startsWith('pms.') || key.startsWith('performance.')) return enabled.has('performance') || enabled.has('pms');
         if (key.startsWith('talent_card.') || key.startsWith('talentcard.') || key.startsWith('talent.')) return enabled.has('talentCard') || enabled.has('talentcard');
+        if (key.startsWith('payroll.')) return enabled.has(PAYROLL_MODULE_ID);
 
         return true;
     });
@@ -134,6 +145,7 @@ module.exports = {
     CLIENTS_MODULE_ID,
     LEGACY_PROJECT_MODULE_ID,
     PROJECTS_MODULE_ID,
+    PAYROLL_MODULE_ID,
     hasEnabledModule,
     normalizeEnabledModules,
     filterPermissionsByEnabledModules
