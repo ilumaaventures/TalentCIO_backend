@@ -10,8 +10,10 @@ const {
     getAssignedQueries,
     getEscalatedQueries,
     getQueryById,
+    updateQuery,
     updateQueryStatus,
     addComment,
+    updateComment,
     addQueryType,
     getQueryTypes,
     updateQueryType,
@@ -43,7 +45,9 @@ router.get('/my-queries', getMyQueries);
 router.get('/assigned', getAssignedQueries);
 router.get('/escalated', helpdeskViewAll, getEscalatedQueries);
 router.get('/:id', getQueryById);
+router.put('/:id', updateQuery);
 router.put('/:id/close', updateQueryStatus); // Specialized close route
 router.post('/:id/comments', addComment);
+router.put('/:id/comments/:commentId', updateComment);
 
 module.exports = router;
