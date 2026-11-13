@@ -98,8 +98,8 @@ const startEscalationCron = (io) => {
                     path: 'queryType',
                     select: 'enableEscalation escalationDays escalationPerson escalationLevels',
                     populate: [
-                        { path: 'escalationLevels.escalationPerson', select: 'firstName lastName email' },
-                        { path: 'escalationPerson', select: 'firstName lastName email' }
+                        { path: 'escalationLevels.escalationPerson', select: 'firstName lastName email isActive' },
+                        { path: 'escalationPerson', select: 'firstName lastName email isActive' }
                     ]
                 })
                 .sort({ _id: 1 })
@@ -132,7 +132,6 @@ const startEscalationCron = (io) => {
 
                     const companyKey = query.companyId?.toString();
                     const weeklyOff = weeklyOffByCompany.get(companyKey) || DEFAULT_WEEKLY_OFF;
-                    const workHoursElapsed = calculateWorkHours(query.createdAt, now, weeklyOff);
 
                     // Build and sort normalized escalation levels
                     let levels = [];
@@ -146,6 +145,12 @@ const startEscalationCron = (io) => {
                         }];
                     }
 
+                    // Strictly filter out deleted or inactive escalation contacts
+                    levels = levels.filter(lvl => {
+                        const person = lvl.escalationPerson;
+                        return person && (person._id || person) && person.isActive !== false && person.email;
+                    });
+
                     if (levels.length === 0) {
                         continue;
                     }
@@ -158,37 +163,48 @@ const startEscalationCron = (io) => {
                         continue;
                     }
 
-                    const escalationDays = nextLevel.escalationDays || DEFAULT_ESCALATION_DAYS;
-                    const thresholdHours = escalationDays * 24;
+                    // SLA calculation:
+                    // Level 0 -> 1: measured from query.createdAt
+                    // Level N -> N+1: measured from query.escalatedAt (time query entered current tier)
+                    const baseTime = (currentLevel === 0 || !query.escalatedAt) ? query.createdAt : query.escalatedAt;
+                    const workHoursInCurrentTier = calculateWorkHours(baseTime, now, weeklyOff);
 
-                    if (workHoursElapsed < thresholdHours) {
+                    // Determine required SLA window for this tier transition
+                    const currentLevelConfig = levels.find(l => l.level === currentLevel);
+                    const currentDays = currentLevelConfig ? (Number(currentLevelConfig.escalationDays) || 0) : 0;
+                    let tierDays = (Number(nextLevel.escalationDays) || DEFAULT_ESCALATION_DAYS) - currentDays;
+                    if (tierDays <= 0) {
+                        tierDays = Number(nextLevel.escalationDays) || DEFAULT_ESCALATION_DAYS;
+                    }
+                    const thresholdHours = tierDays * 24;
+
+                    if (workHoursInCurrentTier < thresholdHours) {
                         continue;
                     }
 
                     const oldAssignee = query.assignedTo ? query.assignedTo.toString() : null;
                     const newAssigneeDoc = nextLevel.escalationPerson;
                     const newAssignee = newAssigneeDoc?._id || newAssigneeDoc;
+                    if (!newAssignee) {
+                        continue;
+                    }
+
                     const newAssigneeName = newAssigneeDoc?.firstName
                         ? `${newAssigneeDoc.firstName} ${newAssigneeDoc.lastName || ''}`.trim()
                         : 'Designated Escalation Contact';
 
-                    console.log(`[CRON] Escalating Query ${query.queryId} to Level ${nextLevel.level} (${workHoursElapsed.toFixed(2)} hours old, Threshold: ${thresholdHours}h)`);
+                    console.log(`[CRON] Escalating Query ${query.queryId} to Level ${nextLevel.level} (${workHoursInCurrentTier.toFixed(2)}h in current tier, Threshold: ${thresholdHours}h) -> ${newAssigneeName} (${newAssigneeDoc.email})`);
 
                     query.status = 'Escalated';
                     query.currentEscalationLevel = nextLevel.level;
                     query.escalatedAt = now;
 
-                    let commentText = `[SYSTEM] This query has been automatically escalated to Level ${nextLevel.level} because it exceeded the ${thresholdHours}-hour work SLA.`;
+                    let commentText = `[SYSTEM] This query has been automatically escalated to Level ${nextLevel.level} because it exceeded the ${thresholdHours}-hour work SLA. It has been re-assigned to ${newAssigneeName}.`;
 
-                    if (newAssignee) {
-                        if (!query.originalAssignee && query.assignedTo) {
-                            query.originalAssignee = query.assignedTo;
-                        }
-                        query.assignedTo = newAssignee;
-                        commentText += ` It has been re-assigned to ${newAssigneeName}.`;
-                    } else {
-                        commentText += ' Admins please review.';
+                    if (!query.originalAssignee && query.assignedTo) {
+                        query.originalAssignee = query.assignedTo;
                     }
+                    query.assignedTo = newAssignee;
 
                     if (!Array.isArray(query.escalationHistory)) {
                         query.escalationHistory = [];

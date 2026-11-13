@@ -329,8 +329,16 @@ exports.createQuery = async (req, res) => {
         const qType = await QueryType.findOne({
             _id: queryTypeId,
             companyId: req.companyId
-        }).populate('assignedPerson', 'firstName lastName');
+        }).populate('assignedPerson', 'firstName lastName email isActive');
         if (!qType || !qType.isActive) return res.status(400).json({ success: false, message: 'Invalid or inactive query type.' });
+
+        const assignedPersonDoc = qType.assignedPerson;
+        if (!assignedPersonDoc || assignedPersonDoc.isActive === false) {
+            return res.status(400).json({
+                success: false,
+                message: 'The designated initial resolver for this query type is inactive or unassigned. Please configure an active initial resolver in workflows.'
+            });
+        }
 
         const newQuery = new HelpdeskQuery({
             subject,
@@ -338,14 +346,14 @@ exports.createQuery = async (req, res) => {
             queryType: qType._id,
             priority: priority || 'Medium',
             raisedBy: req.user._id,
-            assignedTo: qType.assignedPerson?._id || qType.assignedPerson,
+            assignedTo: assignedPersonDoc._id,
             status: 'New',
             companyId: req.companyId
         });
 
         if (qType.autoResponse && qType.autoResponse.trim()) {
             newQuery.comments.push({
-                user: qType.assignedPerson?._id || qType.assignedPerson,
+                user: assignedPersonDoc._id,
                 text: qType.autoResponse.trim()
             });
         }
@@ -354,7 +362,7 @@ exports.createQuery = async (req, res) => {
 
         // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
-        const assignedUserId = (qType.assignedPerson?._id || qType.assignedPerson)?.toString();
+        const assignedUserId = assignedPersonDoc._id.toString();
         const raiserUserId = req.user._id.toString();
         const notificationsData = [];
 
@@ -370,6 +378,7 @@ exports.createQuery = async (req, res) => {
                 link: `/helpdesk/${newQuery._id}`,
                 origin: req.headers?.origin || ''
             });
+            console.log(`[HELPDESK] Query ${newQuery.queryId} created. Initial resolver notified: ${assignedUserId} (${assignedPersonDoc.email})`);
         }
 
         // 2. Notify the ticket raiser (Confirmation) if different from assigned person
@@ -633,8 +642,8 @@ exports.updateQueryStatus = async (req, res) => {
             .populate({
                 path: 'queryType',
                 populate: [
-                    { path: 'escalationLevels.escalationPerson', select: '_id firstName lastName email' },
-                    { path: 'escalationPerson', select: '_id firstName lastName email' }
+                    { path: 'escalationLevels.escalationPerson', select: '_id firstName lastName email isActive' },
+                    { path: 'escalationPerson', select: '_id firstName lastName email isActive' }
                 ]
             });
 
@@ -714,6 +723,12 @@ exports.updateQueryStatus = async (req, res) => {
                     }];
                 }
 
+                // Strictly filter out deleted or inactive escalation persons
+                levels = levels.filter(lvl => {
+                    const person = lvl.escalationPerson;
+                    return person && (person._id || person) && person.isActive !== false;
+                });
+
                 const currentLevel = Number.isInteger(query.currentEscalationLevel) ? query.currentEscalationLevel : 0;
                 let nextLevel = levels.find(l => l.level > currentLevel);
 
@@ -756,6 +771,8 @@ exports.updateQueryStatus = async (req, res) => {
                         text: `[SYSTEM] Manually escalated to Level ${nextLevelNum}. Ticket reassigned to ${newAssigneeName}.`,
                         createdAt: Date.now()
                     });
+
+                    console.log(`[HELPDESK] Query ${query.queryId} manually escalated to Level ${nextLevelNum}. Reassigned to: ${newAssigneeName} (${newAssigneeDoc?.email || ''})`);
 
                     // Notify new assignee and ticket raiser
                     const io = req.app.get('io');
