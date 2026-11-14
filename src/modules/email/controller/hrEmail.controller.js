@@ -416,6 +416,23 @@ exports.sendHREmail = async (req, res) => {
         }
 
         const remoteAttachmentPayloads = await fetchRemoteAttachmentPayloads(cloudinaryUrls);
+
+        // Pre-upload any locally uploaded files once to Cloudinary so that all recipients and audit logs have permanent URLs
+        const uploadedLocalAttachments = [];
+        for (const file of requestedFiles) {
+            try {
+                const uploaded = await uploadAttachmentBufferToCloudinary(req.companyId, file);
+                uploadedLocalAttachments.push(uploaded);
+            } catch (uploadError) {
+                console.error(`Failed to pre-upload attachment ${file?.originalname || ''} to Cloudinary:`, uploadError);
+                uploadedLocalAttachments.push({
+                    filename: sanitizeFileName(file?.originalname, 'attachment'),
+                    cloudinaryUrl: '',
+                    publicId: ''
+                });
+            }
+        }
+
         const localAttachmentPayloads = requestedFiles.map((file) => ({
             filename: sanitizeFileName(file.originalname, 'attachment'),
             content: file.buffer,
@@ -430,6 +447,7 @@ exports.sendHREmail = async (req, res) => {
             }))
         ];
         const emailAccountSnapshot = await getEmailAccountSnapshot(req.companyId, req.body?.emailAccountId);
+        const batchId = new mongoose.Types.ObjectId().toString();
         const sent = [];
         const failed = [];
 
@@ -598,16 +616,61 @@ exports.sendHREmail = async (req, res) => {
 
                 if (!emailSent) {
                     failed.push({ userId: recipientUserId, email: resolvedEmail, reason: 'Failed to send email' });
+                    try {
+                        await HREmailLog.create({
+                            companyId: req.companyId,
+                            batchId,
+                            source: 'hr_send_page',
+                            status: 'Failed',
+                            failureReason: 'Failed to send email via mail server',
+                            sentBy: req.user._id,
+                            recipientUserId: user._id,
+                            recipientEmail: resolvedEmail,
+                            cc: cc || '',
+                            bcc: bcc || '',
+                            subject: resolvedSubject,
+                            body: resolvedHtml,
+                            type: 'general',
+                            templateId: selectedTemplate?._id || null,
+                            templateName: selectedTemplate?.name || '',
+                            emailAccountId: emailAccountSnapshot.emailAccountId,
+                            emailAccountLabel: emailAccountSnapshot.emailAccountLabel,
+                            attachments: [
+                                ...uploadedLocalAttachments.map((item) => ({
+                                    filename: item.filename,
+                                    cloudinaryUrl: item.cloudinaryUrl,
+                                    publicId: item.publicId,
+                                    dossierDocId: null
+                                })),
+                                ...remoteAttachmentPayloads.map((item) => ({
+                                    filename: item.filename,
+                                    cloudinaryUrl: item.cloudinaryUrl,
+                                    publicId: item.publicId,
+                                    dossierDocId: null
+                                })),
+                                ...userDossierAttachments.map((item) => ({
+                                    filename: item.filename,
+                                    cloudinaryUrl: item.cloudinaryUrl,
+                                    publicId: extractPublicIdFromUrl(item.cloudinaryUrl) || '',
+                                    dossierDocId: item.dossierDocId
+                                }))
+                            ],
+                            notes: notes || undefined,
+                            sentAt: new Date()
+                        });
+                    } catch (failLogErr) {
+                        console.error('Failed to log failed email delivery:', failLogErr);
+                    }
                     continue;
                 }
 
                 let dossierSaved = false;
                 let dossierSaveError = '';
-                let loggedAttachments = [
-                    ...requestedFiles.map((file) => ({
-                        filename: sanitizeFileName(file.originalname, 'attachment'),
-                        cloudinaryUrl: '',
-                        publicId: '',
+                const baseAttachments = [
+                    ...uploadedLocalAttachments.map((item) => ({
+                        filename: item.filename,
+                        cloudinaryUrl: item.cloudinaryUrl,
+                        publicId: item.publicId,
                         dossierDocId: null
                     })),
                     ...remoteAttachmentPayloads.map((item) => ({
@@ -615,7 +678,10 @@ exports.sendHREmail = async (req, res) => {
                         cloudinaryUrl: item.cloudinaryUrl,
                         publicId: item.publicId,
                         dossierDocId: null
-                    })),
+                    }))
+                ];
+                let loggedAttachments = [
+                    ...baseAttachments,
                     ...userDossierAttachments.map((item) => ({
                         filename: item.filename,
                         cloudinaryUrl: item.cloudinaryUrl,
@@ -638,16 +704,6 @@ exports.sendHREmail = async (req, res) => {
                             if (!profileDoc) {
                                 dossierSaveError = 'Profile not found';
                             } else {
-                                const uploadedLocalAttachments = [];
-                                for (const file of requestedFiles) {
-                                    try {
-                                        const uploaded = await uploadAttachmentBufferToCloudinary(req.companyId, file);
-                                        uploadedLocalAttachments.push(uploaded);
-                                    } catch (uploadError) {
-                                        throw new Error(`Failed to upload ${file?.originalname || 'attachment'} to Cloudinary`);
-                                    }
-                                }
-
                                 const combinedAttachments = [
                                     ...uploadedLocalAttachments,
                                     ...remoteAttachmentPayloads.map((item) => ({
@@ -706,9 +762,14 @@ exports.sendHREmail = async (req, res) => {
 
                 await HREmailLog.create({
                     companyId: req.companyId,
+                    batchId,
+                    source: 'hr_send_page',
+                    status: 'Sent',
                     sentBy: req.user._id,
                     recipientUserId: user._id,
                     recipientEmail: resolvedEmail,
+                    cc: cc || '',
+                    bcc: bcc || '',
                     subject: resolvedSubject,
                     body: resolvedHtml,
                     type: req.body?.type && ['onboarding', 'general', 'offboarding', 'adhoc', 'template'].includes(req.body.type)
@@ -804,5 +865,205 @@ exports.getHistory = async (req, res) => {
     } catch (error) {
         console.error('getHistory error:', error);
         return res.status(500).json({ message: 'Failed to fetch HR email history.' });
+    }
+};
+
+exports.getEmailHistory = async (req, res) => {
+    try {
+        const page = Math.max(Number.parseInt(req.query?.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(Number.parseInt(req.query?.limit, 10) || 20, 1), 100);
+        const search = String(req.query?.search || '').trim();
+        const type = String(req.query?.type || '').trim();
+        const recipientUserId = String(req.query?.recipientUserId || '').trim();
+        const sentBy = String(req.query?.sentBy || '').trim();
+        const hasAttachments = String(req.query?.hasAttachments || '').trim();
+        const startDate = req.query?.startDate;
+        const endDate = req.query?.endDate;
+
+        const query = {
+            companyId: req.companyId
+        };
+
+        if (type && type !== 'all') {
+            query.type = type;
+        }
+
+        if (recipientUserId && mongoose.isValidObjectId(recipientUserId)) {
+            query.recipientUserId = recipientUserId;
+        }
+
+        if (sentBy && mongoose.isValidObjectId(sentBy)) {
+            query.sentBy = sentBy;
+        }
+
+        if (hasAttachments === 'true') {
+            query['attachments.0'] = { $exists: true };
+        } else if (hasAttachments === 'false') {
+            query['attachments.0'] = { $exists: false };
+        }
+
+        if (startDate || endDate) {
+            query.sentAt = {};
+            if (startDate) {
+                const start = new Date(startDate);
+                if (!isNaN(start.getTime())) {
+                    start.setHours(0, 0, 0, 0);
+                    query.sentAt.$gte = start;
+                }
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                if (!isNaN(end.getTime())) {
+                    end.setHours(23, 59, 59, 999);
+                    query.sentAt.$lte = end;
+                }
+            }
+            if (Object.keys(query.sentAt).length === 0) {
+                delete query.sentAt;
+            }
+        }
+
+        if (search) {
+            const regex = new RegExp(escapeRegex(search), 'i');
+
+            const matchingUsers = await User.find({
+                companyId: req.companyId,
+                $or: [
+                    { firstName: regex },
+                    { lastName: regex },
+                    { email: regex },
+                    { employeeCode: regex }
+                ]
+            }).select('_id').lean();
+            const matchingUserIds = matchingUsers.map((u) => u._id);
+
+            query.$or = [
+                { subject: regex },
+                { recipientEmail: regex },
+                { notes: regex },
+                { templateName: regex },
+                { recipientUserId: { $in: matchingUserIds } },
+                { sentBy: { $in: matchingUserIds } }
+            ];
+        }
+
+        const [total, logs] = await Promise.all([
+            HREmailLog.countDocuments(query),
+            HREmailLog.find(query)
+                .populate('sentBy', 'firstName lastName email profilePicture')
+                .populate({
+                    path: 'recipientUserId',
+                    select: 'firstName lastName email employeeCode department employeeProfile',
+                    populate: {
+                        path: 'employeeProfile',
+                        select: 'contact.workEmail contact.personalEmail employment.designation employment.department'
+                    }
+                })
+                .populate('templateId', 'name subject')
+                .sort({ sentAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit)
+                .lean()
+        ]);
+
+        const formattedLogs = logs.map((log) => {
+            const recipient = log.recipientUserId || {};
+            const profile = recipient.employeeProfile || {};
+            const recipientName = recipient.firstName
+                ? `${recipient.firstName} ${recipient.lastName || ''}`.trim()
+                : (log.recipientEmail ? log.recipientEmail.split('@')[0] : 'Employee');
+            const senderName = log.sentBy
+                ? `${log.sentBy.firstName || ''} ${log.sentBy.lastName || ''}`.trim()
+                : 'System / HR';
+
+            return {
+                ...log,
+                recipientName,
+                recipientEmployeeCode: recipient.employeeCode || '',
+                recipientDepartment: profile?.employment?.department || recipient.department || '',
+                recipientDesignation: profile?.employment?.designation || '',
+                senderName,
+                senderEmail: log.sentBy?.email || '',
+                senderProfilePicture: log.sentBy?.profilePicture || '',
+                attachmentsCount: Array.isArray(log.attachments) ? log.attachments.length : 0,
+                status: log.status || 'Sent'
+            };
+        });
+
+        const [totalSentCount, totalWithAttachments] = await Promise.all([
+            HREmailLog.countDocuments({ companyId: req.companyId }),
+            HREmailLog.countDocuments({ companyId: req.companyId, 'attachments.0': { $exists: true } })
+        ]);
+
+        return res.json({
+            logs: formattedLogs,
+            total,
+            page,
+            limit,
+            totalPages: Math.max(Math.ceil(total / limit), 1),
+            summary: {
+                totalCount: totalSentCount,
+                totalWithAttachments
+            }
+        });
+    } catch (error) {
+        console.error('getEmailHistory error:', error);
+        return res.status(500).json({ message: 'Failed to fetch HR email history.' });
+    }
+};
+
+exports.getEmailLogDetail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ message: 'Invalid log ID.' });
+        }
+
+        const log = await HREmailLog.findOne({
+            _id: id,
+            companyId: req.companyId
+        })
+            .populate('sentBy', 'firstName lastName email profilePicture')
+            .populate({
+                path: 'recipientUserId',
+                select: 'firstName lastName email employeeCode department employeeProfile',
+                populate: {
+                    path: 'employeeProfile',
+                    select: 'contact.workEmail contact.personalEmail employment.designation employment.department'
+                }
+            })
+            .populate('templateId', 'name subject htmlBody')
+            .lean();
+
+        if (!log) {
+            return res.status(404).json({ message: 'Email log not found.' });
+        }
+
+        const recipient = log.recipientUserId || {};
+        const profile = recipient.employeeProfile || {};
+        const recipientName = recipient.firstName
+            ? `${recipient.firstName} ${recipient.lastName || ''}`.trim()
+            : (log.recipientEmail ? log.recipientEmail.split('@')[0] : 'Employee');
+        const senderName = log.sentBy
+            ? `${log.sentBy.firstName || ''} ${log.sentBy.lastName || ''}`.trim()
+            : 'System / HR';
+
+        return res.json({
+            log: {
+                ...log,
+                recipientName,
+                recipientEmployeeCode: recipient.employeeCode || '',
+                recipientDepartment: profile?.employment?.department || recipient.department || '',
+                recipientDesignation: profile?.employment?.designation || '',
+                senderName,
+                senderEmail: log.sentBy?.email || '',
+                senderProfilePicture: log.sentBy?.profilePicture || '',
+                attachmentsCount: Array.isArray(log.attachments) ? log.attachments.length : 0,
+                status: log.status || 'Sent'
+            }
+        });
+    } catch (error) {
+        console.error('getEmailLogDetail error:', error);
+        return res.status(500).json({ message: 'Failed to fetch email detail.' });
     }
 };

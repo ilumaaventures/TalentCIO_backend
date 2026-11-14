@@ -10,6 +10,13 @@ const commentSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    isEdited: {
+        type: Boolean,
+        default: false
+    },
+    editedAt: {
+        type: Date
+    },
     createdAt: {
         type: Date,
         default: Date.now
@@ -98,6 +105,13 @@ const helpdeskQuerySchema = new mongoose.Schema({
         type: Date
     },
     closedAt: {
+        type: Date
+    },
+    isEdited: {
+        type: Boolean,
+        default: false
+    },
+    editedAt: {
         type: Date
     },
     companyId: {

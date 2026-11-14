@@ -428,7 +428,9 @@ const formatAnnouncementResponse = (announcementDoc, user = {}) => {
         publishedAt: announcement.publishedAt || null,
         isRecurring: Boolean(announcement.isRecurring),
         recurringInterval: announcement.recurringInterval || null,
+        recurringDayOfMonth: announcement.recurringDayOfMonth || null,
         requireAcknowledgement: Boolean(announcement.requireAcknowledgement),
+        viewerAcknowledged: isAcknowledged,
         isAcknowledged,
         acknowledgementsCount: (announcement.acknowledgements || []).length,
         attachment: announcement.attachment || null,
@@ -580,6 +582,15 @@ const destroyAnnouncementAttachment = async (attachment) => {
 
 const buildAnnouncementPayload = (body = {}) => {
     const isPinnedValue = parseBoolean(body.pinned !== undefined ? body.pinned : body.isPinned);
+    const rawRecurringInterval = normalizeString(body.recurringInterval).toLowerCase();
+    const recurringInterval = ['monthly', 'quarterly', 'yearly'].includes(rawRecurringInterval)
+        ? rawRecurringInterval
+        : 'none';
+    const parsedDay = parseInt(body.recurringDayOfMonth, 10);
+    const recurringDayOfMonth = (recurringInterval !== 'none' && !Number.isNaN(parsedDay) && parsedDay >= 1 && parsedDay <= 31)
+        ? parsedDay
+        : null;
+
     return {
         title: normalizeString(body.title),
         summary: normalizeString(body.summary),
@@ -597,8 +608,9 @@ const buildAnnouncementPayload = (body = {}) => {
         pinExpiresAt: toValidDate(body.pinExpiresAt || body.expiresAt),
         expiresAt: toValidDate(body.expiresAt || body.pinExpiresAt),
         scheduledFor: toValidDate(body.scheduledFor),
-        isRecurring: parseBoolean(body.isRecurring),
-        recurringInterval: normalizeString(body.recurringInterval) || null,
+        isRecurring: recurringInterval !== 'none',
+        recurringInterval,
+        recurringDayOfMonth,
         requireAcknowledgement: parseBoolean(body.requireAcknowledgement)
     };
 };
@@ -617,6 +629,11 @@ const validateAnnouncementPayload = async (payload = {}) => {
     }
     if (payload.category && !ANNOUNCEMENT_CATEGORIES.includes(payload.category)) {
         return `Invalid category. Must be one of: ${ANNOUNCEMENT_CATEGORIES.join(', ')}.`;
+    }
+    if (payload.recurringInterval && payload.recurringInterval !== 'none') {
+        if (!payload.recurringDayOfMonth || payload.recurringDayOfMonth < 1 || payload.recurringDayOfMonth > 31) {
+            return 'Recurring day of month must be between 1 and 31.';
+        }
     }
     return null;
 };

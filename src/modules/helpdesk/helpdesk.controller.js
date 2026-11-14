@@ -329,8 +329,16 @@ exports.createQuery = async (req, res) => {
         const qType = await QueryType.findOne({
             _id: queryTypeId,
             companyId: req.companyId
-        }).populate('assignedPerson', 'firstName lastName');
+        }).populate('assignedPerson', 'firstName lastName email isActive');
         if (!qType || !qType.isActive) return res.status(400).json({ success: false, message: 'Invalid or inactive query type.' });
+
+        const assignedPersonDoc = qType.assignedPerson;
+        if (!assignedPersonDoc || assignedPersonDoc.isActive === false) {
+            return res.status(400).json({
+                success: false,
+                message: 'The designated initial resolver for this query type is inactive or unassigned. Please configure an active initial resolver in workflows.'
+            });
+        }
 
         const newQuery = new HelpdeskQuery({
             subject,
@@ -338,14 +346,14 @@ exports.createQuery = async (req, res) => {
             queryType: qType._id,
             priority: priority || 'Medium',
             raisedBy: req.user._id,
-            assignedTo: qType.assignedPerson?._id || qType.assignedPerson,
+            assignedTo: assignedPersonDoc._id,
             status: 'New',
             companyId: req.companyId
         });
 
         if (qType.autoResponse && qType.autoResponse.trim()) {
             newQuery.comments.push({
-                user: qType.assignedPerson?._id || qType.assignedPerson,
+                user: assignedPersonDoc._id,
                 text: qType.autoResponse.trim()
             });
         }
@@ -354,7 +362,7 @@ exports.createQuery = async (req, res) => {
 
         // --- TARGETED NOTIFICATIONS ---
         const io = req.app.get('io');
-        const assignedUserId = (qType.assignedPerson?._id || qType.assignedPerson)?.toString();
+        const assignedUserId = assignedPersonDoc._id.toString();
         const raiserUserId = req.user._id.toString();
         const notificationsData = [];
 
@@ -370,6 +378,7 @@ exports.createQuery = async (req, res) => {
                 link: `/helpdesk/${newQuery._id}`,
                 origin: req.headers?.origin || ''
             });
+            console.log(`[HELPDESK] Query ${newQuery.queryId} created. Initial resolver notified: ${assignedUserId} (${assignedPersonDoc.email})`);
         }
 
         // 2. Notify the ticket raiser (Confirmation) if different from assigned person
@@ -633,8 +642,8 @@ exports.updateQueryStatus = async (req, res) => {
             .populate({
                 path: 'queryType',
                 populate: [
-                    { path: 'escalationLevels.escalationPerson', select: '_id firstName lastName email' },
-                    { path: 'escalationPerson', select: '_id firstName lastName email' }
+                    { path: 'escalationLevels.escalationPerson', select: '_id firstName lastName email isActive' },
+                    { path: 'escalationPerson', select: '_id firstName lastName email isActive' }
                 ]
             });
 
@@ -714,6 +723,12 @@ exports.updateQueryStatus = async (req, res) => {
                     }];
                 }
 
+                // Strictly filter out deleted or inactive escalation persons
+                levels = levels.filter(lvl => {
+                    const person = lvl.escalationPerson;
+                    return person && (person._id || person) && person.isActive !== false;
+                });
+
                 const currentLevel = Number.isInteger(query.currentEscalationLevel) ? query.currentEscalationLevel : 0;
                 let nextLevel = levels.find(l => l.level > currentLevel);
 
@@ -756,6 +771,8 @@ exports.updateQueryStatus = async (req, res) => {
                         text: `[SYSTEM] Manually escalated to Level ${nextLevelNum}. Ticket reassigned to ${newAssigneeName}.`,
                         createdAt: Date.now()
                     });
+
+                    console.log(`[HELPDESK] Query ${query.queryId} manually escalated to Level ${nextLevelNum}. Reassigned to: ${newAssigneeName} (${newAssigneeDoc?.email || ''})`);
 
                     // Notify new assignee and ticket raiser
                     const io = req.app.get('io');
@@ -939,6 +956,120 @@ exports.addComment = async (req, res) => {
         res.status(200).json({ success: true, data: query });
     } catch (error) {
         console.error('Error adding comment:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+exports.updateComment = async (req, res) => {
+    try {
+        const { text } = req.body;
+        const { id, commentId } = req.params;
+
+        if (!text || !text.trim()) {
+            return res.status(400).json({ success: false, message: 'Message text cannot be empty' });
+        }
+
+        const query = await HelpdeskQuery.findOne({ _id: id, companyId: req.companyId });
+        if (!query) {
+            return res.status(404).json({ success: false, message: 'Query not found' });
+        }
+
+        if (query.status === 'Closed') {
+            return res.status(400).json({ success: false, message: 'Cannot edit messages on a closed query' });
+        }
+
+        const comment = query.comments.id(commentId);
+        if (!comment) {
+            return res.status(404).json({ success: false, message: 'Message not found' });
+        }
+
+        // System messages cannot be edited
+        if (comment.text.startsWith('[SYSTEM]')) {
+            return res.status(400).json({ success: false, message: 'System messages cannot be edited' });
+        }
+
+        // Only the author can edit their own message
+        if (comment.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: 'You can only edit your own messages' });
+        }
+
+        comment.text = text.trim();
+        comment.isEdited = true;
+        comment.editedAt = new Date();
+
+        await query.save();
+        await query.populate('comments.user', 'firstName lastName roles');
+
+        // Socket.IO Emission for instant live updates across all connected clients
+        const io = req.app.get('io');
+        if (io) {
+            io.to(query._id.toString()).emit('comment_updated', query.comments);
+            io.to(query._id.toString()).emit('new_comment', query.comments);
+        }
+
+        res.status(200).json({
+            success: true,
+            data: query.comments,
+            message: 'Message updated successfully'
+        });
+    } catch (error) {
+        console.error('Error updating comment:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+exports.updateQuery = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { description, subject } = req.body;
+
+        const query = await HelpdeskQuery.findOne({ _id: id, companyId: req.companyId });
+        if (!query) {
+            return res.status(404).json({ success: false, message: 'Query not found' });
+        }
+
+        const isAdmin = isAdminUser(req.user);
+        const isRaiser = query.raisedBy.toString() === req.user._id.toString();
+
+        if (!isAdmin && !isRaiser) {
+            return res.status(403).json({ success: false, message: 'Unauthorized to edit this query' });
+        }
+
+        if (query.status === 'Closed') {
+            return res.status(400).json({ success: false, message: 'Cannot edit a closed query' });
+        }
+
+        let updated = false;
+        if (description && description.trim() && description.trim() !== query.description) {
+            query.description = description.trim();
+            updated = true;
+        }
+        if (subject && subject.trim() && subject.trim() !== query.subject) {
+            query.subject = subject.trim();
+            updated = true;
+        }
+
+        if (updated) {
+            query.isEdited = true;
+            query.editedAt = new Date();
+            await query.save();
+        }
+
+        const populatedQuery = await HelpdeskQuery.findById(query._id)
+            .populate('raisedBy', 'firstName lastName email profilePicture')
+            .populate('assignedTo', 'firstName lastName email profilePicture')
+            .populate('originalAssignee', 'firstName lastName email profilePicture')
+            .populate('comments.user', 'firstName lastName roles')
+            .populate('queryType', 'name autoResponse')
+            .lean();
+
+        res.status(200).json({
+            success: true,
+            data: populatedQuery,
+            message: 'Query updated successfully'
+        });
+    } catch (error) {
+        console.error('Error updating query:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };

@@ -105,44 +105,39 @@ const hrEmailLogSchema = new mongoose.Schema({
         type: String,
         trim: true,
         default: ''
+    },
+    status: {
+        type: String,
+        enum: ['Sent', 'Failed'],
+        default: 'Sent',
+        index: true
+    },
+    failureReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    batchId: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    source: {
+        type: String,
+        trim: true,
+        default: 'hr_send_page',
+        index: true
     }
 }, { timestamps: true });
 
+hrEmailLogSchema.index({ companyId: 1, sentAt: -1 });
+hrEmailLogSchema.index({ companyId: 1, type: 1, sentAt: -1 });
+hrEmailLogSchema.index({ companyId: 1, source: 1, sentAt: -1 });
 hrEmailLogSchema.index({ companyId: 1, recipientUserId: 1, sentAt: -1 });
 hrEmailLogSchema.index({ companyId: 1, recipientUserId: 1, type: 1, sentAt: -1 });
 hrEmailLogSchema.index({ companyId: 1, recipientEmail: 1, type: 1, sentAt: -1 });
 
-// Post-save hook to enforce FIFO cap of 20 latest emails per recipient and type
-hrEmailLogSchema.post('save', async function (doc) {
-    try {
-        const HREmailLog = mongoose.model('HREmailLog');
-        const query = {
-            companyId: doc.companyId,
-            type: doc.type
-        };
-
-        if (doc.recipientUserId) {
-            query.$or = [
-                { recipientUserId: doc.recipientUserId },
-                { recipientEmail: doc.recipientEmail }
-            ];
-        } else {
-            query.recipientEmail = doc.recipientEmail;
-        }
-
-        const count = await HREmailLog.countDocuments(query);
-        if (count > 20) {
-            const oldestLogs = await HREmailLog.find(query)
-                .sort({ sentAt: 1 })
-                .limit(count - 20)
-                .select('_id')
-                .lean();
-            const idsToDelete = oldestLogs.map(l => l._id);
-            await HREmailLog.deleteMany({ _id: { $in: idsToDelete } });
-        }
-    } catch (err) {
-        console.error('Error in HREmailLog FIFO hook:', err);
-    }
-});
+// Note: Post-save hook for FIFO cap previously deleted logs older than 20 entries per recipient.
+// Removed to ensure full compliance, permanent audit trail, and complete history in the HR Email History page.
 
 module.exports = mongoose.model('HREmailLog', hrEmailLogSchema);
