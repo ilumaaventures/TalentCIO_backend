@@ -8,7 +8,9 @@ const {
     getTemplates,
     getRecipientDocuments,
     sendHREmail,
-    getHistory
+    getHistory,
+    getEmailHistory,
+    getEmailLogDetail
 } = require('../controller/hrEmail.controller');
 
 const router = express.Router();
@@ -44,6 +46,8 @@ router.get('/employees', authorize('hr_email.send'), getEmployees);
 router.get('/templates', authorize('hr_email.send'), getTemplates);
 router.get('/recipient-documents', authorize('hr_email.send'), getRecipientDocuments);
 router.post('/send', authorize('hr_email.send'), uploadAttachments, sendHREmail);
+router.get('/history', authorize('hr_email.send'), getEmailHistory);
+router.get('/history/detail/:id', authorize('hr_email.send'), getEmailLogDetail);
 router.get('/history/:userId', authorize('hr_email.send'), getHistory);
 
 module.exports = router;
