@@ -1,14 +1,16 @@
+const mongoose = require('mongoose');
 const { HiringRequest } = require('../../model/hiringRequest.model');
 const Candidate = require('../../model/candidate.model');
 const PublicApplication = require('../../model/publicApplication.model');
 const Company = require('../../../company/company.model');
 const { buildAccessibleHiringRequestQuery } = require('../../utils/hiringRequestAccess');
+const { buildAnalyticsHiringRequestQuery } = require('../../utils/taAnalyticsAccess');
 const { normalizeClientName } = require('../../../client/clientAssignmentSync');
 
 exports.getGlobalAnalytics = async (req, res) => {
     try {
         res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=60');
-        const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
+        const accessibleQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
 
         // 1. Fetch all accessible requisitions for this user/company
         const allRequisitions = await HiringRequest.find({
@@ -564,11 +566,12 @@ exports.getClientAnalytics = async (req, res) => {
         const { hiringRequestId } = req.query;
         const normalizedClient = normalizeClientName(decodeURIComponent(clientName));
 
-        const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
+        const accessibleQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
         const requisitions = await HiringRequest.find({
             ...accessibleQuery,
-            client: normalizedClient
-        }).select('_id requestId status roleDetails employmentDetails createdAt closedAt').lean();
+            client: normalizedClient,
+            isDeleted: { $ne: true }
+        }).select('_id requestId status roleDetails hiringDetails createdAt closedAt').lean();
 
         const requisitionsList = requisitions.map(r => ({
             id: r._id.toString(),
@@ -586,15 +589,16 @@ exports.getClientAnalytics = async (req, res) => {
 
         const candidates = await Candidate.find({
             companyId: req.companyId,
-            hiringRequestId: { $in: reqIds }
+            hiringRequestId: { $in: reqIds },
+            isDeleted: { $ne: true }
         }).select('status decision phase2Decision phase3Decision interviewRounds profileShared hiringRequestId').lean();
 
         const activeReqs = filteredReqs.filter(r => r.status !== 'Closed' && r.status !== 'Rejected').length;
         const closedReqs = filteredReqs.filter(r => r.status === 'Closed').length;
 
         const totalOpenPositions = filteredReqs.reduce((sum, r) => {
-            const count = Number(r.employmentDetails?.openPositions || r.employmentDetails?.numberOfPositions || 0);
-            return sum + (isNaN(count) ? 0 : count);
+            const count = Number(r.hiringDetails?.openPositions || r.hiringDetails?.numberOfOpenings || r.numberOfOpenings || 1);
+            return sum + (isNaN(count) ? 1 : count);
         }, 0);
 
         const totalSourced = candidates.length;
@@ -643,20 +647,162 @@ exports.getClientAnalytics = async (req, res) => {
 
 exports.getInterviewAnalytics = async (req, res) => {
     try {
-        const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
-        const requisitions = await HiringRequest.find(accessibleQuery).select('_id').lean();
-        const reqIds = requisitions.map(r => r._id);
+        const { hiringRequestId, phase, page = 1, limit = 50 } = req.query;
+        const phaseNum = parseInt(phase, 10) || 1;
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = [50, 100, 150].includes(parseInt(limit, 10)) ? parseInt(limit, 10) : 50;
+
+        const accessibleQuery = await buildAnalyticsHiringRequestQuery(req.companyId, req.user);
+        const requisitions = await HiringRequest.find({
+            ...accessibleQuery,
+            isDeleted: { $ne: true }
+        }).select('_id requestId status roleDetails client createdAt closedAt updatedAt previousRequestId').lean();
+
+        const requisitionsList = requisitions.map(r => ({
+            _id: r._id.toString(),
+            title: r.roleDetails?.title || r.title || r.requestId || 'Untitled Requisition',
+            client: r.client || r.roleDetails?.client || 'Internal',
+            status: r.status,
+            closedAt: r.closedAt,
+            updatedAt: r.updatedAt,
+            requestId: r.requestId,
+            previousRequestId: r.previousRequestId
+        }));
+
+        let targetReqIds = requisitions.map(r => r._id);
+        if (hiringRequestId && mongoose.Types.ObjectId.isValid(hiringRequestId)) {
+            targetReqIds = targetReqIds.filter(id => id.toString() === hiringRequestId.toString());
+        }
 
         const candidates = await Candidate.find({
             companyId: req.companyId,
-            hiringRequestId: { $in: reqIds },
-            $or: [
-                { status: { $in: ['Interview Scheduled', 'Interview Completed'] } },
-                { decision: { $ne: 'None' } }
-            ]
-        }).select('candidateName email mobile status decision phase2Decision hiringRequestId').lean();
+            hiringRequestId: { $in: targetReqIds },
+            isDeleted: { $ne: true }
+        })
+            .populate('hiringRequestId', 'requestId roleDetails client')
+            .populate('interviewRounds.assignedTo', 'firstName lastName email')
+            .lean();
 
-        res.json(candidates);
+        const roundStatsMap = new Map();
+        let totalCandidatesWithInterviews = 0;
+        let totalShortlisted = 0;
+        let totalScheduled = 0;
+
+        const allTrackers = [];
+
+        for (const candidate of candidates) {
+            const phaseRounds = (candidate.interviewRounds || []).filter(r => Number(r.phase || 1) === phaseNum);
+
+            // Handle synthetic/legacy Phase 2 round if applicable
+            if (phaseNum === 2 && phaseRounds.length === 0) {
+                const phase2St = String(candidate.phase2InterviewStatus || '').trim();
+                const phase2Fb = String(candidate.phase2InterviewerFeedback || '').trim();
+                if (phase2St || phase2Fb) {
+                    phaseRounds.push({
+                        levelName: 'Round 1',
+                        phase: 2,
+                        status: phase2St === 'Rejected' ? 'Failed'
+                              : phase2St === 'Shortlisted' ? 'Passed'
+                              : phase2St === 'Did not Turn up' ? 'Did not Turn up'
+                              : 'Scheduled',
+                        feedback: phase2Fb,
+                        assignedTo: [],
+                        rating: null
+                    });
+                }
+            }
+
+            const candidateDecision = phaseNum === 3 
+                ? (candidate.phase3Decision || 'None')
+                : phaseNum === 2 
+                    ? (candidate.phase2Decision || 'None')
+                    : (candidate.decision || 'None');
+
+            const isShortlisted = ['Shortlisted', 'Selected', 'Joined', 'Offer Accepted'].includes(candidateDecision);
+            if (isShortlisted) totalShortlisted++;
+
+            const hasScheduled = phaseRounds.some(r => ['Scheduled', 'Pending'].includes(r.status)) || candidate.status === 'Interview Scheduled';
+            if (hasScheduled) totalScheduled++;
+
+            for (const round of phaseRounds) {
+                const rName = String(round.levelName || 'Round 1').trim() || 'Round 1';
+                if (!roundStatsMap.has(rName)) {
+                    roundStatsMap.set(rName, { roundName: rName, total: 0, pass: 0, fail: 0, pending: 0, scheduled: 0 });
+                }
+                const stat = roundStatsMap.get(rName);
+                stat.total++;
+
+                const st = String(round.status || '').trim();
+                if (['Passed', 'Pass', 'Shortlisted'].includes(st)) {
+                    stat.pass++;
+                } else if (['Failed', 'Fail', 'Rejected'].includes(st)) {
+                    stat.fail++;
+                } else if (['Scheduled'].includes(st)) {
+                    stat.scheduled++;
+                } else {
+                    stat.pending++;
+                }
+            }
+
+            if (phaseRounds.length > 0 || candidateDecision !== 'None') {
+                totalCandidatesWithInterviews++;
+                allTrackers.push({
+                    _id: candidate._id.toString(),
+                    candidateName: candidate.candidateName || 'Unnamed Candidate',
+                    roleTitle: candidate.hiringRequestId?.roleDetails?.title || 'Unknown Role',
+                    clientName: candidate.hiringRequestId?.client || 'Internal',
+                    noticePeriod: candidate.noticePeriod != null ? candidate.noticePeriod : null,
+                    expectedCTC: candidate.expectedCTC != null ? candidate.expectedCTC : null,
+                    hiringRequestId: candidate.hiringRequestId?._id ? candidate.hiringRequestId._id.toString() : String(candidate.hiringRequestId || ''),
+                    totalRounds: phaseRounds.length,
+                    finalDecision: candidateDecision,
+                    rounds: phaseRounds.map(r => ({
+                        levelName: r.levelName || 'Interview Round',
+                        interviewer: Array.isArray(r.assignedTo) && r.assignedTo.length > 0
+                            ? r.assignedTo.map(u => `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email).filter(Boolean).join(', ')
+                            : (r.interviewer || 'Unassigned'),
+                        scheduledDate: r.scheduledDate,
+                        rating: r.rating ? `${r.rating}/10` : '—',
+                        rawRating: r.rating || 0,
+                        status: ['Passed', 'Pass', 'Shortlisted'].includes(r.status) ? 'Pass'
+                              : ['Failed', 'Fail', 'Rejected'].includes(r.status) ? 'Fail'
+                              : ['Scheduled'].includes(r.status) ? 'Scheduled'
+                              : 'Pending',
+                        mailSent: Boolean(r.emailStatus === 'Sent' || r.mailSent),
+                        customFields: r.customFields || [],
+                        feedback: r.feedback || '',
+                        phase: r.phase || phaseNum
+                    }))
+                });
+            }
+        }
+
+        const roundStats = Array.from(roundStatsMap.values()).sort((a, b) => b.total - a.total);
+        const summary = {
+            totalCandidates: totalCandidatesWithInterviews,
+            totalShortlisted,
+            totalScheduled,
+            roundsCount: roundStats.length
+        };
+
+        const totalCount = allTrackers.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / limitNum));
+        const skip = (pageNum - 1) * limitNum;
+        const paginatedTrackers = allTrackers.slice(skip, skip + limitNum);
+
+        res.json({
+            success: true,
+            summary,
+            roundStats,
+            candidateTrackers: paginatedTrackers,
+            requisitions: requisitionsList,
+            pagination: {
+                currentPage: pageNum,
+                totalPages,
+                totalCount,
+                limit: limitNum
+            }
+        });
     } catch (error) {
         console.error('Error fetching interview analytics:', error);
         res.status(500).json({ message: 'Failed to fetch interview analytics', error: error.message });
