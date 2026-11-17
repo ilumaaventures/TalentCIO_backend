@@ -1,5 +1,6 @@
 const Candidate = require('../../model/candidate.model');
 const { HiringRequest } = require('../../model/hiringRequest.model');
+const User = require('../../../user/user.model');
 const mongoose = require('mongoose');
 const {
     TA_CAPABILITIES,
@@ -73,9 +74,32 @@ exports.getCandidatesByPulledBy = async (req, res) => {
         const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
         const skip = (page - 1) * limit;
 
-        const query = await buildAccessibleCandidateQuery(req.companyId, req.user, {
-            profilePulledBy: { $regex: new RegExp(`^${userName}$`, 'i') }
-        }, { capability: TA_CAPABILITIES.VIEW });
+        const cleanName = (userName || '').trim();
+        const escaped = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        let userMatchIds = [];
+        if (cleanName) {
+            const matchedUsers = await User.find({
+                companyId: req.companyId,
+                $or: [
+                    { firstName: { $regex: new RegExp(`^${escaped}$`, 'i') } },
+                    { lastName: { $regex: new RegExp(`^${escaped}$`, 'i') } },
+                    { $expr: { $regexMatch: { input: { $concat: ['$firstName', ' ', '$lastName'] }, regex: new RegExp(`^${escaped}$`, 'i') } } }
+                ]
+            }).select('_id');
+            userMatchIds = matchedUsers.map(u => u._id);
+        }
+
+        const userCriteria = userMatchIds.length > 0
+            ? {
+                $or: [
+                    { profilePulledBy: { $regex: new RegExp(`^${escaped}$`, 'i') } },
+                    { uploadedBy: { $in: userMatchIds } }
+                ]
+            }
+            : { profilePulledBy: { $regex: new RegExp(`^${escaped}$`, 'i') } };
+
+        const query = await buildAccessibleCandidateQuery(req.companyId, req.user, userCriteria, { capability: TA_CAPABILITIES.VIEW });
 
         const [totalCandidates, summaryRows, candidates] = await Promise.all([
             Candidate.countDocuments(query),
@@ -85,6 +109,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                     $project: {
                         status: 1,
                         decision: 1,
+                        hiringRequestId: 1,
                         interviewRounds: { $ifNull: ['$interviewRounds', []] }
                     }
                 },
@@ -106,6 +131,7 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                     $group: {
                         _id: null,
                         total: { $sum: 1 },
+                        requisitionsWorkedOn: { $addToSet: '$hiringRequestId' },
                         interested: {
                             $sum: {
                                 $cond: [
@@ -158,12 +184,14 @@ exports.getCandidatesByPulledBy = async (req, res) => {
                 .lean()
         ]);
 
-        const summary = summaryRows[0] || {
+        const rawSummary = summaryRows[0] || {};
+        const summary = {
             total: totalCandidates,
-            interested: 0,
-            inInterviews: 0,
-            rejected: 0,
-            onHold: 0
+            requisitionsWorkedOn: Array.isArray(rawSummary.requisitionsWorkedOn) ? rawSummary.requisitionsWorkedOn.length : 0,
+            interested: rawSummary.interested || 0,
+            inInterviews: rawSummary.inInterviews || 0,
+            rejected: rawSummary.rejected || 0,
+            onHold: rawSummary.onHold || 0
         };
 
         res.status(200).json({

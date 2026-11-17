@@ -215,9 +215,16 @@ exports.getGlobalAnalytics = async (req, res) => {
         }
 
         // 6. Compute Top Metrics
-        const totalReqs = filteredRequisitions.length;
+        const isUserFiltered = Boolean((filterPulledBy && filterPulledBy.trim()) || (filterUploadedBy && filterUploadedBy.trim()));
+        const userWorkedReqIds = new Set(filteredCandidates.map(c => String(c.hiringRequestId)).filter(Boolean));
+
+        const targetRequisitionsForMetrics = isUserFiltered
+            ? filteredRequisitions.filter(r => userWorkedReqIds.has(String(r._id)))
+            : filteredRequisitions;
+
+        const totalReqs = targetRequisitionsForMetrics.length;
         let totalOpenPositions = 0;
-        filteredRequisitions.filter(r => r.status === 'Approved').forEach(r => {
+        targetRequisitionsForMetrics.filter(r => r.status === 'Approved').forEach(r => {
             const openings = Number(r.hiringDetails?.openPositions || r.hiringDetails?.numberOfOpenings || r.numberOfOpenings || 1);
             totalOpenPositions += isNaN(openings) ? 1 : openings;
         });
@@ -441,10 +448,13 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
 
             if (!userMap.has(uName)) {
-                userMap.set(uName, { name: uName, sourced: 0, interviews: 0, offers: 0, joined: 0 });
+                userMap.set(uName, { name: uName, sourced: 0, interviews: 0, offers: 0, joined: 0, reqIds: new Set() });
             }
             const stat = userMap.get(uName);
             stat.sourced++;
+            if (c.hiringRequestId) {
+                stat.reqIds.add(String(c.hiringRequestId));
+            }
             if (c.status === 'Interview Scheduled' || c.decision !== 'None' || c.phase2Decision !== 'None' || (Array.isArray(c.interviewRounds) && c.interviewRounds.length > 0)) {
                 stat.interviews++;
             }
@@ -458,7 +468,12 @@ exports.getGlobalAnalytics = async (req, res) => {
 
         const sourcingPerformance = Array.from(userMap.values())
             .map(rec => ({
-                ...rec,
+                name: rec.name,
+                sourced: rec.sourced,
+                interviews: rec.interviews,
+                offers: rec.offers,
+                joined: rec.joined,
+                requisitionsCount: rec.reqIds ? rec.reqIds.size : 0,
                 conversion: rec.sourced > 0 ? Number(((rec.joined / rec.sourced) * 100).toFixed(1)) : 0
             }))
             .sort((a, b) => b.sourced - a.sourced);
@@ -486,7 +501,11 @@ exports.getGlobalAnalytics = async (req, res) => {
             }
         });
 
-        const positionPerformance = filteredRequisitions.map(r => {
+        const targetRequisitionsForPositions = isUserFiltered
+            ? filteredRequisitions.filter(r => userWorkedReqIds.has(String(r._id)))
+            : filteredRequisitions;
+
+        const positionPerformance = targetRequisitionsForPositions.map(r => {
             const rid = String(r._id);
             const stats = candByReq.get(rid) || { sourced: 0, interviewed: 0, joined: 0 };
             const open = Number(r.hiringDetails?.openPositions || r.hiringDetails?.numberOfOpenings || r.numberOfOpenings || 1);
