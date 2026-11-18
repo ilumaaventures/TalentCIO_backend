@@ -10,6 +10,7 @@ const { extractPublicIdFromUrl } = require('../../utils/cloudinaryHelper');
 const { cloudinary } = require('../../config/cloudinary');
 const { sendEmailForCompany } = require('../../services/companyEmailService');
 const { sendEmail } = require('../../services/emailService');
+const { invalidateAuthUserCache } = require('../../common/middleware/authMiddleware');
 const {
     GENERAL_EMAIL_TEMPLATE_PLACEHOLDERS,
     renderTemplateBody,
@@ -512,6 +513,7 @@ const uploadAttachmentBufferToCloudinary = async ({
 };
 
 const applyClearanceUpdate = (record, clearance = {}) => {
+    record.clearance = record.clearance || {};
     const keys = ['it', 'finance', 'hr', 'admin', 'manager'];
     keys.forEach((key) => {
         if (clearance[key] !== undefined) {
@@ -527,7 +529,7 @@ const applyClearanceUpdate = (record, clearance = {}) => {
             record.clearance.completedAt = new Date();
         }
 
-        if (record.status === 'Initiated') {
+        if (record.status === 'Initiated' || record.status === 'Clearance Pending') {
             record.status = 'In Progress';
         }
     } else {
@@ -540,6 +542,7 @@ const applyClearanceUpdate = (record, clearance = {}) => {
 };
 
 const applyFnfDetailsUpdate = (record, fnfDetails = {}, actingUserId) => {
+    record.fnfDetails = record.fnfDetails || {};
     const numericKeys = ['basicSalaryDue', 'leaveEncashment', 'bonusDue', 'deductions', 'netPayable'];
     let recalculateNetPayable = false;
 
@@ -741,7 +744,10 @@ exports.sendOffboardingEmail = async (req, res) => {
         };
 
         let template = null;
-        if (req.body?.emailTemplateId) {
+        if (req.body?.emailTemplateId && req.body.emailTemplateId !== '__custom__') {
+            if (!mongoose.isValidObjectId(req.body.emailTemplateId)) {
+                return res.status(400).json({ message: 'Invalid emailTemplateId' });
+            }
             template = await EmailTemplate.findOne({
                 _id: req.body.emailTemplateId,
                 companyId: req.companyId
@@ -1023,14 +1029,17 @@ exports.sendExitDocuments = async (req, res) => {
         }
 
         let selectedTemplate = null;
-        if (emailTemplateId) {
+        if (emailTemplateId && emailTemplateId !== '__custom__') {
+            if (!mongoose.isValidObjectId(emailTemplateId)) {
+                return res.status(400).json({ message: 'Invalid emailTemplateId' });
+            }
             selectedTemplate = await EmailTemplate.findOne({
                 _id: emailTemplateId,
                 companyId: req.companyId,
                 scope: 'general',
                 isActive: true,
                 $or: [
-                    { templateType: 'general' },
+                    { templateType: { $in: ['general', 'offboarding'] } },
                     { templateType: { $exists: false } }
                 ]
             }).lean();
@@ -1221,7 +1230,9 @@ exports.completeOffboarding = async (req, res) => {
         await record.save();
 
         employee.isActive = false;
+        employee.tokenVersion = (employee.tokenVersion || 0) + 1;
         await employee.save();
+        invalidateAuthUserCache(employee._id);
 
         profile.employment = profile.employment || {};
         profile.employment.status = getEmploymentStatusForCompletion(record.exitType);
