@@ -11,7 +11,11 @@ const {
     sendOffboardingEmail,
     sendExitDocuments,
     completeOffboarding,
-    getOffboardingStats
+    getOffboardingStats,
+    getLetterTags,
+    generateAndSaveLetter,
+    getDossierLetters,
+    sendDossierLetters
 } = require('./offboarding.controller');
 
 const router = express.Router();
@@ -24,12 +28,16 @@ router.use(protect);
 router.use(requireModule('offboarding'));
 
 router.get('/stats', authorize('offboarding.read'), getOffboardingStats);
+router.get('/letter-tags', authorize('offboarding.read'), getLetterTags);
+router.get('/dossier-letters/:userId', authorize('offboarding.read'), getDossierLetters);
+router.post('/generate-letter', authorize('offboarding.create', 'offboarding.update'), generateAndSaveLetter);
 router.get('/', authorize('offboarding.read'), getOffboardingList);
 router.post('/', authorize('offboarding.create'), initiateOffboarding);
 router.get('/:id', authorize('offboarding.read'), getOffboardingById);
 router.put('/:id', authorize('offboarding.update'), updateOffboarding);
 router.post('/:id/send-email', authorize('offboarding.update'), upload.array('attachments', 5), sendOffboardingEmail);
 router.post('/:id/send-documents', authorize('offboarding.update'), sendExitDocuments);
+router.post('/:id/send-dossier-letters', authorize('offboarding.update'), sendDossierLetters);
 router.post('/:id/complete', authorize('offboarding.update'), completeOffboarding);
 
 module.exports = router;

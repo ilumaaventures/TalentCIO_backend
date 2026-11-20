@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const axios = require('axios');
 const { format } = require('date-fns');
 const OffboardingRecord = require('./offboardingRecord.model');
 const User = require('../../modules/user/user.model');
@@ -1320,6 +1321,432 @@ exports.getOffboardingStats = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching offboarding stats:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const LETTER_TEMPLATE_TAGS = [
+    { tag: '{{fullName}}', key: 'fullName', label: 'Full Name', desc: 'Employee full legal name' },
+    { tag: '{{firstName}}', key: 'firstName', label: 'First Name', desc: 'Employee first name' },
+    { tag: '{{lastName}}', key: 'lastName', label: 'Last Name', desc: 'Employee last name' },
+    { tag: '{{employeeCode}}', key: 'employeeCode', label: 'Employee Code', desc: 'Employee ID or Code' },
+    { tag: '{{designation}}', key: 'designation', label: 'Designation', desc: 'Employee job title / designation' },
+    { tag: '{{department}}', key: 'department', label: 'Department', desc: 'Department name' },
+    { tag: '{{joiningDate}}', key: 'joiningDate', label: 'Joining Date', desc: 'Date employee joined company' },
+    { tag: '{{lastWorkingDay}}', key: 'lastWorkingDay', label: 'Last Working Day', desc: 'Official last day of employment' },
+    { tag: '{{exitType}}', key: 'exitType', label: 'Exit Type', desc: 'Resignation, Termination, Retirement, etc.' },
+    { tag: '{{companyName}}', key: 'companyName', label: 'Company Name', desc: 'Your company name' },
+    { tag: '{{companyAddress}}', key: 'companyAddress', label: 'Company Address', desc: 'Company registered location' },
+    { tag: '{{currentDate}}', key: 'currentDate', label: 'Current Date', desc: 'Date of issuance' },
+    { tag: '{{currentYear}}', key: 'currentYear', label: 'Current Year', desc: 'Current four-digit year' },
+    { tag: '{{noticePeriodServed}}', key: 'noticePeriodServed', label: 'Notice Period', desc: 'Notice period status (Yes/No)' },
+    { tag: '{{hrRemarks}}', key: 'hrRemarks', label: 'HR Remarks', desc: 'Remarks recorded by HR' }
+];
+
+const DEFAULT_RELIEVING_BODY = `<p>To whom it may concern,</p>
+<p>
+    This is to certify that <strong>{{fullName}}</strong>, Employee Code
+    <strong>{{employeeCode}}</strong>, worked with
+    <strong>{{companyName}}</strong> as
+    <strong>{{designation}}</strong> in the
+    <strong>{{department}}</strong> department from
+    <strong>{{joiningDate}}</strong> to
+    <strong>{{lastWorkingDay}}</strong>.
+</p>
+<p>
+    The employee has been formally relieved from their duties and responsibilities with effect from the close of business
+    on {{lastWorkingDay}}.
+</p>
+<p>We thank them for their contribution and wish them every success in their future endeavors.</p>
+<div style="margin-top:48px;">
+    <div style="font-weight:600;">HR Department</div>
+    <div>{{companyName}}</div>
+</div>`;
+
+const DEFAULT_EXPERIENCE_BODY = `<p>To whom it may concern,</p>
+<p>
+    This is to certify that <strong>{{fullName}}</strong>, Employee Code
+    <strong>{{employeeCode}}</strong>, was employed with
+    <strong>{{companyName}}</strong> from
+    <strong>{{joiningDate}}</strong> to
+    <strong>{{lastWorkingDay}}</strong>.
+</p>
+<p>
+    During this period, the employee served as
+    <strong>{{designation}}</strong> in the
+    <strong>{{department}}</strong> department.
+</p>
+<p>
+    Throughout their tenure, the employee has been found to be sincere, hardworking, and dedicated in the discharge
+    of their responsibilities.
+</p>
+<p>We wish them continued success in their future professional journey.</p>
+<div style="margin-top:48px;">
+    <div style="font-weight:600;">HR Department</div>
+    <div>{{companyName}}</div>
+</div>`;
+
+exports.getLetterTags = async (req, res) => {
+    try {
+        return res.json({
+            tags: LETTER_TEMPLATE_TAGS,
+            defaultTemplates: {
+                'Relieving Letter': DEFAULT_RELIEVING_BODY,
+                'Experience Letter': DEFAULT_EXPERIENCE_BODY
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching letter tags:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+exports.generateAndSaveLetter = async (req, res) => {
+    try {
+        const {
+            userId,
+            offboardingId,
+            letterType,
+            customBody,
+            lastWorkingDay: customLastWorkingDay,
+            exitType: customExitType
+        } = req.body || {};
+
+        if (!userId || !letterType) {
+            return res.status(400).json({ message: 'userId and letterType are required' });
+        }
+
+        if (!['Relieving Letter', 'Experience Letter'].includes(letterType)) {
+            return res.status(400).json({ message: 'letterType must be "Relieving Letter" or "Experience Letter"' });
+        }
+
+        const employee = await User.findOne({ _id: userId, companyId: req.companyId });
+        if (!employee) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
+        if (!profile) {
+            return res.status(404).json({ message: 'Employee profile not found' });
+        }
+
+        let offboarding = null;
+        if (offboardingId && mongoose.isValidObjectId(offboardingId)) {
+            offboarding = await OffboardingRecord.findOne({ _id: offboardingId, companyId: req.companyId });
+        } else {
+            offboarding = await OffboardingRecord.findOne({ userId, companyId: req.companyId }).sort({ createdAt: -1 });
+        }
+
+        const company = await getCompanyForRequest(req);
+        const resolvedLastWorkingDay = customLastWorkingDay || offboarding?.lastWorkingDay || new Date();
+        const resolvedExitType = customExitType || offboarding?.exitType || 'Resignation';
+
+        const templateData = {
+            firstName: employee.firstName || '',
+            lastName: employee.lastName || '',
+            fullName: buildEmployeeName(employee),
+            email: employee.email || '',
+            workEmail: profile.contact?.workEmail || employee.email || '',
+            personalEmail: profile.contact?.personalEmail || '',
+            employeeCode: employee.employeeCode || 'N/A',
+            employeeId: employee.employeeCode || 'N/A',
+            designation: getEmployeeDesignation(employee, profile),
+            jobTitle: getEmployeeDesignation(employee, profile),
+            department: getEmployeeDepartment(employee, profile),
+            location: profile.employment?.branch || employee.workLocation || '',
+            joiningDate: formatDateValue(getEmployeeJoiningDate(employee, profile)),
+            lastWorkingDay: formatDateValue(resolvedLastWorkingDay),
+            exitType: resolvedExitType,
+            companyName: company?.name || 'TalentCIO',
+            companyAddress: buildCompanyAddressLine(company) || '',
+            currentDate: formatDateValue(new Date()),
+            currentYear: new Date().getFullYear().toString(),
+            noticePeriodServed: offboarding?.noticePeriodServed ? 'Yes' : 'No',
+            hrRemarks: offboarding?.hrRemarks || ''
+        };
+
+        const defaultBody = letterType === 'Relieving Letter' ? DEFAULT_RELIEVING_BODY : DEFAULT_EXPERIENCE_BODY;
+        const bodyContent = String(customBody || defaultBody);
+        const renderedBody = renderTemplateBody(bodyContent, templateData);
+
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8" /><title>${escapeHtml(letterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+            <body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+                ${buildLetterhead(company)}
+                <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+                <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(letterType)}</h2>
+                ${renderedBody}
+            </body>
+            </html>
+        `;
+
+        let uploadedDoc = { url: '' };
+        try {
+            uploadedDoc = await uploadHtmlDocumentToCloudinary({
+                companyId: req.companyId,
+                employeeId: employee._id,
+                documentType: letterType,
+                html
+            });
+        } catch (uploadError) {
+            console.error(`[OFFBOARDING] Failed to upload ${letterType} to Cloudinary:`, uploadError.message);
+        }
+
+        const category = letterType === 'Relieving Letter' ? 'Relieving Letter' : 'Employment';
+        const title = `${letterType} - ${buildEmployeeName(employee)}`;
+        const fileName = `${letterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
+        const sentAt = new Date();
+
+        const docEntry = {
+            category,
+            title,
+            fileName,
+            url: uploadedDoc.url || '',
+            uploadDate: sentAt,
+            uploadedBy: req.user._id,
+            verificationStatus: 'Verified'
+        };
+
+        profile.documents = Array.isArray(profile.documents) ? profile.documents : [];
+        const existingIdx = profile.documents.findIndex(d => d.category === category && d.title === title);
+        if (existingIdx >= 0) {
+            profile.documents[existingIdx].url = uploadedDoc.url || profile.documents[existingIdx].url;
+            profile.documents[existingIdx].uploadDate = sentAt;
+            profile.documents[existingIdx].verificationStatus = 'Verified';
+        } else {
+            profile.documents.push(docEntry);
+        }
+        await profile.save();
+
+        if (offboarding) {
+            offboarding.documentsIssued.push({
+                type: letterType,
+                sentAt,
+                sentTo: profile.contact?.personalEmail || employee.email,
+                sentBy: req.user._id,
+                emailSubject: `${letterType} Generated`,
+                cloudinaryUrl: uploadedDoc.url || '',
+                profileDocumentCategory: category,
+                profileDocumentTitle: title,
+                notes: 'Generated and saved to employee Dossier'
+            });
+            await offboarding.save();
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: `${letterType} generated and saved to employee's Dossier`,
+            document: docEntry,
+            html,
+            url: uploadedDoc.url || ''
+        });
+    } catch (error) {
+        console.error('Error generating letter:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+exports.getDossierLetters = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        if (!userId || !mongoose.isValidObjectId(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
+
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId })
+            .select('documents user')
+            .lean();
+
+        if (!profile) {
+            return res.status(404).json({ message: 'Employee profile not found' });
+        }
+
+        const allDocs = Array.isArray(profile.documents) ? profile.documents : [];
+        const relevantDocs = allDocs.filter(d => {
+            if (!d || d.isDeleted === true) return false;
+            const category = String(d.category || '');
+            const title = String(d.title || '').toLowerCase();
+            return category === 'Relieving Letter' ||
+                category === 'Employment' ||
+                title.includes('relieving') ||
+                title.includes('experience') ||
+                title.includes('noc') ||
+                title.includes('settlement');
+        }).map(d => ({
+            _id: d._id,
+            title: d.title || d.fileName || 'Untitled Document',
+            category: d.category || 'Other',
+            fileName: d.fileName || 'document.html',
+            url: d.url || '',
+            uploadDate: d.uploadDate || d.createdAt,
+            verificationStatus: d.verificationStatus || 'Pending'
+        }));
+
+        return res.json({ documents: relevantDocs, total: relevantDocs.length });
+    } catch (error) {
+        console.error('Error fetching dossier letters:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+exports.sendDossierLetters = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const {
+            dossierDocIds,
+            recipientEmail,
+            personalNote,
+            emailAccountId,
+            customSubject
+        } = req.body || {};
+
+        if (!Array.isArray(dossierDocIds) || dossierDocIds.length === 0) {
+            return res.status(400).json({ message: 'Select at least one document from the dossier to send' });
+        }
+
+        const record = await OffboardingRecord.findOne({ _id: id, companyId: req.companyId })
+            .populate('userId', 'firstName lastName email department employeeCode');
+
+        if (!record) {
+            return res.status(404).json({ message: 'Offboarding record not found' });
+        }
+
+        const employee = record.userId;
+        const profile = await EmployeeProfile.findOne({ user: employee._id, companyId: req.companyId });
+        if (!profile) {
+            return res.status(404).json({ message: 'Employee profile not found' });
+        }
+
+        const company = await getCompanyForRequest(req);
+        const resolvedRecipientEmail = String(
+            recipientEmail ||
+            profile.contact?.personalEmail ||
+            employee.email ||
+            ''
+        ).trim();
+
+        if (!resolvedRecipientEmail) {
+            return res.status(400).json({ message: 'Recipient email is required' });
+        }
+
+        const idSet = new Set(dossierDocIds.map(dId => String(dId)));
+        const allDocs = Array.isArray(profile.documents) ? profile.documents : [];
+        const selectedDocs = allDocs.filter(d => idSet.has(String(d._id)) && d.url);
+
+        if (selectedDocs.length === 0) {
+            return res.status(400).json({ message: 'No valid documents found in the employee dossier matching selection' });
+        }
+
+        const attachments = [];
+        for (const doc of selectedDocs) {
+            if (doc.url && doc.url.startsWith('http')) {
+                try {
+                    const resp = await axios.get(doc.url, { responseType: 'arraybuffer', timeout: 20000 });
+                    const ext = doc.fileName?.includes('.') ? '' : (doc.url.includes('.pdf') ? '.pdf' : '.html');
+                    const cleanName = (doc.fileName || doc.title || 'document').replace(/[^a-zA-Z0-9._-]+/g, '_');
+                    attachments.push({
+                        filename: `${cleanName}${ext}`,
+                        content: Buffer.from(resp.data),
+                        contentType: resp.headers['content-type'] || 'application/octet-stream'
+                    });
+                } catch (fetchErr) {
+                    console.error(`[OFFBOARDING] Failed to download dossier document ${doc.title}:`, fetchErr.message);
+                }
+            }
+        }
+
+        if (attachments.length === 0) {
+            return res.status(500).json({ message: 'Failed to retrieve selected documents from storage' });
+        }
+
+        const companyName = company?.name || 'TalentCIO';
+        const docNames = selectedDocs.map(d => d.title || d.fileName).join(', ');
+        const subject = customSubject || `Official Exit Documents from ${companyName}`;
+
+        const emailHtml = `
+            <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:#1f2937;">
+                <p>Dear ${escapeHtml(buildEmployeeName(employee))},</p>
+                <p>Please find attached your official exit documents from <strong>${escapeHtml(companyName)}</strong>:</p>
+                <ul style="padding-left:20px;margin:12px 0;">
+                    ${selectedDocs.map(d => `<li><strong>${escapeHtml(d.title || d.fileName)}</strong></li>`).join('')}
+                </ul>
+                ${personalNote ? `
+                    <div style="margin:16px 0;padding:12px 14px;background:#f8fafc;border-left:4px solid #2563eb;">
+                        <div style="font-weight:600;margin-bottom:4px;">Message from HR:</div>
+                        <div>${escapeHtml(personalNote)}</div>
+                    </div>
+                ` : ''}
+                <p>For any queries regarding your documents, please feel free to reach out to the HR department.</p>
+                <p>Best wishes,<br />${escapeHtml(companyName)} HR Team</p>
+            </div>
+        `;
+
+        const sent = await sendCompanyEmailWithFallback({
+            companyId: req.companyId,
+            emailAccountId,
+            to: resolvedRecipientEmail,
+            subject,
+            html: emailHtml,
+            text: `Your exit documents (${docNames}) are attached.`,
+            attachments
+        });
+
+        if (!sent) {
+            return res.status(500).json({ message: 'Failed to send exit documents via email' });
+        }
+
+        const sentAt = new Date();
+
+        await HREmailLog.create({
+            companyId: req.companyId,
+            sentBy: req.user._id,
+            recipientUserId: employee._id,
+            recipientEmail: resolvedRecipientEmail,
+            subject,
+            body: emailHtml,
+            type: 'offboarding',
+            emailAccountId: emailAccountId || 'platform',
+            emailAccountLabel: getSenderLabel(emailAccountId),
+            attachments: selectedDocs.map(d => ({
+                filename: d.fileName || d.title,
+                cloudinaryUrl: d.url,
+                publicId: extractPublicIdFromUrl(d.url) || '',
+                dossierDocId: d._id
+            })),
+            sentAt
+        });
+
+        selectedDocs.forEach(d => {
+            record.documentsIssued.push({
+                type: d.category === 'Relieving Letter' ? 'Relieving Letter' : (d.title.includes('Experience') ? 'Experience Letter' : 'Other'),
+                sentAt,
+                sentTo: resolvedRecipientEmail,
+                sentBy: req.user._id,
+                emailAccountId: emailAccountId || 'platform',
+                emailSubject: subject,
+                cloudinaryUrl: d.url,
+                profileDocumentCategory: d.category,
+                profileDocumentTitle: d.title,
+                notes: personalNote || 'Sent from employee dossier'
+            });
+        });
+
+        if (record.status === 'Initiated') {
+            record.status = 'In Progress';
+        }
+
+        await record.save();
+
+        return res.json({
+            success: true,
+            sentTo: resolvedRecipientEmail,
+            documentsSent: selectedDocs.map(d => d.title),
+            attachmentsCount: attachments.length
+        });
+    } catch (error) {
+        console.error('Error sending dossier letters:', error);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
