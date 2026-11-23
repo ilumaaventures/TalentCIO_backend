@@ -14,8 +14,12 @@ const {
     getOffboardingStats,
     getLetterTags,
     generateAndSaveLetter,
+    previewLetter,
     getDossierLetters,
-    sendDossierLetters
+    sendDossierLetters,
+    getLetterTemplates,
+    saveLetterTemplate,
+    generateBatchLetters
 } = require('./offboarding.controller');
 
 const router = express.Router();
@@ -28,9 +32,13 @@ router.use(protect);
 router.use(requireModule('offboarding'));
 
 router.get('/stats', authorize('offboarding.read'), getOffboardingStats);
+router.get('/templates', authorize('offboarding.read'), getLetterTemplates);
+router.post('/templates', authorize('offboarding.create', 'offboarding.update'), upload.single('file'), saveLetterTemplate);
 router.get('/letter-tags', authorize('offboarding.read'), getLetterTags);
 router.get('/dossier-letters/:userId', authorize('offboarding.read'), getDossierLetters);
-router.post('/generate-letter', authorize('offboarding.create', 'offboarding.update'), generateAndSaveLetter);
+router.post('/preview-letter', authorize('offboarding.read'), upload.single('file'), previewLetter);
+router.post('/generate-letter', authorize('offboarding.create', 'offboarding.update'), upload.single('file'), generateAndSaveLetter);
+router.post('/generate-batch-letters', authorize('offboarding.create', 'offboarding.update'), upload.single('file'), generateBatchLetters);
 router.get('/', authorize('offboarding.read'), getOffboardingList);
 router.post('/', authorize('offboarding.create'), initiateOffboarding);
 router.get('/:id', authorize('offboarding.read'), getOffboardingById);

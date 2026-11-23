@@ -152,6 +152,24 @@ const companySchema = new mongoose.Schema({
                 isDeleted: { type: Boolean, default: false }
             }]
         },
+        offboarding: {
+            relievingTemplate: {
+                title: { type: String, default: 'Relieving Letter' },
+                body: { type: String, default: '' },
+                fileUrl: { type: String, default: '' },
+                fileName: { type: String, default: '' },
+                publicId: { type: String, default: '' },
+                updatedAt: { type: Date, default: Date.now }
+            },
+            experienceTemplate: {
+                title: { type: String, default: 'Experience Letter' },
+                body: { type: String, default: '' },
+                fileUrl: { type: String, default: '' },
+                fileName: { type: String, default: '' },
+                publicId: { type: String, default: '' },
+                updatedAt: { type: Date, default: Date.now }
+            }
+        },
         attendance: {
             weeklyOff: { type: [String], default: ['Saturday', 'Sunday'] },
             workingHours: { type: Number, default: 8 },

@@ -8,7 +8,10 @@ const Company = require('../company/company.model');
 const EmailTemplate = require('../email/model/emailTemplate.model');
 const HREmailLog = require('../email/model/hrEmailLog.model');
 const { extractPublicIdFromUrl } = require('../../utils/cloudinaryHelper');
-const { cloudinary } = require('../../config/cloudinary');
+const { cloudinary, uploadBufferToCloudinary } = require('../../config/cloudinary');
+const PizZip = require('pizzip');
+const Docxtemplater = require('docxtemplater');
+const mammoth = require('mammoth');
 const { sendEmailForCompany } = require('../../services/companyEmailService');
 const { sendEmail } = require('../../services/emailService');
 const { invalidateAuthUserCache } = require('../../common/middleware/authMiddleware');
@@ -1401,23 +1404,187 @@ exports.getLetterTags = async (req, res) => {
     }
 };
 
-exports.generateAndSaveLetter = async (req, res) => {
+const replaceTemplatePlaceholders = (text, data = {}) => {
+    if (!text || typeof text !== 'string') return '';
+    return text.replace(/\{\{?([a-zA-Z0-9_]+)\}?\}/g, (match, tag) => {
+        if (data[tag] !== undefined && data[tag] !== null) return data[tag];
+        const lowerTag = tag.toLowerCase();
+        for (const [key, val] of Object.entries(data)) {
+            if (key.toLowerCase() === lowerTag && val !== undefined && val !== null) return val;
+        }
+        const snakeTag = tag.replace(/([A-Z])/g, '_$1').toLowerCase();
+        if (data[snakeTag] !== undefined && data[snakeTag] !== null) return data[snakeTag];
+        return match;
+    });
+};
+
+const populateLetterDocx = async ({ buffer, templateData, letterType, employee, company }) => {
+    const zip = new PizZip(buffer);
+    let docXml = zip.file('word/document.xml')?.asText() || '';
+    if (docXml) {
+        // Normalize {{tag}} to {tag} so both bracket styles work in Word templates
+        docXml = docXml.replace(/\{\{([^{}]+)\}\}/g, '{$1}');
+        zip.file('word/document.xml', docXml);
+    }
+
+    const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        nullGetter: () => ''
+    });
+
+    const docData = {
+        fullName: templateData.fullName,
+        full_name: templateData.fullName,
+        firstName: templateData.firstName,
+        first_name: templateData.firstName,
+        lastName: templateData.lastName,
+        last_name: templateData.lastName,
+        employeeCode: templateData.employeeCode,
+        employee_code: templateData.employeeCode,
+        employeeId: templateData.employeeCode,
+        employee_id: templateData.employeeCode,
+        designation: templateData.designation,
+        department: templateData.department,
+        joiningDate: templateData.joiningDate,
+        joining_date: templateData.joiningDate,
+        lastWorkingDay: templateData.lastWorkingDay,
+        last_working_day: templateData.lastWorkingDay,
+        exitType: templateData.exitType,
+        exit_type: templateData.exitType,
+        companyName: templateData.companyName,
+        company_name: templateData.companyName,
+        companyAddress: templateData.companyAddress,
+        company_address: templateData.companyAddress,
+        currentDate: templateData.currentDate,
+        current_date: templateData.currentDate,
+        currentYear: templateData.currentYear,
+        current_year: templateData.currentYear,
+        noticePeriodServed: templateData.noticePeriodServed,
+        notice_period_served: templateData.noticePeriodServed,
+        hrRemarks: templateData.hrRemarks,
+        hr_remarks: templateData.hrRemarks
+    };
+
+    doc.render(docData);
+    const populatedBuffer = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+
+    let htmlBody = '';
+    try {
+        const mammothRes = await mammoth.convertToHtml({ buffer: populatedBuffer });
+        htmlBody = mammothRes.value || '';
+    } catch (e) {
+        console.warn('[OFFBOARDING] Mammoth conversion notice:', e.message);
+    }
+
+    return { populatedBuffer, htmlBody };
+};
+
+exports.previewLetter = async (req, res) => {
     try {
         const {
             userId,
-            offboardingId,
-            letterType,
+            letterType = 'Relieving Letter',
             customBody,
             lastWorkingDay: customLastWorkingDay,
             exitType: customExitType
         } = req.body || {};
 
-        if (!userId || !letterType) {
-            return res.status(400).json({ message: 'userId and letterType are required' });
+        let employee = null;
+        let profile = null;
+        let offboarding = null;
+
+        if (userId && mongoose.isValidObjectId(userId)) {
+            employee = await User.findOne({ _id: userId, companyId: req.companyId });
+            profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
+            offboarding = await OffboardingRecord.findOne({ userId, companyId: req.companyId }).sort({ createdAt: -1 });
         }
 
-        if (!['Relieving Letter', 'Experience Letter'].includes(letterType)) {
-            return res.status(400).json({ message: 'letterType must be "Relieving Letter" or "Experience Letter"' });
+        const company = await getCompanyForRequest(req);
+        const resolvedLastWorkingDay = customLastWorkingDay || offboarding?.lastWorkingDay || new Date();
+        const resolvedExitType = customExitType || offboarding?.exitType || 'Resignation';
+
+        const templateData = {
+            firstName: employee?.firstName || 'Employee',
+            lastName: employee?.lastName || '',
+            fullName: employee ? buildEmployeeName(employee) : 'Employee Name',
+            email: employee?.email || 'employee@example.com',
+            workEmail: profile?.contact?.workEmail || employee?.email || 'employee@company.com',
+            personalEmail: profile?.contact?.personalEmail || '',
+            employeeCode: employee?.employeeCode || profile?.employment?.employeeCode || 'EMP001',
+            employeeId: employee?.employeeCode || profile?.employment?.employeeCode || 'EMP001',
+            designation: employee ? getEmployeeDesignation(employee, profile) : 'Designation',
+            jobTitle: employee ? getEmployeeDesignation(employee, profile) : 'Designation',
+            department: employee ? getEmployeeDepartment(employee, profile) : 'Department',
+            location: profile?.employment?.branch || employee?.workLocation || 'Headquarters',
+            joiningDate: formatDateValue(getEmployeeJoiningDate(employee || {}, profile || {})),
+            lastWorkingDay: formatDateValue(resolvedLastWorkingDay),
+            exitType: resolvedExitType,
+            companyName: company?.name || 'TalentCIO',
+            companyAddress: buildCompanyAddressLine(company) || 'Headquarters',
+            currentDate: formatDateValue(new Date()),
+            currentYear: new Date().getFullYear().toString(),
+            noticePeriodServed: offboarding?.noticePeriodServed ? 'Yes' : 'No',
+            hrRemarks: offboarding?.hrRemarks || ''
+        };
+
+        const resolvedLetterType = ['Relieving Letter', 'Experience Letter'].includes(letterType)
+            ? letterType
+            : 'Relieving Letter';
+
+        if (req.file && req.file.buffer) {
+            const originalName = req.file.originalname || '';
+            if (/\.docx$/i.test(originalName)) {
+                const { htmlBody } = await populateLetterDocx({
+                    buffer: req.file.buffer,
+                    templateData,
+                    letterType: resolvedLetterType,
+                    employee: employee || { firstName: 'Employee' },
+                    company
+                });
+                return res.json({
+                    success: true,
+                    html: htmlBody || '<p>Parsed Word document successfully.</p>'
+                });
+            } else if (/\.(html|htm)$/i.test(originalName)) {
+                const text = req.file.buffer.toString('utf-8');
+                return res.json({
+                    success: true,
+                    html: replaceTemplatePlaceholders(text, templateData)
+                });
+            } else {
+                const text = req.file.buffer.toString('utf-8');
+                const rendered = replaceTemplatePlaceholders(text, templateData)
+                    .split('\n')
+                    .map(l => `<p style="margin:0 0 8px;">${escapeHtml(l)}</p>`)
+                    .join('');
+                return res.json({ success: true, html: rendered });
+            }
+        }
+
+        const defaultBody = resolvedLetterType === 'Relieving Letter' ? DEFAULT_RELIEVING_BODY : DEFAULT_EXPERIENCE_BODY;
+        const bodyContent = String(customBody || defaultBody);
+        const rendered = replaceTemplatePlaceholders(bodyContent, templateData);
+        return res.json({ success: true, html: rendered });
+    } catch (error) {
+        console.error('Error previewing letter:', error);
+        return res.status(500).json({ message: error.message || 'Failed to preview letter' });
+    }
+};
+
+exports.generateAndSaveLetter = async (req, res) => {
+    try {
+        const {
+            userId,
+            offboardingId,
+            letterType = 'Relieving Letter',
+            customBody,
+            lastWorkingDay: customLastWorkingDay,
+            exitType: customExitType
+        } = req.body || {};
+
+        if (!userId) {
+            return res.status(400).json({ message: 'userId is required' });
         }
 
         const employee = await User.findOne({ _id: userId, companyId: req.companyId });
@@ -1448,8 +1615,8 @@ exports.generateAndSaveLetter = async (req, res) => {
             email: employee.email || '',
             workEmail: profile.contact?.workEmail || employee.email || '',
             personalEmail: profile.contact?.personalEmail || '',
-            employeeCode: employee.employeeCode || 'N/A',
-            employeeId: employee.employeeCode || 'N/A',
+            employeeCode: employee.employeeCode || profile.employment?.employeeCode || 'N/A',
+            employeeId: employee.employeeCode || profile.employment?.employeeCode || 'N/A',
             designation: getEmployeeDesignation(employee, profile),
             jobTitle: getEmployeeDesignation(employee, profile),
             department: getEmployeeDepartment(employee, profile),
@@ -1465,45 +1632,141 @@ exports.generateAndSaveLetter = async (req, res) => {
             hrRemarks: offboarding?.hrRemarks || ''
         };
 
-        const defaultBody = letterType === 'Relieving Letter' ? DEFAULT_RELIEVING_BODY : DEFAULT_EXPERIENCE_BODY;
-        const bodyContent = String(customBody || defaultBody);
-        const renderedBody = renderTemplateBody(bodyContent, templateData);
+        const resolvedLetterType = ['Relieving Letter', 'Experience Letter'].includes(letterType)
+            ? letterType
+            : (req.file?.originalname?.toLowerCase().includes('experience') ? 'Experience Letter' : 'Relieving Letter');
 
-        const html = `
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="utf-8" /><title>${escapeHtml(letterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
-            <body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
-                ${buildLetterhead(company)}
-                <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
-                <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(letterType)}</h2>
-                ${renderedBody}
-            </body>
-            </html>
-        `;
+        let fileUrl = '';
+        let generatedHtml = '';
+        let fileName = '';
+        const sentAt = new Date();
 
-        let uploadedDoc = { url: '' };
-        try {
-            uploadedDoc = await uploadHtmlDocumentToCloudinary({
+        if (req.file && req.file.buffer) {
+            const originalName = req.file.originalname || 'letter_template';
+            const isDocx = /\.docx$/i.test(originalName);
+            const isHtml = /\.(html|htm)$/i.test(originalName);
+
+            if (isDocx) {
+                const { populatedBuffer, htmlBody } = await populateLetterDocx({
+                    buffer: req.file.buffer,
+                    templateData,
+                    letterType: resolvedLetterType,
+                    employee,
+                    company
+                });
+
+                fileName = `${resolvedLetterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.docx`;
+                try {
+                    fileUrl = await uploadBufferToCloudinary(
+                        populatedBuffer,
+                        fileName,
+                        `talentcio/${req.companyId}/offboarding/${employee._id}`
+                    );
+                } catch (uploadError) {
+                    console.error('[OFFBOARDING] Failed to upload docx letter to Cloudinary:', uploadError.message);
+                }
+
+                generatedHtml = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>${escapeHtml(resolvedLetterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+<body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+    ${buildLetterhead(company)}
+    <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+    <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(resolvedLetterType)}</h2>
+    ${htmlBody || '<p>Populated Word template document.</p>'}
+</body>
+</html>`;
+                if (!fileUrl) {
+                    const fallbackHtmlDoc = await uploadHtmlDocumentToCloudinary({
+                        companyId: req.companyId,
+                        employeeId: employee._id,
+                        documentType: resolvedLetterType,
+                        html: generatedHtml
+                    });
+                    fileUrl = fallbackHtmlDoc.url;
+                }
+            } else if (isHtml) {
+                const rawContent = req.file.buffer.toString('utf-8');
+                const renderedBody = replaceTemplatePlaceholders(rawContent, templateData);
+                generatedHtml = rawContent.includes('<html') ? renderedBody : `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>${escapeHtml(resolvedLetterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+<body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+    ${buildLetterhead(company)}
+    <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+    <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(resolvedLetterType)}</h2>
+    ${renderedBody}
+</body>
+</html>`;
+                fileName = `${resolvedLetterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
+                const uploadedDoc = await uploadHtmlDocumentToCloudinary({
+                    companyId: req.companyId,
+                    employeeId: employee._id,
+                    documentType: resolvedLetterType,
+                    html: generatedHtml
+                });
+                fileUrl = uploadedDoc.url;
+            } else {
+                // Text file (.txt)
+                const rawContent = req.file.buffer.toString('utf-8');
+                const renderedBody = replaceTemplatePlaceholders(rawContent, templateData)
+                    .split('\n')
+                    .map(line => `<p style="margin: 0 0 10px;">${escapeHtml(line)}</p>`)
+                    .join('');
+
+                generatedHtml = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>${escapeHtml(resolvedLetterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+<body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+    ${buildLetterhead(company)}
+    <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+    <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(resolvedLetterType)}</h2>
+    ${renderedBody}
+</body>
+</html>`;
+                fileName = `${resolvedLetterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
+                const uploadedDoc = await uploadHtmlDocumentToCloudinary({
+                    companyId: req.companyId,
+                    employeeId: employee._id,
+                    documentType: resolvedLetterType,
+                    html: generatedHtml
+                });
+                fileUrl = uploadedDoc.url;
+            }
+        } else {
+            // Direct template body
+            const defaultBody = resolvedLetterType === 'Relieving Letter' ? DEFAULT_RELIEVING_BODY : DEFAULT_EXPERIENCE_BODY;
+            const bodyContent = String(customBody || defaultBody);
+            const renderedBody = replaceTemplatePlaceholders(bodyContent, templateData);
+
+            generatedHtml = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>${escapeHtml(resolvedLetterType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+<body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+    ${buildLetterhead(company)}
+    <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+    <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(resolvedLetterType)}</h2>
+    ${renderedBody}
+</body>
+</html>`;
+            fileName = `${resolvedLetterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
+            const uploadedDoc = await uploadHtmlDocumentToCloudinary({
                 companyId: req.companyId,
                 employeeId: employee._id,
-                documentType: letterType,
-                html
+                documentType: resolvedLetterType,
+                html: generatedHtml
             });
-        } catch (uploadError) {
-            console.error(`[OFFBOARDING] Failed to upload ${letterType} to Cloudinary:`, uploadError.message);
+            fileUrl = uploadedDoc.url;
         }
 
-        const category = letterType === 'Relieving Letter' ? 'Relieving Letter' : 'Employment';
-        const title = `${letterType} - ${buildEmployeeName(employee)}`;
-        const fileName = `${letterType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
-        const sentAt = new Date();
+        const category = resolvedLetterType === 'Relieving Letter' ? 'Relieving Letter' : 'Employment';
+        const title = `${resolvedLetterType} - ${buildEmployeeName(employee)}`;
 
         const docEntry = {
             category,
             title,
             fileName,
-            url: uploadedDoc.url || '',
+            url: fileUrl || '',
             uploadDate: sentAt,
             uploadedBy: req.user._id,
             verificationStatus: 'Verified'
@@ -1512,7 +1775,8 @@ exports.generateAndSaveLetter = async (req, res) => {
         profile.documents = Array.isArray(profile.documents) ? profile.documents : [];
         const existingIdx = profile.documents.findIndex(d => d.category === category && d.title === title);
         if (existingIdx >= 0) {
-            profile.documents[existingIdx].url = uploadedDoc.url || profile.documents[existingIdx].url;
+            profile.documents[existingIdx].url = fileUrl || profile.documents[existingIdx].url;
+            profile.documents[existingIdx].fileName = fileName || profile.documents[existingIdx].fileName;
             profile.documents[existingIdx].uploadDate = sentAt;
             profile.documents[existingIdx].verificationStatus = 'Verified';
         } else {
@@ -1522,29 +1786,34 @@ exports.generateAndSaveLetter = async (req, res) => {
 
         if (offboarding) {
             offboarding.documentsIssued.push({
-                type: letterType,
+                type: resolvedLetterType,
                 sentAt,
                 sentTo: profile.contact?.personalEmail || employee.email,
                 sentBy: req.user._id,
-                emailSubject: `${letterType} Generated`,
-                cloudinaryUrl: uploadedDoc.url || '',
+                emailSubject: `${resolvedLetterType} Generated`,
+                cloudinaryUrl: fileUrl || '',
                 profileDocumentCategory: category,
                 profileDocumentTitle: title,
-                notes: 'Generated and saved to employee Dossier'
+                notes: 'Generated from template and archived to employee Dossier'
             });
             await offboarding.save();
         }
 
+        const savedDoc = profile.documents[profile.documents.length - 1];
+
         return res.status(201).json({
             success: true,
-            message: `${letterType} generated and saved to employee's Dossier`,
-            document: docEntry,
-            html,
-            url: uploadedDoc.url || ''
+            message: `${resolvedLetterType} generated and saved to employee's Dossier!`,
+            document: {
+                ...docEntry,
+                _id: savedDoc?._id
+            },
+            html: generatedHtml,
+            url: fileUrl || ''
         });
     } catch (error) {
         console.error('Error generating letter:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: error.message || 'Internal server error' });
     }
 };
 
@@ -1566,25 +1835,37 @@ exports.getDossierLetters = async (req, res) => {
         const allDocs = Array.isArray(profile.documents) ? profile.documents : [];
         const relevantDocs = allDocs.filter(d => {
             if (!d || d.isDeleted === true) return false;
-            const category = String(d.category || '');
+            const category = String(d.category || '').toLowerCase();
             const title = String(d.title || '').toLowerCase();
-            return category === 'Relieving Letter' ||
-                category === 'Employment' ||
+            const fileName = String(d.fileName || '').toLowerCase();
+            return category.includes('relieving') ||
+                category.includes('experience') ||
+                category.includes('employment') ||
+                category.includes('exit') ||
                 title.includes('relieving') ||
                 title.includes('experience') ||
+                title.includes('exit') ||
                 title.includes('noc') ||
-                title.includes('settlement');
+                title.includes('settlement') ||
+                fileName.includes('relieving') ||
+                fileName.includes('experience') ||
+                fileName.includes('exit');
         }).map(d => ({
             _id: d._id,
             title: d.title || d.fileName || 'Untitled Document',
-            category: d.category || 'Other',
+            category: d.category || 'Exit Document',
             fileName: d.fileName || 'document.html',
             url: d.url || '',
             uploadDate: d.uploadDate || d.createdAt,
-            verificationStatus: d.verificationStatus || 'Pending'
+            verificationStatus: d.verificationStatus || 'Verified'
         }));
 
-        return res.json({ documents: relevantDocs, total: relevantDocs.length });
+        return res.json({
+            success: true,
+            letters: relevantDocs,
+            documents: relevantDocs,
+            total: relevantDocs.length
+        });
     } catch (error) {
         console.error('Error fetching dossier letters:', error);
         return res.status(500).json({ message: 'Internal server error' });
@@ -1606,8 +1887,14 @@ exports.sendDossierLetters = async (req, res) => {
             return res.status(400).json({ message: 'Select at least one document from the dossier to send' });
         }
 
-        const record = await OffboardingRecord.findOne({ _id: id, companyId: req.companyId })
+        let record = await OffboardingRecord.findOne({ _id: id, companyId: req.companyId })
             .populate('userId', 'firstName lastName email department employeeCode');
+
+        if (!record && mongoose.isValidObjectId(id)) {
+            record = await OffboardingRecord.findOne({ userId: id, companyId: req.companyId })
+                .populate('userId', 'firstName lastName email department employeeCode')
+                .sort({ createdAt: -1 });
+        }
 
         if (!record) {
             return res.status(404).json({ message: 'Offboarding record not found' });
@@ -1644,10 +1931,15 @@ exports.sendDossierLetters = async (req, res) => {
             if (doc.url && doc.url.startsWith('http')) {
                 try {
                     const resp = await axios.get(doc.url, { responseType: 'arraybuffer', timeout: 20000 });
-                    const ext = doc.fileName?.includes('.') ? '' : (doc.url.includes('.pdf') ? '.pdf' : '.html');
-                    const cleanName = (doc.fileName || doc.title || 'document').replace(/[^a-zA-Z0-9._-]+/g, '_');
+                    let filename = doc.fileName || doc.title || 'document';
+                    if (!filename.includes('.')) {
+                        if (doc.url.includes('.docx')) filename += '.docx';
+                        else if (doc.url.includes('.pdf')) filename += '.pdf';
+                        else filename += '.html';
+                    }
+                    const cleanName = filename.replace(/[^a-zA-Z0-9._-]+/g, '_');
                     attachments.push({
-                        filename: `${cleanName}${ext}`,
+                        filename: cleanName,
                         content: Buffer.from(resp.data),
                         contentType: resp.headers['content-type'] || 'application/octet-stream'
                     });
@@ -1748,5 +2040,291 @@ exports.sendDossierLetters = async (req, res) => {
     } catch (error) {
         console.error('Error sending dossier letters:', error);
         return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+exports.getLetterTemplates = async (req, res) => {
+    try {
+        const company = await getCompanyForRequest(req);
+        const relievingSettings = company?.settings?.offboarding?.relievingTemplate || {};
+        const experienceSettings = company?.settings?.offboarding?.experienceTemplate || {};
+
+        return res.json({
+            success: true,
+            templates: {
+                'Relieving Letter': {
+                    title: 'Relieving Letter',
+                    body: relievingSettings.body || DEFAULT_RELIEVING_BODY,
+                    fileUrl: relievingSettings.fileUrl || '',
+                    fileName: relievingSettings.fileName || '',
+                    updatedAt: relievingSettings.updatedAt || null
+                },
+                'Experience Letter': {
+                    title: 'Experience Letter',
+                    body: experienceSettings.body || DEFAULT_EXPERIENCE_BODY,
+                    fileUrl: experienceSettings.fileUrl || '',
+                    fileName: experienceSettings.fileName || '',
+                    updatedAt: experienceSettings.updatedAt || null
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching offboarding templates:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+exports.saveLetterTemplate = async (req, res) => {
+    try {
+        const { letterType = 'Relieving Letter', body = '' } = req.body || {};
+        const isRelieving = letterType.toLowerCase().includes('reliev');
+        const targetKey = isRelieving ? 'relievingTemplate' : 'experienceTemplate';
+        const defaultTitle = isRelieving ? 'Relieving Letter' : 'Experience Letter';
+
+        const company = await Company.findById(req.companyId);
+        if (!company) {
+            return res.status(404).json({ message: 'Company not found' });
+        }
+
+        company.settings = company.settings || {};
+        company.settings.offboarding = company.settings.offboarding || {};
+        const existingTemplate = company.settings.offboarding[targetKey] || {};
+
+        let fileUrl = existingTemplate.fileUrl || '';
+        let fileName = existingTemplate.fileName || '';
+        let publicId = existingTemplate.publicId || '';
+        let extractedBody = body;
+
+        if (req.file && req.file.buffer) {
+            const originalName = req.file.originalname || `${targetKey}.docx`;
+            const isDocx = /\.docx$/i.test(originalName);
+            const isHtml = /\.(html|htm)$/i.test(originalName);
+
+            fileName = originalName;
+
+            if (isDocx) {
+                try {
+                    const mammothResult = await mammoth.convertToHtml({ buffer: req.file.buffer });
+                    if (mammothResult && mammothResult.value && !body) {
+                        extractedBody = mammothResult.value;
+                    }
+                } catch (mErr) {
+                    console.warn('[OFFBOARDING] Failed to extract HTML from uploaded template docx:', mErr.message);
+                }
+                try {
+                    fileUrl = await uploadBufferToCloudinary(
+                        req.file.buffer,
+                        originalName,
+                        `talentcio/${req.companyId}/offboarding/templates`
+                    );
+                } catch (upErr) {
+                    console.warn('[OFFBOARDING] Failed to upload template docx to Cloudinary:', upErr.message);
+                }
+            } else if (isHtml || /\.txt$/i.test(originalName)) {
+                const fileContent = req.file.buffer.toString('utf-8');
+                if (!body) {
+                    extractedBody = fileContent;
+                }
+                try {
+                    fileUrl = await uploadBufferToCloudinary(
+                        req.file.buffer,
+                        originalName,
+                        `talentcio/${req.companyId}/offboarding/templates`
+                    );
+                } catch (upErr) {
+                    console.warn('[OFFBOARDING] Failed to upload template to Cloudinary:', upErr.message);
+                }
+            }
+        }
+
+        company.settings.offboarding[targetKey] = {
+            title: defaultTitle,
+            body: extractedBody || (isRelieving ? DEFAULT_RELIEVING_BODY : DEFAULT_EXPERIENCE_BODY),
+            fileUrl,
+            fileName,
+            publicId,
+            updatedAt: new Date()
+        };
+
+        company.markModified('settings');
+        await company.save();
+
+        return res.json({
+            success: true,
+            message: `${defaultTitle} template saved successfully for future use.`,
+            template: company.settings.offboarding[targetKey]
+        });
+    } catch (error) {
+        console.error('Error saving offboarding template:', error);
+        return res.status(500).json({ message: error.message || 'Failed to save offboarding template' });
+    }
+};
+
+exports.generateBatchLetters = async (req, res) => {
+    try {
+        const {
+            userId,
+            offboardingId,
+            letterTypes = ['Relieving Letter'],
+            customBodies = {},
+            lastWorkingDay: customLastWorkingDay,
+            exitType: customExitType,
+            saveToDossier = false
+        } = req.body || {};
+
+        if (!userId) {
+            return res.status(400).json({ message: 'userId is required' });
+        }
+
+        const employee = await User.findOne({ _id: userId, companyId: req.companyId });
+        if (!employee) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        const profile = await EmployeeProfile.findOne({ user: userId, companyId: req.companyId });
+        if (!profile) {
+            return res.status(404).json({ message: 'Employee profile not found' });
+        }
+
+        let offboarding = null;
+        if (offboardingId && mongoose.isValidObjectId(offboardingId)) {
+            offboarding = await OffboardingRecord.findOne({ _id: offboardingId, companyId: req.companyId });
+        } else {
+            offboarding = await OffboardingRecord.findOne({ userId, companyId: req.companyId }).sort({ createdAt: -1 });
+        }
+
+        const company = await getCompanyForRequest(req);
+        const resolvedLastWorkingDay = customLastWorkingDay || offboarding?.lastWorkingDay || new Date();
+        const resolvedExitType = customExitType || offboarding?.exitType || 'Resignation';
+
+        const templateData = {
+            firstName: employee.firstName || '',
+            lastName: employee.lastName || '',
+            fullName: buildEmployeeName(employee),
+            email: employee.email || '',
+            workEmail: profile.contact?.workEmail || employee.email || '',
+            personalEmail: profile.contact?.personalEmail || '',
+            employeeCode: employee.employeeCode || profile.employment?.employeeCode || 'N/A',
+            employeeId: employee.employeeCode || profile.employment?.employeeCode || 'N/A',
+            designation: getEmployeeDesignation(employee, profile),
+            jobTitle: getEmployeeDesignation(employee, profile),
+            department: getEmployeeDepartment(employee, profile),
+            location: profile.employment?.branch || employee.workLocation || '',
+            joiningDate: formatDateValue(getEmployeeJoiningDate(employee, profile)),
+            lastWorkingDay: formatDateValue(resolvedLastWorkingDay),
+            exitType: resolvedExitType,
+            companyName: company?.name || 'TalentCIO',
+            companyAddress: buildCompanyAddressLine(company) || '',
+            currentDate: formatDateValue(new Date()),
+            currentYear: new Date().getFullYear().toString(),
+            noticePeriodServed: offboarding?.noticePeriodServed ? 'Yes' : 'No',
+            hrRemarks: offboarding?.hrRemarks || ''
+        };
+
+        const companyOffboardingSettings = company?.settings?.offboarding || {};
+        const savedRelievingBody = companyOffboardingSettings?.relievingTemplate?.body || DEFAULT_RELIEVING_BODY;
+        const savedExperienceBody = companyOffboardingSettings?.experienceTemplate?.body || DEFAULT_EXPERIENCE_BODY;
+
+        const results = [];
+        const rawTypes = Array.isArray(letterTypes) ? letterTypes : [letterTypes];
+        const typesToGenerate = rawTypes.length > 0 ? rawTypes : ['Relieving Letter'];
+
+        for (const type of typesToGenerate) {
+            const isRelieving = String(type).toLowerCase().includes('reliev');
+            const normalizedType = isRelieving ? 'Relieving Letter' : 'Experience Letter';
+            const defaultBodyForType = isRelieving ? savedRelievingBody : savedExperienceBody;
+            const chosenBody = (customBodies && customBodies[normalizedType]) || defaultBodyForType;
+
+            const renderedBody = replaceTemplatePlaceholders(chosenBody, templateData);
+            const generatedHtml = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>${escapeHtml(normalizedType)} - ${escapeHtml(buildEmployeeName(employee))}</title></head>
+<body style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;padding:32px;">
+    ${buildLetterhead(company)}
+    <div style="text-align:right;margin-bottom:24px;font-size:14px;">Date: ${formatDateValue(new Date())}</div>
+    <h2 style="margin:0 0 20px;font-size:22px;">${escapeHtml(normalizedType)}</h2>
+    ${renderedBody}
+</body>
+</html>`;
+
+            let fileUrl = '';
+            const fileName = `${normalizedType.replace(/[^a-zA-Z0-9]+/g, '_')}_${employee.employeeCode || 'doc'}.html`;
+
+            if (saveToDossier) {
+                const uploadedDoc = await uploadHtmlDocumentToCloudinary({
+                    companyId: req.companyId,
+                    employeeId: employee._id,
+                    documentType: normalizedType,
+                    html: generatedHtml
+                });
+                fileUrl = uploadedDoc.url;
+
+                const category = isRelieving ? 'Relieving Letter' : 'Employment';
+                const title = `${normalizedType} - ${buildEmployeeName(employee)}`;
+                const sentAt = new Date();
+
+                const docEntry = {
+                    category,
+                    title,
+                    fileName,
+                    url: fileUrl || '',
+                    uploadDate: sentAt,
+                    uploadedBy: req.user._id,
+                    verificationStatus: 'Verified'
+                };
+
+                profile.documents = Array.isArray(profile.documents) ? profile.documents : [];
+                const existingIdx = profile.documents.findIndex(d => d.category === category && d.title === title);
+                if (existingIdx >= 0) {
+                    profile.documents[existingIdx].url = fileUrl || profile.documents[existingIdx].url;
+                    profile.documents[existingIdx].fileName = fileName || profile.documents[existingIdx].fileName;
+                    profile.documents[existingIdx].uploadDate = sentAt;
+                    profile.documents[existingIdx].verificationStatus = 'Verified';
+                } else {
+                    profile.documents.push(docEntry);
+                }
+
+                if (offboarding) {
+                    offboarding.documentsIssued.push({
+                        type: normalizedType,
+                        sentAt,
+                        sentTo: profile.contact?.personalEmail || employee.email,
+                        sentBy: req.user._id,
+                        emailSubject: `${normalizedType} Generated`,
+                        cloudinaryUrl: fileUrl || '',
+                        profileDocumentCategory: category,
+                        profileDocumentTitle: title,
+                        notes: 'Generated from template and saved to employee Dossier'
+                    });
+                }
+            }
+
+            results.push({
+                type: normalizedType,
+                title: `${normalizedType} - ${buildEmployeeName(employee)}`,
+                fileName,
+                url: fileUrl,
+                html: generatedHtml,
+                savedToDossier: !!saveToDossier
+            });
+        }
+
+        if (saveToDossier) {
+            await profile.save();
+            if (offboarding) {
+                await offboarding.save();
+            }
+        }
+
+        return res.json({
+            success: true,
+            message: saveToDossier
+                ? `${results.length} letter(s) successfully generated and saved to employee's Dossier.`
+                : `${results.length} letter preview(s) generated successfully.`,
+            letters: results
+        });
+    } catch (error) {
+        console.error('Error in generateBatchLetters:', error);
+        return res.status(500).json({ message: error.message || 'Failed to generate letters' });
     }
 };
