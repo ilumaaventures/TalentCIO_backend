@@ -791,20 +791,20 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     }
   }
 
-  const esiApplicable = master.esiEnabled && (totalProratedEarnings <= config.esiBasicThreshold);
+  const esiApplicable = master.esiEnabled && (totalProratedEarnings <= config.esiBasicThreshold) && totalProratedEarnings > 0;
   const esiEmployee = roundAmount(esiApplicable ? totalProratedEarnings * config.esiEmployeeRate : 0);
   const esiEmployer = roundAmount(esiApplicable ? totalProratedEarnings * config.esiEmployerRate : 0);
 
   const ptEnabled = master.ptEnabled;
   const manualPT = Number(employee.deductions?.professionalTax) || 0;
-  const computedPT = (ptEnabled && employee.ptState) ? getMonthlyPT(employee.ptState, totalProratedEarnings, month) : 0;
-  const professionalTax = ptEnabled ? (manualPT > 0 ? manualPT : computedPT) : 0;
+  const computedPT = (ptEnabled && employee.ptState && totalProratedEarnings > 0) ? getMonthlyPT(employee.ptState, totalProratedEarnings, month) : 0;
+  const professionalTax = (ptEnabled && totalProratedEarnings > 0) ? (manualPT > 0 ? manualPT : computedPT) : 0;
 
-  const lwfEmployer = (master.lwfEnabled && master.monthlyCTC > 0) ? roundAmount(config.lwfEmployer) : 0;
-  const lwfEmployee = (master.lwfEnabled && master.monthlyCTC > 0) ? roundAmount(config.lwfEmployee) : 0;
-  const gratuity = master.gratuityEnabled ? roundAmount(proratedBasic * config.gratuityRate) : 0;
+  const lwfEmployer = (master.lwfEnabled && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployer) : 0;
+  const lwfEmployee = (master.lwfEnabled && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployee) : 0;
+  const gratuity = (master.gratuityEnabled && master.monthlyCTC > 0 && proratedBasic > 0) ? roundAmount(proratedBasic * config.gratuityRate) : 0;
 
-  const tds = master.tds;
+  const tds = (master.tds && master.monthlyCTC > 0) ? master.tds : (adjustments.tds !== undefined && adjustments.tds !== '' ? Number(adjustments.tds) : 0);
 
   const customDeductions = employee.deductions?.customDeductions || employee.customDeductions || [];
   const customDeductionsSum = roundAmount(customDeductions.reduce((sum, d) => sum + (Number(d.amount) || 0), 0));
@@ -812,6 +812,13 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
   const totalDeductions = roundAmount(
     pfEmployee + esiEmployee + professionalTax + tds + lwfEmployee + customDeductionsSum
   );
+
+  const proratedEarningsMap = {};
+  if (master.earningsMap) {
+    Object.entries(master.earningsMap).forEach(([k, v]) => {
+      proratedEarningsMap[k] = roundAmount((Number(v) || 0) * prorationRatio);
+    });
+  }
 
   const netSalary = roundAmount(Math.max(0, totalProratedEarnings - totalDeductions));
 
@@ -836,6 +843,22 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     customAllowancesSum,
     totalEarnings: totalProratedEarnings,
     grossSalary: totalProratedEarnings,
+    earningsMap: proratedEarningsMap,
+    masterEarnings: master.earningsMap || {},
+    earnings: {
+      ...proratedEarningsMap,
+      basic: proratedBasic,
+      hra: proratedHra,
+      specialAllowance: proratedSpecial,
+      flexiAmount: proratedFlexi,
+      broadband: proratedBroadband,
+      petrol: proratedPetrol,
+      lta: proratedLta,
+      conveyance: proratedConveyance,
+      medicalAllowance: proratedMedical,
+      customAllowances: proratedCustomAllowances,
+      totalEarnings: totalProratedEarnings
+    },
     pfEmployee,
     pfEmployer,
     esiEmployee,
@@ -847,8 +870,25 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     gratuity,
     customDeductions,
     customDeductionsSum,
+    deductions: {
+      pfEmployee,
+      esiEmployee,
+      professionalTax,
+      tds,
+      lwfEmployee,
+      customDeductions,
+      totalDeductions
+    },
+    employerContributions: {
+      pfEmployer,
+      esiEmployer,
+      gratuity,
+      lwfEmployer,
+      grossTotalSalary: roundAmount(totalProratedEarnings + pfEmployer + gratuity + lwfEmployer + esiEmployer)
+    },
     totalDeductions,
     netSalary,
+    master: master,
     masterStructure: master,
   };
 };

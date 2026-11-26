@@ -40,4 +40,31 @@ router.put('/sync-settings', authorize(['payroll.config.manage', '*']), payrollC
 router.get('/monthly-roll', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getMonthlyRoll);
 router.post('/reset-monthly-roll', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.resetMonthlyRoll);
 
+// ── Native Process Payroll Routes (Full My Bills Procedure in TalentCIO) ─────
+router.get('/active-employees', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getActivePayrollEmployees);
+router.post('/process', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.processPayroll);
+router.post('/preview', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.previewPayroll);
+router.put('/bulk-approve', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.bulkApprovePayroll);
+router.post('/bulk-delete', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.bulkDeletePayroll);
+router.post('/full-and-final', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.processFullAndFinalSettlement);
+router.get('/compensation-types', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getCompensationTypes);
+router.get('/export', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.exportPayrollExcel);
+router.get('/export-inputs', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.exportPayrollInputsExcel);
+
+// Record-level operations
+router.get('/records', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getPayrolls);
+router.get('/records/:id', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getPayrollById);
+router.get('/records/:id/generate-payslip', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.generatePayslip);
+router.put('/records/:id', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.updatePayroll);
+router.delete('/records/:id', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.deletePayroll);
+router.post('/records/:id/mark-paid', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.markPayrollAsPaid);
+router.post('/records/:id/reopen', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.reopenPayroll);
+
+// Direct aliases
+router.get('/', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getPayrolls);
+router.get('/:id/generate-payslip', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.generatePayslip);
+router.post('/:id/mark-paid', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.markPayrollAsPaid);
+router.post('/:id/reopen', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.reopenPayroll);
+router.delete('/:id', authorize(['payroll.salary.manage', 'payroll.config.manage', '*']), payrollController.deletePayroll);
+
 module.exports = router;
