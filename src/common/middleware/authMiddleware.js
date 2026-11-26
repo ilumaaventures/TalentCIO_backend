@@ -228,6 +228,15 @@ const protect = async (req, res, next) => {
                 return res.status(401).json({ message: 'Not authorized, session expired (Role/Permission changed)' });
             }
 
+            // Check if user account is active
+            if (req.user && req.user.isActive === false) {
+                invalidateAuthUserCache(decoded.id);
+                return res.status(403).json({
+                    message: 'Your account has been deactivated. Please contact your administrator.',
+                    code: 'ACCOUNT_DEACTIVATED'
+                });
+            }
+
             next();
         } catch (error) {
             console.error(`JWT Error: ${error.message}`);

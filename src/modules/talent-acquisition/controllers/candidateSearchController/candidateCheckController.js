@@ -10,7 +10,8 @@ const {
     isCandidateOwnedByUser,
     canOverrideDuplicateCandidateOwnership,
     buildDuplicateCandidateMessage,
-    getUserDisplayName
+    getUserDisplayName,
+    applyDateRangeFilterToCandidateQuery
 } = require('../../utils/candidateAccess');
 
 exports.checkDuplicateCandidate = async (req, res) => {
@@ -100,6 +101,37 @@ exports.getCandidatesByPulledBy = async (req, res) => {
             : { profilePulledBy: { $regex: new RegExp(`^${escaped}$`, 'i') } };
 
         const query = await buildAccessibleCandidateQuery(req.companyId, req.user, userCriteria, { capability: TA_CAPABILITIES.VIEW });
+
+        const effectiveStartDate = req.query.startDate || req.query.dateFrom;
+        const effectiveEndDate = req.query.endDate || req.query.dateTo;
+        if (effectiveStartDate || effectiveEndDate) {
+            const startD = effectiveStartDate ? new Date(effectiveStartDate) : null;
+            let endD = effectiveEndDate ? new Date(effectiveEndDate) : null;
+            if (endD && !isNaN(endD.getTime())) {
+                endD = new Date(effectiveEndDate.includes('T') ? effectiveEndDate : `${effectiveEndDate}T23:59:59.999Z`);
+            }
+            const dateConditions = [];
+            if (startD && !isNaN(startD.getTime())) {
+                dateConditions.push({
+                    $or: [
+                        { createdAt: { $gte: startD } },
+                        { uploadedAt: { $gte: startD } }
+                    ]
+                });
+            }
+            if (endD && !isNaN(endD.getTime())) {
+                dateConditions.push({
+                    $or: [
+                        { createdAt: { $lte: endD } },
+                        { uploadedAt: { $lte: endD } }
+                    ]
+                });
+            }
+            if (dateConditions.length > 0) {
+                if (!query.$and) query.$and = [];
+                query.$and.push(...dateConditions);
+            }
+        }
 
         const [totalCandidates, summaryRows, candidates] = await Promise.all([
             Candidate.countDocuments(query),
