@@ -625,7 +625,9 @@ exports.applyToJob = async (req, res) => {
             profileResumeUrl,
             profileResumePublicId,
             source,
-            mustHaveSkills
+            mustHaveSkills,
+            location,
+            nationality
         } = req.body;
 
         if (!candidateName?.trim() || !email?.trim() || !mobile?.trim()) {
@@ -693,6 +695,13 @@ exports.applyToJob = async (req, res) => {
                 profileSnapshot = buildProfileSnapshot(applicantProfile);
             }
         }
+        if (location?.trim() || nationality?.trim()) {
+            profileSnapshot = {
+                ...(profileSnapshot || {}),
+                ...(location?.trim() ? { location: String(location).trim(), currentCity: profileSnapshot?.currentCity || String(location).trim() } : {}),
+                ...(nationality?.trim() ? { nationality: String(nationality).trim() } : {})
+            };
+        }
 
         const application = new PublicApplication({
             hiringRequestId: job._id,
@@ -701,6 +710,8 @@ exports.applyToJob = async (req, res) => {
             candidateName: String(candidateName).trim(),
             email: normalizedEmail,
             mobile: String(mobile).trim(),
+            location: location?.trim() || undefined,
+            nationality: nationality?.trim() || undefined,
             totalExperienceYears: totalExperienceYears !== undefined && totalExperienceYears !== ''
                 ? Number(totalExperienceYears)
                 : (profileSnapshot?.totalExperienceYears ?? undefined),
@@ -745,6 +756,8 @@ exports.submitGeneralApplication = async (req, res) => {
             expectedCTC,
             noticePeriod,
             preferredLocation,
+            location,
+            nationality,
             coverNote,
             useProfileResume,
             profileResumeUrl,
@@ -791,6 +804,9 @@ exports.submitGeneralApplication = async (req, res) => {
             profileSnapshot = buildProfileSnapshot(applicantProfile);
         }
 
+        const trimmedLocation = location?.trim() || '';
+        const trimmedNationality = nationality?.trim() || '';
+
         if (!profileSnapshot) {
             const nameParts = String(candidateName).trim().split(' ');
             profileSnapshot = {
@@ -800,7 +816,9 @@ exports.submitGeneralApplication = async (req, res) => {
                 mobile: String(mobile).trim(),
                 headline: `${targetPosition} Candidate`,
                 summary: coverNote?.trim() || `Submitted application for position: ${targetPosition}.`,
-                currentCity: preferredLocation ? String(preferredLocation).split('/')[0].trim() : '',
+                currentCity: trimmedLocation || (preferredLocation ? String(preferredLocation).split('/')[0].trim() : ''),
+                location: trimmedLocation,
+                nationality: trimmedNationality,
                 willingToRelocate: true,
                 jobSearchStatus: 'Actively Looking',
                 profileCompletionScore: 83,
@@ -826,6 +844,12 @@ exports.submitGeneralApplication = async (req, res) => {
                 githubUrl: '',
                 resumeUrl
             };
+        } else if (trimmedLocation || trimmedNationality) {
+            profileSnapshot = {
+                ...profileSnapshot,
+                ...(trimmedLocation ? { location: trimmedLocation, currentCity: profileSnapshot.currentCity || trimmedLocation } : {}),
+                ...(trimmedNationality ? { nationality: trimmedNationality } : {})
+            };
         }
 
         const lockCheck = await check3MonthApplicationLock(normalizedEmail, mobile, applicantId, true);
@@ -846,6 +870,8 @@ exports.submitGeneralApplication = async (req, res) => {
             candidateName: String(candidateName).trim(),
             email: normalizedEmail,
             mobile: String(mobile).trim(),
+            location: trimmedLocation || undefined,
+            nationality: trimmedNationality || undefined,
             currentCompany: currentCompany?.trim() || undefined,
             totalExperienceYears: totalExperienceYears ? Number(totalExperienceYears) : undefined,
             currentCTC: currentCTC ? Number(currentCTC) : undefined,

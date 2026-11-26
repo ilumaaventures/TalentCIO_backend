@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeCandidateName } = require('../utils/nameFormatter');
 
 const publicApplicationSchema = new mongoose.Schema({
     hiringRequestId: {
@@ -23,6 +24,8 @@ const publicApplicationSchema = new mongoose.Schema({
     candidateName: { type: String, required: true, trim: true },
     email: { type: String, required: true, trim: true, lowercase: true },
     mobile: { type: String, required: true, trim: true },
+    location: { type: String, trim: true },
+    nationality: { type: String, trim: true },
     currentCompany: { type: String, trim: true },
     totalExperienceYears: { type: Number, min: 0 },
     currentCTC: { type: Number, min: 0 },
@@ -64,5 +67,11 @@ const publicApplicationSchema = new mongoose.Schema({
 publicApplicationSchema.index({ hiringRequestId: 1, email: 1 }, { unique: true, sparse: true });
 publicApplicationSchema.index({ hiringRequestId: 1, reviewStatus: 1 });
 publicApplicationSchema.index({ companyId: 1, createdAt: -1 });
+
+publicApplicationSchema.pre('validate', function normalizePublicAppName() {
+    if (this.candidateName && (this.isNew || this.isModified('candidateName'))) {
+        this.candidateName = normalizeCandidateName(this.candidateName);
+    }
+});
 
 module.exports = mongoose.model('PublicApplication', publicApplicationSchema);

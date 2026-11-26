@@ -1,5 +1,6 @@
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
+const { normalizeCandidateName } = require('./nameFormatter');
 
 /**
  * Basic non-AI CV Parser using Regex and Keyword matching.
@@ -592,7 +593,7 @@ const skillsDictionary = [
     }
 
     return {
-        candidateName: name,
+        candidateName: normalizeCandidateName(name, { collapseSpacedLetters: true }),
         email,
         mobile,
         totalExperience: totalExperience ? totalExperience.toString() : '',

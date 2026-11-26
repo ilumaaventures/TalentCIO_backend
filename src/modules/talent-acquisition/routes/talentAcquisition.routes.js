@@ -25,6 +25,8 @@ const taController = {
     getHiringRequestShares: hiringRequestController.getHiringRequestShares,
     removeHiringRequestShare: hiringRequestController.removeHiringRequestShare,
     updateHiringRequestShare: hiringRequestController.updateHiringRequestShare,
+    getPendingSharedRequests: hiringRequestController.getPendingSharedRequests,
+    respondToSharedRequest: hiringRequestController.respondToSharedRequest,
 
     getPreviousCandidates: candidateController.getPreviousCandidates,
     transferCandidate: candidateController.transferCandidate,
@@ -204,6 +206,8 @@ router.post('/hiring-request/:id/share', protect, authorizeAny(['ta.requisition.
 router.get('/hiring-request/:id/shares', protect, taController.getHiringRequestShares);
 router.delete('/hiring-request/:id/share/:targetCompanyId', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage']), taController.removeHiringRequestShare);
 router.put('/hiring-request/:id/share/:targetCompanyId', protect, authorizeAny(['ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage']), taController.updateHiringRequestShare);
+router.get('/shared-requests/pending', protect, taController.getPendingSharedRequests);
+router.post('/hiring-request/:id/respond-share', protect, authorizeAny(['ta.requisition.create', 'ta.requisition.update', 'ta.requisition.manage.assigned', 'ta.requisition.manage.all', 'ta.edit', 'ta.manage', 'ta.hiring_request.manage']), taController.respondToSharedRequest);
 router.get('/hiring-request/:id/previous-candidates', protect, taController.getPreviousCandidates);
 router.post('/hiring-request/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidate);
 router.patch('/hiring-request/:targetRequisitionId/transfer-candidate/:candidateId', protect, authorizeAny(['ta.candidate.manage.assigned', 'ta.candidate.manage.all', 'ta.candidate.transfer', 'ta.bulk_transfer', 'ta.edit']), taController.transferCandidateToRequisition);

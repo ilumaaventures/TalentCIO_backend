@@ -70,6 +70,15 @@ const sharedTenantSchema = new mongoose.Schema({
         enum: ['view_only', 'full_access'],
         default: 'full_access'
     },
+    status: {
+        type: String,
+        enum: ['Pending', 'Accepted', 'Rejected'],
+        default: 'Pending'
+    },
+    assignedClient: { type: String, default: '', trim: true },
+    assignedClientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', default: null },
+    respondedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    respondedAt: { type: Date, default: null },
     sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     sharedAt: { type: Date, default: Date.now }
 }, { _id: false });
@@ -116,6 +125,17 @@ const HiringRequestSchema = new mongoose.Schema({
     },
 
     // 1. Role Information
+    requisitionScope: {
+        type: String,
+        enum: ['National', 'International'],
+        default: 'National',
+        index: true
+    },
+    requisitionCountry: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     roleDetails: {
         title: { type: String, required: true },
         department: { type: String, required: true },

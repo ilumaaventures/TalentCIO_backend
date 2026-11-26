@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { buildInitialDynamicPhaseState } = require('../utils/phaseTemplateUtils');
+const { normalizeCandidateName } = require('../utils/nameFormatter');
 const softDeletePlugin = require('../../../common/utils/softDeletePlugin');
 
 const phaseHistorySchema = new mongoose.Schema({
@@ -483,6 +484,12 @@ candidateSchema.index({ companyId: 1, isDeleted: 1 });
 candidateSchema.methods.getCurrentPhaseEntry = function getCurrentPhaseEntry() {
     return this.phaseHistory.find((phase) => !phase.exitedAt);
 };
+
+candidateSchema.pre('validate', function normalizeCandidateNameHook() {
+    if (this.candidateName && (this.isNew || this.isModified('candidateName'))) {
+        this.candidateName = normalizeCandidateName(this.candidateName);
+    }
+});
 
 candidateSchema.pre('save', async function candidatePreSave() {
     if (!this.isNew || (Array.isArray(this.phaseHistory) && this.phaseHistory.length > 0)) {

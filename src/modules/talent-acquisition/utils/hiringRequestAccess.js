@@ -100,10 +100,14 @@ const hasAssignedRequisitionPermission = (user, action = 'view') => {
 };
 
 const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) => {
+    const acceptedShareElemMatch = {
+        companyId,
+        status: { $nin: ['Pending', 'Rejected'] }
+    };
     const query = {
         $or: [
             { companyId },
-            { 'sharedTenants.companyId': companyId }
+            { sharedTenants: { $elemMatch: acceptedShareElemMatch } }
         ]
     };
     const action = normalizeRequisitionAction(options.action || 'view');
@@ -141,7 +145,7 @@ const buildAccessibleHiringRequestQuery = async (companyId, user, options = {}) 
 
     const baseAccessQuery = {
         $or: [
-            { 'sharedTenants.companyId': companyId },
+            { sharedTenants: { $elemMatch: acceptedShareElemMatch } },
             { companyId }
         ]
     };
@@ -210,9 +214,9 @@ const canAccessHiringRequest = async (hiringRequest, companyId, user, options = 
 
     const action = normalizeRequisitionAction(options.action || 'view');
 
-    // Check if requisition is shared with this tenant
+    // Check if requisition is shared with this tenant (and accepted / legacy)
     const isSharedWithTenant = Array.isArray(hiringRequest.sharedTenants) && hiringRequest.sharedTenants.some(
-        st => String(st.companyId?._id || st.companyId) === String(companyId)
+        st => String(st.companyId?._id || st.companyId) === String(companyId) && !['Pending', 'Rejected'].includes(st.status)
     );
 
     // If viewing and shared with tenant, allow access for users with TA access in that tenant

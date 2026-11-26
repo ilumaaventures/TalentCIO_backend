@@ -33,17 +33,70 @@ exports.getTAClients = async (req, res) => {
             }
         });
 
-        // Aggregate hiring request counts grouped by client name
+        // Aggregate hiring request counts grouped by client name (including accepted shared requisitions)
         const hrStats = await HiringRequest.aggregate([
             {
                 $match: {
-                    companyId: companyId,
-                    client: { $ne: null, $exists: true, $regex: /\S/ }
+                    isDeleted: { $ne: true },
+                    $or: [
+                        {
+                            companyId: companyId,
+                            client: { $ne: null, $exists: true, $regex: /\S/ }
+                        },
+                        {
+                            sharedTenants: {
+                                $elemMatch: {
+                                    companyId: companyId,
+                                    status: { $nin: ['Pending', 'Rejected'] }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    myShare: {
+                        $first: {
+                            $filter: {
+                                input: { $ifNull: ['$sharedTenants', []] },
+                                as: 'st',
+                                cond: {
+                                    $and: [
+                                        { $eq: ['$$st.companyId', companyId] },
+                                        { $not: [{ $in: ['$$st.status', ['Pending', 'Rejected']] }] }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                $addFields: {
+                    effectiveClient: {
+                        $cond: [
+                            { $eq: ['$companyId', companyId] },
+                            '$client',
+                            {
+                                $cond: [
+                                    { $gt: [{ $strLenCP: { $ifNull: ['$myShare.assignedClient', ''] } }, 0] },
+                                    '$myShare.assignedClient',
+                                    '$client'
+                                ]
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                $match: {
+                    effectiveClient: { $ne: null, $exists: true, $regex: /\S/ }
                 }
             },
             {
                 $group: {
-                    _id: '$client',
+                    _id: '$effectiveClient',
                     activePositions: {
                         $sum: {
                             $cond: [{ $eq: ['$status', 'Approved'] }, 1, 0]

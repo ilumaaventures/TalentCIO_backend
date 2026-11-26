@@ -101,7 +101,14 @@ const getClients = async (req, res) => {
 
 const createClient = async (req, res) => {
     try {
-        const client = await Client.create({ ...req.body, companyId: req.companyId });
+        const payload = { ...req.body, companyId: req.companyId };
+        if (payload.businessUnit && typeof payload.businessUnit === 'object' && payload.businessUnit._id) {
+            payload.businessUnit = payload.businessUnit._id;
+        }
+        if (!payload.businessUnit || (typeof payload.businessUnit === 'string' && !payload.businessUnit.trim())) {
+            delete payload.businessUnit;
+        }
+        const client = await Client.create(payload);
         res.status(201).json(client);
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -111,6 +118,12 @@ const createClient = async (req, res) => {
 const updateClient = async (req, res) => {
     try {
         const updateData = { ...req.body };
+        if (updateData.businessUnit && typeof updateData.businessUnit === 'object' && updateData.businessUnit._id) {
+            updateData.businessUnit = updateData.businessUnit._id;
+        }
+        if (updateData.businessUnit === '' || updateData.businessUnit === undefined) {
+            updateData.businessUnit = null;
+        }
         if (req.body.status === 'Inactive') {
             updateData.taStatus = 'Inactive';
         }

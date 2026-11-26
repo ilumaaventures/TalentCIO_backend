@@ -159,6 +159,8 @@ exports.createHiringRequest = async (req, res) => {
             workflowId: validWorkflowId || (workflow ? workflow._id : null),
             interviewWorkflowId: validInterviewWorkflowId,
             previousRequestId: previousReq ? previousReq._id : undefined,
+            requisitionScope: req.body.requisitionScope === 'International' ? 'International' : 'National',
+            requisitionCountry: req.body.requisitionScope === 'International' ? String(req.body.requisitionCountry || '').trim() : '',
             isPublic: req.body.isPublic !== undefined ? Boolean(req.body.isPublic) : (previousReq ? Boolean(previousReq.isPublic) : false),
             isJobVisible: req.body.isJobVisible !== undefined ? Boolean(req.body.isJobVisible) : (previousReq ? Boolean(previousReq.isJobVisible ?? previousReq.isPublic) : false),
             isResourceGatewayPublic: req.body.isResourceGatewayPublic !== undefined ? Boolean(req.body.isResourceGatewayPublic) : (previousReq ? Boolean(previousReq.isResourceGatewayPublic) : false),
@@ -330,17 +332,27 @@ exports.getHiringRequests = async (req, res) => {
         res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=30');
         const accessibleQuery = await buildAccessibleHiringRequestQuery(req.companyId, req.user);
 
-        const { search, status, client, page, limit, type } = req.query;
+        const { search, status, client, page, limit, type, requisitionScope } = req.query;
 
         let filterQuery = { ...accessibleQuery };
 
         if (type === 'shared') {
-            filterQuery['sharedTenants.companyId'] = req.companyId;
+            filterQuery.sharedTenants = {
+                $elemMatch: {
+                    companyId: req.companyId,
+                    status: { $nin: ['Pending', 'Rejected'] }
+                }
+            };
             delete filterQuery.companyId;
+            delete filterQuery.$or;
+        } else if (type === 'shared_by_me') {
+            filterQuery.companyId = req.companyId;
+            filterQuery['sharedTenants.0'] = { $exists: true };
             delete filterQuery.$or;
         } else if (type === 'internal') {
             filterQuery.companyId = req.companyId;
             delete filterQuery['sharedTenants.companyId'];
+            delete filterQuery.sharedTenants;
             delete filterQuery.$or;
         }
 
@@ -352,9 +364,51 @@ exports.getHiringRequests = async (req, res) => {
             }
         }
 
+        if (requisitionScope === 'International') {
+            filterQuery.requisitionScope = 'International';
+        } else if (requisitionScope === 'National') {
+            filterQuery.$and = (filterQuery.$and || []).concat([
+                {
+                    $or: [
+                        { requisitionScope: 'National' },
+                        { requisitionScope: { $exists: false } },
+                        { requisitionScope: null },
+                        { requisitionScope: '' }
+                    ]
+                }
+            ]);
+        }
+
         if (client && client.trim()) {
             const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            filterQuery.client = new RegExp(`^${escapeRegex(client.trim())}$`, 'i');
+            const clientRegex = new RegExp(`^${escapeRegex(client.trim())}$`, 'i');
+            const clientOr = [
+                { companyId: req.companyId, client: clientRegex },
+                {
+                    sharedTenants: {
+                        $elemMatch: {
+                            companyId: req.companyId,
+                            status: { $nin: ['Pending', 'Rejected'] },
+                            assignedClient: clientRegex
+                        }
+                    }
+                },
+                {
+                    client: clientRegex,
+                    sharedTenants: {
+                        $elemMatch: {
+                            companyId: req.companyId,
+                            status: { $nin: ['Pending', 'Rejected'] },
+                            $or: [
+                                { assignedClient: { $exists: false } },
+                                { assignedClient: '' },
+                                { assignedClient: null }
+                            ]
+                        }
+                    }
+                }
+            ];
+            filterQuery.$and = (filterQuery.$and || []).concat([{ $or: clientOr }]);
         }
 
         if (search && search.trim()) {
@@ -486,12 +540,30 @@ exports.getHiringRequests = async (req, res) => {
                     r.shareType = shareEntry?.shareType || 'all';
                     r.accessLevel = shareEntry?.accessLevel || 'full_access';
                     r.isViewOnly = r.accessLevel === 'view_only';
+                    r.shareStatus = shareEntry?.status || 'Accepted';
+                    r.originClient = r.client;
+                    if (shareEntry?.assignedClient) {
+                        r.client = shareEntry.assignedClient;
+                    }
+                    r.assignedClient = shareEntry?.assignedClient || '';
                     r.sharedAt = shareEntry?.sharedAt || r.updatedAt || r.createdAt;
                     r.originCompanyName = r.companyId?.name || '';
                     r.originCompanySubdomain = r.companyId?.subdomain || '';
                 } else {
                     r.isShared = false;
                     r.sharedWithCount = Array.isArray(r.sharedTenants) ? r.sharedTenants.length : 0;
+                    r.sharedWithTenants = Array.isArray(r.sharedTenants)
+                        ? r.sharedTenants.map((st) => ({
+                            companyId: st.companyId?._id || st.companyId,
+                            name: st.tenantName || st.companyId?.name || st.tenantSubdomain || 'Partner Workspace',
+                            subdomain: st.tenantSubdomain || st.companyId?.subdomain || '',
+                            status: st.status || 'Accepted',
+                            assignedClient: st.assignedClient || '',
+                            shareType: st.shareType || 'all',
+                            accessLevel: st.accessLevel || 'full_access',
+                            sharedAt: st.sharedAt || null
+                        }))
+                        : [];
                 }
             });
         }
@@ -567,6 +639,12 @@ exports.getHiringRequestById = async (req, res) => {
             hrObj.shareType = shareEntry?.shareType || 'all';
             hrObj.accessLevel = shareEntry?.accessLevel || 'full_access';
             hrObj.isViewOnly = hrObj.accessLevel === 'view_only';
+            hrObj.shareStatus = shareEntry?.status || 'Accepted';
+            hrObj.originClient = hrObj.client;
+            if (shareEntry?.assignedClient) {
+                hrObj.client = shareEntry.assignedClient;
+            }
+            hrObj.assignedClient = shareEntry?.assignedClient || '';
             hrObj.sharedAt = shareEntry?.sharedAt || hrObj.updatedAt || hrObj.createdAt;
             hrObj.originCompanyName = hrObj.companyId?.name || '';
             hrObj.originCompanySubdomain = hrObj.companyId?.subdomain || '';
@@ -624,6 +702,15 @@ exports.updateHiringRequest = async (req, res) => {
         } = req.body;
 
         if (roleDetails) hiringRequest.roleDetails = { ...(hiringRequest.roleDetails?.toObject?.() || hiringRequest.roleDetails || {}), ...roleDetails };
+        if (req.body.requisitionScope === 'National' || req.body.requisitionScope === 'International') {
+            hiringRequest.requisitionScope = req.body.requisitionScope;
+            if (req.body.requisitionScope === 'National') {
+                hiringRequest.requisitionCountry = '';
+            }
+        }
+        if (req.body.requisitionCountry !== undefined && hiringRequest.requisitionScope === 'International') {
+            hiringRequest.requisitionCountry = String(req.body.requisitionCountry || '').trim();
+        }
         if (employmentDetails) hiringRequest.employmentDetails = { ...(hiringRequest.employmentDetails?.toObject?.() || hiringRequest.employmentDetails || {}), ...employmentDetails };
         if (req.body.hiringDetails) hiringRequest.hiringDetails = { ...(hiringRequest.hiringDetails?.toObject?.() || hiringRequest.hiringDetails || {}), ...req.body.hiringDetails };
         if (req.body.requirements) hiringRequest.requirements = { ...(hiringRequest.requirements?.toObject?.() || hiringRequest.requirements || {}), ...req.body.requirements };
@@ -1407,6 +1494,13 @@ exports.shareHiringRequest = async (req, res) => {
             hiringRequest.sharedTenants[existingIndex].tenantSubdomain = targetSubdomain;
             hiringRequest.sharedTenants[existingIndex].sharedAt = new Date();
             hiringRequest.sharedTenants[existingIndex].sharedBy = req.user._id;
+            if (hiringRequest.sharedTenants[existingIndex].status === 'Rejected') {
+                hiringRequest.sharedTenants[existingIndex].status = 'Pending';
+                hiringRequest.sharedTenants[existingIndex].assignedClient = '';
+                hiringRequest.sharedTenants[existingIndex].assignedClientId = null;
+                hiringRequest.sharedTenants[existingIndex].respondedBy = null;
+                hiringRequest.sharedTenants[existingIndex].respondedAt = null;
+            }
         } else {
             hiringRequest.sharedTenants.push({
                 companyId: targetCompany._id,
@@ -1415,12 +1509,72 @@ exports.shareHiringRequest = async (req, res) => {
                 tenantUrl,
                 shareType,
                 accessLevel: selectedAccessLevel,
+                status: 'Pending',
                 sharedBy: req.user._id,
                 sharedAt: new Date()
             });
         }
 
         await hiringRequest.save();
+
+        // Notify target workspace admins / TA managers about the incoming shared requisition request
+        try {
+            const io = req.app ? req.app.get('io') : null;
+            const roleTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Untitled Position';
+            const targetUsers = await User.find({
+                companyId: targetCompany._id,
+                isActive: true,
+                isDeleted: { $ne: true }
+            })
+                .populate({
+                    path: 'roles',
+                    select: 'name isSystem permissions',
+                    populate: { path: 'permissions', select: 'key' }
+                })
+                .select('_id isAdmin roles')
+                .lean();
+
+            const taAdminUserIds = targetUsers
+                .filter((u) => {
+                    if (u.isAdmin) return true;
+                    return (u.roles || []).some((role) => {
+                        if (role?.isSystem || ['Admin', 'Super Admin', 'System Admin'].includes(role?.name)) {
+                            return true;
+                        }
+                        return (role?.permissions || []).some((p) =>
+                            ['*', 'ta.manage', 'ta.requisition.manage.all', 'ta.hiring_request.manage', 'ta.create'].includes(p?.key)
+                        );
+                    });
+                })
+                .map((u) => u._id);
+
+            const recipientIds = taAdminUserIds.length > 0
+                ? taAdminUserIds
+                : targetUsers.slice(0, 10).map((u) => u._id);
+
+            if (recipientIds.length > 0) {
+                await NotificationService.createManyNotifications(
+                    io,
+                    recipientIds.map((uid) => ({
+                        user: uid,
+                        companyId: targetCompany._id,
+                        preferenceKey: 'ta_shared_requisition_received',
+                        title: 'New Shared Requisition Request',
+                        message: `${sourceCompany?.name || 'A partner workspace'} shared requisition ${hiringRequest.requestId} (${roleTitle}) with your workspace. Accept and assign a client or deny it from the TA Overview.`,
+                        type: 'Action',
+                        link: '/ta?tab=overview',
+                        origin: req.headers?.origin || '',
+                        metadata: {
+                            hiringRequestId: hiringRequest._id,
+                            requestId: hiringRequest.requestId,
+                            sourceCompanyId: req.companyId
+                        }
+                    }))
+                );
+            }
+        } catch (notifErr) {
+            console.error('Failed to send shared requisition notification:', notifErr);
+        }
 
         const updatedShares = await HiringRequest.findById(id)
             .select('sharedTenants')
@@ -1548,6 +1702,65 @@ exports.updateHiringRequestShare = async (req, res) => {
 
         await hiringRequest.save();
 
+        // Notify target workspace admins / TA managers about the incoming shared requisition request
+        try {
+            const io = req.app ? req.app.get('io') : null;
+            const roleTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Untitled Position';
+            const targetUsers = await User.find({
+                companyId: targetCompany._id,
+                isActive: true,
+                isDeleted: { $ne: true }
+            })
+                .populate({
+                    path: 'roles',
+                    select: 'name isSystem permissions',
+                    populate: { path: 'permissions', select: 'key' }
+                })
+                .select('_id isAdmin roles')
+                .lean();
+
+            const taAdminUserIds = targetUsers
+                .filter((u) => {
+                    if (u.isAdmin) return true;
+                    return (u.roles || []).some((role) => {
+                        if (role?.isSystem || ['Admin', 'Super Admin', 'System Admin'].includes(role?.name)) {
+                            return true;
+                        }
+                        return (role?.permissions || []).some((p) =>
+                            ['*', 'ta.manage', 'ta.requisition.manage.all', 'ta.hiring_request.manage', 'ta.create'].includes(p?.key)
+                        );
+                    });
+                })
+                .map((u) => u._id);
+
+            const recipientIds = taAdminUserIds.length > 0
+                ? taAdminUserIds
+                : targetUsers.slice(0, 10).map((u) => u._id);
+
+            if (recipientIds.length > 0) {
+                await NotificationService.createManyNotifications(
+                    io,
+                    recipientIds.map((uid) => ({
+                        user: uid,
+                        companyId: targetCompany._id,
+                        preferenceKey: 'ta_shared_requisition_received',
+                        title: 'New Shared Requisition Request',
+                        message: `${sourceCompany?.name || 'A partner workspace'} shared requisition ${hiringRequest.requestId} (${roleTitle}) with your workspace. Accept and assign a client or deny it from the TA Overview.`,
+                        type: 'Action',
+                        link: '/ta?tab=overview',
+                        origin: req.headers?.origin || '',
+                        metadata: {
+                            hiringRequestId: hiringRequest._id,
+                            requestId: hiringRequest.requestId,
+                            sourceCompanyId: req.companyId
+                        }
+                    }))
+                );
+            }
+        } catch (notifErr) {
+            console.error('Failed to send shared requisition notification:', notifErr);
+        }
+
         const updatedShares = await HiringRequest.findById(id)
             .select('sharedTenants')
             .populate('sharedTenants.companyId', 'name subdomain email settings.logo')
@@ -1561,5 +1774,232 @@ exports.updateHiringRequestShare = async (req, res) => {
     } catch (error) {
         console.error('Error updating requisition share:', error);
         res.status(500).json({ message: 'Failed to update share scope', error: error.message });
+    }
+};
+
+/**
+ * Get pending cross-tenant shared requisition requests for the current workspace
+ * GET /ta/shared-requests/pending
+ */
+exports.getPendingSharedRequests = async (req, res) => {
+    try {
+        const pendingDocs = await HiringRequest.find({
+            isDeleted: { $ne: true },
+            sharedTenants: {
+                $elemMatch: {
+                    companyId: req.companyId,
+                    status: 'Pending'
+                }
+            }
+        })
+            .select('requestId client roleDetails hiringDetails requirements status companyId sharedTenants createdAt')
+            .populate('companyId', 'name subdomain email settings.logo')
+            .populate('sharedTenants.sharedBy', 'firstName lastName email')
+            .sort({ updatedAt: -1 })
+            .lean();
+
+        const pendingRequests = pendingDocs.map((doc) => {
+            const shareEntry = (doc.sharedTenants || []).find(
+                (st) => String(st.companyId) === String(req.companyId) && st.status === 'Pending'
+            );
+            return {
+                _id: doc._id,
+                requestId: doc.requestId,
+                roleTitle: doc.roleDetails?.title || doc.roleDetails?.jobTitle || 'Untitled Position',
+                department: doc.roleDetails?.department || '',
+                employmentType: doc.roleDetails?.employmentType || '',
+                openPositions: doc.hiringDetails?.openPositions ?? 1,
+                priority: doc.hiringDetails?.priority || 'Medium',
+                location: doc.requirements?.location || '',
+                workMode: doc.requirements?.workMode || '',
+                status: doc.status,
+                originClient: doc.client || '',
+                originCompanyName: doc.companyId?.name || '',
+                originCompanySubdomain: doc.companyId?.subdomain || '',
+                shareType: shareEntry?.shareType || 'all',
+                accessLevel: shareEntry?.accessLevel || 'full_access',
+                sharedAt: shareEntry?.sharedAt || doc.createdAt,
+                sharedBy: shareEntry?.sharedBy || null
+            };
+        });
+
+        res.json({ pendingRequests });
+    } catch (error) {
+        console.error('Error fetching pending shared requests:', error);
+        res.status(500).json({ message: 'Failed to fetch pending shared requests', error: error.message });
+    }
+};
+
+/**
+ * Accept or deny a cross-tenant shared requisition request
+ * POST /ta/hiring-request/:id/respond-share
+ * Body: { action: 'accept' | 'reject', clientName?: string, clientId?: string }
+ */
+exports.respondToSharedRequest = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action, clientName, clientId } = req.body;
+
+        if (!['accept', 'reject'].includes(action)) {
+            return res.status(400).json({ message: 'Invalid action. Must be "accept" or "reject".' });
+        }
+
+        const hiringRequest = await HiringRequest.findOne({
+            _id: id,
+            isDeleted: { $ne: true },
+            sharedTenants: {
+                $elemMatch: {
+                    companyId: req.companyId
+                }
+            }
+        });
+
+        if (!hiringRequest) {
+            return res.status(404).json({ message: 'Shared requisition request not found for this workspace' });
+        }
+
+        const shareItem = (hiringRequest.sharedTenants || []).find(
+            (st) => String(st.companyId) === String(req.companyId)
+        );
+
+        if (!shareItem) {
+            return res.status(404).json({ message: 'Shared requisition entry not found' });
+        }
+
+        if (action === 'accept') {
+            let resolvedClientName = (clientName || '').trim();
+            let resolvedClientId = null;
+
+            if (clientId && mongoose.Types.ObjectId.isValid(clientId)) {
+                const matchedClient = await Client.findOne({
+                    _id: clientId,
+                    companyId: req.companyId
+                }).select('_id name companyName').lean();
+                if (matchedClient) {
+                    resolvedClientId = matchedClient._id;
+                    if (!resolvedClientName) {
+                        resolvedClientName = (matchedClient.name || matchedClient.companyName || '').trim();
+                    }
+                }
+            } else if (resolvedClientName) {
+                const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const matchedClient = await Client.findOne({
+                    companyId: req.companyId,
+                    $or: [
+                        { name: { $regex: new RegExp(`^${escapeRegex(resolvedClientName)}$`, 'i') } },
+                        { companyName: { $regex: new RegExp(`^${escapeRegex(resolvedClientName)}$`, 'i') } }
+                    ]
+                }).select('_id name companyName').lean();
+                if (matchedClient) {
+                    resolvedClientId = matchedClient._id;
+                    resolvedClientName = (matchedClient.name || matchedClient.companyName || resolvedClientName).trim();
+                }
+            }
+
+            if (!resolvedClientName) {
+                return res.status(400).json({ message: 'Please select a client to assign this requisition under.' });
+            }
+
+            shareItem.status = 'Accepted';
+            shareItem.assignedClient = resolvedClientName;
+            shareItem.assignedClientId = resolvedClientId;
+            shareItem.respondedBy = req.user._id;
+            shareItem.respondedAt = new Date();
+
+            await hiringRequest.save();
+
+            try {
+                const io = req.app ? req.app.get('io') : null;
+                const respondingCompany = await Company.findById(req.companyId).select('name subdomain').lean();
+                const actorName = [req.user?.firstName, req.user?.lastName].filter(Boolean).join(' ').trim() || req.user?.email || 'User';
+                const roleTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Untitled Position';
+                const recipientIds = [...new Set(
+                    [shareItem.sharedBy, hiringRequest.createdBy, hiringRequest.ownership?.hiringManager]
+                        .filter(Boolean)
+                        .map((idVal) => String(idVal))
+                )];
+
+                if (recipientIds.length > 0) {
+                    await NotificationService.createManyNotifications(
+                        io,
+                        recipientIds.map((uid) => ({
+                            user: uid,
+                            companyId: hiringRequest.companyId,
+                            preferenceKey: 'ta_shared_requisition_responded',
+                            title: 'Shared Requisition Accepted',
+                            message: `${respondingCompany?.name || 'Partner workspace'} (${actorName}) accepted shared requisition ${hiringRequest.requestId} (${roleTitle}) under client "${resolvedClientName}".`,
+                            type: 'Success',
+                            link: `/ta/view/${hiringRequest._id}`,
+                            origin: req.headers?.origin || '',
+                            metadata: {
+                                hiringRequestId: hiringRequest._id,
+                                requestId: hiringRequest.requestId,
+                                respondingCompanyId: req.companyId,
+                                action: 'accept',
+                                assignedClient: resolvedClientName
+                            }
+                        }))
+                    );
+                }
+            } catch (notifErr) {
+                console.error('Failed to send share acceptance notification:', notifErr);
+            }
+
+            return res.json({
+                message: `Requisition accepted and assigned under client "${resolvedClientName}"`,
+                status: 'Accepted',
+                assignedClient: resolvedClientName
+            });
+        }
+
+        shareItem.status = 'Rejected';
+        shareItem.respondedBy = req.user._id;
+        shareItem.respondedAt = new Date();
+
+        await hiringRequest.save();
+
+        try {
+            const io = req.app ? req.app.get('io') : null;
+            const respondingCompany = await Company.findById(req.companyId).select('name subdomain').lean();
+            const actorName = [req.user?.firstName, req.user?.lastName].filter(Boolean).join(' ').trim() || req.user?.email || 'User';
+            const roleTitle = hiringRequest.roleDetails?.title || hiringRequest.roleDetails?.jobTitle || 'Untitled Position';
+            const recipientIds = [...new Set(
+                [shareItem.sharedBy, hiringRequest.createdBy, hiringRequest.ownership?.hiringManager]
+                    .filter(Boolean)
+                    .map((idVal) => String(idVal))
+            )];
+
+            if (recipientIds.length > 0) {
+                await NotificationService.createManyNotifications(
+                    io,
+                    recipientIds.map((uid) => ({
+                        user: uid,
+                        companyId: hiringRequest.companyId,
+                        preferenceKey: 'ta_shared_requisition_responded',
+                        title: 'Shared Requisition Declined',
+                        message: `${respondingCompany?.name || 'Partner workspace'} (${actorName}) declined shared requisition ${hiringRequest.requestId} (${roleTitle}).`,
+                        type: 'Warning',
+                        link: `/ta/view/${hiringRequest._id}`,
+                        origin: req.headers?.origin || '',
+                        metadata: {
+                            hiringRequestId: hiringRequest._id,
+                            requestId: hiringRequest.requestId,
+                            respondingCompanyId: req.companyId,
+                            action: 'reject'
+                        }
+                    }))
+                );
+            }
+        } catch (notifErr) {
+            console.error('Failed to send share rejection notification:', notifErr);
+        }
+
+        return res.json({
+            message: 'Shared requisition request declined',
+            status: 'Rejected'
+        });
+    } catch (error) {
+        console.error('Error responding to shared requisition:', error);
+        res.status(500).json({ message: 'Failed to respond to shared requisition', error: error.message });
     }
 };
