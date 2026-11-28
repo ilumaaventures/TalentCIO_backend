@@ -520,8 +520,8 @@ const buildMasterSalaryStructure = (source = {}, configInput = {}) => {
     : roundAmount(basicMaster + hraMaster + flexi + broadband + petrol + lta + specialAllowance + conveyance + medicalAllowance + otherAllowancesSum);
 
   const esiApplicable = esiEnabled && (pass1TotalEarnings <= config.esiBasicThreshold);
-  const esiEmployer = roundAmount(esiApplicable ? basicMaster * config.esiEmployerRate : 0);
-  const esiEmployee = roundAmount(esiApplicable ? basicMaster * config.esiEmployeeRate : 0);
+  const esiEmployer = roundAmount(esiApplicable ? pass1TotalEarnings * config.esiEmployerRate : 0);
+  const esiEmployee = roundAmount(esiApplicable ? pass1TotalEarnings * config.esiEmployeeRate : 0);
 
   if (esiApplicable) {
     if (hasDynamicComponents) {
@@ -791,7 +791,9 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     }
   }
 
-  const esiApplicable = master.esiEnabled && (totalProratedEarnings <= config.esiBasicThreshold) && totalProratedEarnings > 0;
+  const periodRatio = workingDays > 0 ? Math.min(paidDays / workingDays, 1) : 1;
+  const projectedMonthlyGross = periodRatio > 0 ? (totalProratedEarnings / periodRatio) : totalProratedEarnings;
+  const esiApplicable = master.esiEnabled && (projectedMonthlyGross <= config.esiBasicThreshold) && totalProratedEarnings > 0;
   const esiEmployee = roundAmount(esiApplicable ? totalProratedEarnings * config.esiEmployeeRate : 0);
   const esiEmployer = roundAmount(esiApplicable ? totalProratedEarnings * config.esiEmployerRate : 0);
 
@@ -800,8 +802,9 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
   const computedPT = (ptEnabled && employee.ptState && totalProratedEarnings > 0) ? getMonthlyPT(employee.ptState, totalProratedEarnings, month) : 0;
   const professionalTax = (ptEnabled && totalProratedEarnings > 0) ? (manualPT > 0 ? manualPT : computedPT) : 0;
 
-  const lwfEmployer = (master.lwfEnabled && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployer) : 0;
-  const lwfEmployee = (master.lwfEnabled && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployee) : 0;
+  const isLwfMonth = !month || (Number(month) % 6 === 0);
+  const lwfEmployer = (master.lwfEnabled && isLwfMonth && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployer) : 0;
+  const lwfEmployee = (master.lwfEnabled && isLwfMonth && master.monthlyCTC > 0 && totalProratedEarnings > 0) ? roundAmount(config.lwfEmployee) : 0;
   const gratuity = (master.gratuityEnabled && master.monthlyCTC > 0 && proratedBasic > 0) ? roundAmount(proratedBasic * config.gratuityRate) : 0;
 
   const tds = (master.tds && master.monthlyCTC > 0) ? master.tds : (adjustments.tds !== undefined && adjustments.tds !== '' ? Number(adjustments.tds) : 0);
@@ -868,6 +871,8 @@ const buildPayrollSnapshot = (employeeInput, configInput, attendance, adjustment
     lwfEmployee,
     lwfEmployer,
     gratuity,
+    insurance: master.insurance || 0,
+    employerNPS: master.employerNPS || 0,
     customDeductions,
     customDeductionsSum,
     deductions: {

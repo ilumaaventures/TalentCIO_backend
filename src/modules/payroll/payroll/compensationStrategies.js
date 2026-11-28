@@ -33,7 +33,7 @@ const resolveStrategyMonthlyCTC = (source = {}) => {
     case 'weekly_wage':
     case 'weekly_salary': {
       const rate = Number(source.weeklyRate) || 0;
-      if (rate > 0) monthlyCTC = roundAmount(rate * 4);
+      if (rate > 0) monthlyCTC = roundAmount((rate * 52) / 12);
       break;
     }
     case 'flat_project':

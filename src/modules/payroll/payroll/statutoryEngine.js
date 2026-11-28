@@ -214,7 +214,7 @@ const getMonthlyPT = (stateCode, monthlyGross, month = 0) => {
   return slabAmount;
 };
 
-const computeStatutoryComponents = ({ pfEnabled, gratuityEnabled, lwfEnabled, monthlyCTC, basicMaster, config, includePfInCTC, includeGratuityInCTC }) => {
+const computeStatutoryComponents = ({ pfEnabled, gratuityEnabled, lwfEnabled, monthlyCTC, basicMaster, config, includePfInCTC, includeGratuityInCTC, month }) => {
   let pfEmployer = 0;
   let pfEmployee = 0;
   let pfBase = 0;
@@ -233,8 +233,9 @@ const computeStatutoryComponents = ({ pfEnabled, gratuityEnabled, lwfEnabled, mo
   }
 
   const gratuity = gratuityEnabled ? roundAmount(basicMaster * config.gratuityRate) : 0;
-  const lwfEmployer = (lwfEnabled && monthlyCTC > 0) ? roundAmount(config.lwfEmployer) : 0;
-  const lwfEmployee = (lwfEnabled && monthlyCTC > 0) ? roundAmount(config.lwfEmployee) : 0;
+  const isLwfMonth = !month || (Number(month) % 6 === 0);
+  const lwfEmployer = (lwfEnabled && isLwfMonth && monthlyCTC > 0) ? roundAmount(config.lwfEmployer) : 0;
+  const lwfEmployee = (lwfEnabled && isLwfMonth && monthlyCTC > 0) ? roundAmount(config.lwfEmployee) : 0;
 
   return {
     pfEmployer,

@@ -51,6 +51,10 @@ router.get('/compensation-types', authorize(['payroll.calculator.view', 'payroll
 router.get('/export', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.exportPayrollExcel);
 router.get('/export-inputs', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.exportPayrollInputsExcel);
 
+// Employee Self-Service payslip routes
+router.get('/my-payslips', authorize(['payroll.payslip.view', 'payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getMyPayslips);
+router.get('/my-payslips/:id/generate-payslip', authorize(['payroll.payslip.view', 'payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.generateMyPayslip);
+
 // Record-level operations
 router.get('/records', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getPayrolls);
 router.get('/records/:id', authorize(['payroll.calculator.view', 'payroll.salary.view', 'payroll.salary.manage', '*']), payrollController.getPayrollById);

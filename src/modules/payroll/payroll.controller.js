@@ -15,8 +15,42 @@ const { parseDateAsIST } = require('../../modules/attendance/attendancePolicy');
 const { toLocalTimezoneRep } = require('../timesheet/timesheetPeriod');
 const { buildMasterSalaryStructure, buildPayrollSnapshot } = require('./payrollMath');
 const { normalizePayrollIntegrationSettings } = require('./payrollIntegration.service');
+const { computeCompanyAttendanceSummary } = require('./payrollAttendance.service');
+const { shouldApplyJoiningBonus } = require('./payrollAutoRun.cron');
 
 const getCompanyId = (req) => req.companyId || req.user?.companyId || req.user?.company;
+
+const FREQ_MULTIPLIER = {
+  monthly: 12,
+  quarterly: 4,
+  semi_annually: 2,
+  annually: 1,
+  one_time: 1
+};
+
+const extractAnnualBenefits = (rawBreakup = {}) => {
+  const list = Array.isArray(rawBreakup?.otherAllowances) ? rawBreakup.otherAllowances : [];
+  return list
+    .filter((item) => {
+      if (!item || !(Number(item.amount) > 0)) return false;
+      const freq = String(item.frequency || 'monthly').toLowerCase();
+      const isBonusName = /bonus|variable|joining/i.test(String(item.name || ''));
+      return freq !== 'monthly' || item.includeInCTC === false || isBonusName;
+    })
+    .map((item) => {
+      const freq = String(item.frequency || 'annually').toLowerCase();
+      const mult = FREQ_MULTIPLIER[freq] || 1;
+      const amount = Number(item.amount) || 0;
+      return {
+        name: item.name || 'Bonus',
+        frequency: freq,
+        perPayoutAmount: amount,
+        payoutCount: mult,
+        annualAmount: Math.round(amount * mult * 100) / 100,
+        includeInCTC: item.includeInCTC !== false
+      };
+    });
+};
 
 exports.getConfig = async (req, res) => {
   try {
@@ -455,28 +489,43 @@ exports.getActivePayrollEmployees = async (req, res) => {
     const config = configDoc || new PayrollConfig({ companyId });
 
     // Find users eligible for this payroll cycle
+    const andConditions = [
+      {
+        $or: [
+          { joiningDate: { $lte: new Date(parsedYear, parsedMonth - 1, totalDaysInMonth, 23, 59, 59) } },
+          { joiningDate: null },
+          { joiningDate: { $exists: false } }
+        ]
+      },
+      {
+        $or: [
+          { dateOfLeaving: { $gte: start } },
+          { dateOfLeaving: null },
+          { dateOfLeaving: { $exists: false } }
+        ]
+      }
+    ];
+
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), 'i');
+      andConditions.push({
+        $or: [
+          { firstName: regex },
+          { lastName: regex },
+          { email: regex },
+          { employeeCode: regex }
+        ]
+      });
+    }
+
     const userQuery = {
       companyId,
       isActive: true,
-      $or: [
-        { joiningDate: { $lte: new Date(parsedYear, parsedMonth - 1, totalDaysInMonth, 23, 59, 59) } },
-        { joiningDate: null },
-        { joiningDate: { $exists: false } }
-      ]
+      $and: andConditions
     };
 
     if (department && department !== 'all') {
       userQuery.department = department;
-    }
-
-    if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), 'i');
-      userQuery.$or = [
-        { firstName: regex },
-        { lastName: regex },
-        { email: regex },
-        { employeeCode: regex }
-      ];
     }
 
     const users = await User.find(userQuery)
@@ -487,19 +536,26 @@ exports.getActivePayrollEmployees = async (req, res) => {
 
     const userIds = users.map(u => u._id);
 
-    // Parallel fetch: Employee Profiles, Existing Payrolls, Approved Reimbursements, Attendance Records, Leaves
-    const [profiles, existingPayrolls, approvedReimbursements, attendanceRecords, approvedLeaves] = await Promise.all([
+    // Parallel fetch: Employee Profiles, Existing Payrolls, Approved Reimbursements, and IST Attendance/Leave/Holiday/Weekly-Off Summary
+    const [profiles, existingPayrolls, approvedReimbursements, attendanceSummaryResult] = await Promise.all([
       EmployeeProfile.find({ companyId, user: { $in: userIds } })
         .select('+compensation.ctc +compensation.salaryBreakup +compensation.bankDetails.accountNumber +identity.panNumber +identity.aadhaarNumber')
         .lean(),
       Payroll.find({ companyId, month: parsedMonth, year: parsedYear, isDeleted: { $ne: true } }).lean(),
       Reimbursement.find({ companyId, employee: { $in: userIds }, status: 'Approved' }).lean(),
-      Attendance.find({ companyId, user: { $in: userIds }, date: { $gte: start, $lt: end } }).lean(),
-      LeaveRequest.find({ companyId, user: { $in: userIds }, status: 'Approved', startDate: { $lt: end }, endDate: { $gte: start } }).lean()
+      computeCompanyAttendanceSummary({
+        companyId,
+        company,
+        month: parsedMonth,
+        year: parsedYear,
+        userIds,
+        includeDailyDetails: false
+      })
     ]);
 
     const profileMap = new Map(profiles.map(p => [String(p.user), p]));
     const payrollMap = new Map(existingPayrolls.map(p => [String(p.user), p]));
+    const attendanceSummaryMap = new Map(attendanceSummaryResult.summaries.map(s => [String(s.userId), s]));
 
     // Group approved reimbursements by employee
     const reimbursementMap = new Map();
@@ -515,22 +571,7 @@ exports.getActivePayrollEmployees = async (req, res) => {
       });
     });
 
-    // Group attendance records by user
-    const userAttendanceMap = new Map();
-    attendanceRecords.forEach(rec => {
-      const uid = String(rec.user?._id || rec.user);
-      if (!userAttendanceMap.has(uid)) userAttendanceMap.set(uid, []);
-      userAttendanceMap.get(uid).push(rec);
-    });
-
-    const userLeavesMap = new Map();
-    approvedLeaves.forEach(lv => {
-      const uid = String(lv.user?._id || lv.user);
-      if (!userLeavesMap.has(uid)) userLeavesMap.set(uid, []);
-      userLeavesMap.get(uid).push(lv);
-    });
-
-    const defaultWorkingDays = config.defaultWorkingDays || 30;
+    const defaultWorkingDays = totalDaysInMonth || config.defaultWorkingDays || 30;
 
     let processedCount = 0;
     let draftCount = 0;
@@ -545,8 +586,7 @@ exports.getActivePayrollEmployees = async (req, res) => {
       const profile = profileMap.get(uidStr);
       const existing = payrollMap.get(uidStr);
       const empReimbs = reimbursementMap.get(uidStr) || [];
-      const userAttRecs = userAttendanceMap.get(uidStr) || [];
-      const userLvs = userLeavesMap.get(uidStr) || [];
+      const attSummary = attendanceSummaryMap.get(uidStr);
 
       const userSal = u.salary || u.compensation || {};
       const comp = profile?.compensation || {};
@@ -561,29 +601,23 @@ exports.getActivePayrollEmployees = async (req, res) => {
       const compensationType = comp.payType === 'hourly' || userSal.payType === 'hourly' ? 'hourly' : (comp.compensationType || userSal.compensationType || rawBreakup.compensationType || 'monthly_salary');
       const hourlyRate = Number(comp.hourlyRate) || Number(userSal.hourlyRate) || 0;
 
-      // Calculate attendance days
-      let presentDays = 0;
-      let halfDays = 0;
-      let absentDays = 0;
-      userAttRecs.forEach(r => {
-        if (r.status === 'PRESENT') presentDays += 1;
-        else if (r.status === 'HALF_DAY') { presentDays += 0.5; halfDays += 1; }
-        else if (r.status === 'ABSENT') absentDays += 1;
-      });
+      const presentDays = attSummary?.presentDays ?? 0;
+      const absentDays = attSummary?.absentDays ?? 0;
+      const weeklyOffDays = attSummary?.weeklyOffDays ?? 0;
+      const holidayDays = attSummary?.holidayDays ?? 0;
+      const workedOffDays = attSummary?.workedOffDays ?? 0;
+      const paidLeaves = existing?.paidLeaves !== undefined ? existing.paidLeaves : (attSummary?.paidLeaves ?? 0);
+      const unpaidLeaves = existing?.unpaidLeaves !== undefined ? existing.unpaidLeaves : (attSummary?.unpaidLeaves ?? 0);
 
-      let paidLeaves = 0;
-      let unpaidLeaves = 0;
-      userLvs.forEach(l => {
-        const days = l.isHalfDay ? 0.5 : 1;
-        if (l.leaveType && String(l.leaveType).toLowerCase().includes('unpaid')) unpaidLeaves += days;
-        else paidLeaves += days;
-      });
-
-      // Default working days and paid days
+      // Calendar days in month, with paidDays crediting present + paidLeaves + weeklyOffDays + holidayDays
       const workingDays = existing?.workingDays !== undefined ? existing.workingDays : defaultWorkingDays;
-      let lop = existing?.lop !== undefined ? existing.lop : (absentDays + unpaidLeaves);
-      let paidDays = existing?.paidDays !== undefined ? existing.paidDays : Math.max(0, workingDays - lop);
-      const hoursWorked = existing?.hoursWorked !== undefined ? existing.hoursWorked : (presentDays * 8);
+      const computedPaidDays = attSummary ? Math.min(workingDays, Math.max(0, Number(attSummary.paidDays) || 0)) : workingDays;
+      let paidDays = existing?.paidDays !== undefined ? existing.paidDays : computedPaidDays;
+      let lop = existing?.lop !== undefined ? existing.lop : Math.max(0, workingDays - paidDays);
+      const hoursWorked = existing?.hoursWorked !== undefined ? existing.hoursWorked : (attSummary?.totalWorkingHours ?? (presentDays * 8));
+      const autoJoiningBonus = !existing && shouldApplyJoiningBonus(u.joiningDate, parsedMonth, parsedYear)
+        ? (Number(comp.joiningBonus || userSal.joiningBonus || rawBreakup.joiningBonus) || 0)
+        : 0;
 
       const source = {
         _id: u._id,
@@ -647,7 +681,7 @@ exports.getActivePayrollEmployees = async (req, res) => {
       } else {
         const attInput = { workingDays, paidDays, lop, hoursWorked };
         const totalReimbs = empReimbs.reduce((acc, r) => acc + (Number(r.approved) || 0), 0);
-        const adj = { reimbursements: totalReimbs };
+        const adj = { reimbursements: totalReimbs, joiningBonus: autoJoiningBonus };
         snapshot = buildPayrollSnapshot(source, config, attInput, adj, parsedMonth, parsedYear);
         snapshot.reimbursements = empReimbs;
         snapshot.totalReimbursementApproved = totalReimbs;
@@ -688,6 +722,11 @@ exports.getActivePayrollEmployees = async (req, res) => {
         paidDays,
         paidLeaves,
         unpaidLeaves,
+        weeklyOffDays,
+        holidayDays,
+        presentDays,
+        absentDays,
+        workedOffDays,
         lop,
         hoursWorked,
         flags: {
@@ -696,6 +735,12 @@ exports.getActivePayrollEmployees = async (req, res) => {
           ptEnabled: source.ptEnabled,
           lwfEnabled: source.lwfEnabled,
           gratuityEnabled: source.gratuityEnabled,
+          insuranceEnabled: source.insuranceEnabled ?? (Number(rawBreakup.insuranceAmount || comp.insuranceAmount || 0) > 0),
+          insuranceDeductFromFlexi: source.insuranceDeductFromFlexi ?? rawBreakup.insuranceDeductFromFlexi ?? true,
+          insuranceAmount: Number(rawBreakup.insuranceAmount || comp.insuranceAmount || 0),
+          employerNPS: Number(rawBreakup.employerNPS || comp.employerNPS || 0),
+          ptState: source.ptState || 'custom',
+          taxRegime: source.taxRegime || 'new',
           basicPercent: source.basicPercent,
           hraPercent: source.hraPercent
         },
@@ -733,11 +778,14 @@ exports.getActivePayrollEmployees = async (req, res) => {
           esiEmployer: snapshot.esiEmployer || 0,
           gratuity: snapshot.gratuity || 0,
           lwfEmployer: snapshot.lwfEmployer || 0,
+          insuranceEmployer: existing?.employerContributions?.insuranceEmployer ?? snapshot.insurance ?? 0,
+          nps: existing?.employerContributions?.nps ?? snapshot.employerNPS ?? 0,
           grossTotalSalary: snapshot.grossTotalSalary || 0
         },
+        annualBenefits: extractAnnualBenefits(rawBreakup),
         variablePay: {
           totalVariablePay: snapshot.totalVariablePay || 0,
-          joiningBonus: existing?.variablePay?.joiningBonus || 0,
+          joiningBonus: existing?.variablePay?.joiningBonus ?? autoJoiningBonus,
           incentive: existing?.variablePay?.incentive || 0,
           specialBonus: existing?.variablePay?.specialBonus || 0,
           otherAllowanceArrear: existing?.variablePay?.otherAllowanceArrear || 0
@@ -823,54 +871,82 @@ exports.processPayroll = async (req, res) => {
         .select('+compensation.ctc +compensation.bankDetails.accountNumber +identity.panNumber +identity.aadhaarNumber')
         .lean();
 
-      const workingDays = Number(emp.workingDays) || config.defaultWorkingDays || 30;
-      const lop = Number(emp.lop) || 0;
+      const userSal = user.salary || user.compensation || {};
+      const comp = profile?.compensation || {};
+      const rawBreakup = (comp.salaryBreakup instanceof Map ? Object.fromEntries(comp.salaryBreakup) : comp.salaryBreakup) || userSal.salaryBreakup || userSal || {};
+      const empFlags = emp.flags || {};
+
+      const totalDaysInMonth = new Date(year, month, 0).getDate();
+      const workingDays = Number(emp.workingDays) || totalDaysInMonth || config.defaultWorkingDays || 30;
+      const lop = emp.lop !== undefined ? Number(emp.lop) : 0;
       const paidDays = emp.paidDays !== undefined ? Number(emp.paidDays) : Math.max(0, workingDays - lop);
       const hoursWorked = Number(emp.hoursWorked) || 0;
-      const hourlyRate = Number(emp.hourlyRate) || Number(profile?.compensation?.hourlyRate) || 0;
-      const payType = emp.payType || profile?.compensation?.payType || 'salaried';
-      const compensationType = emp.compensationType || (payType === 'hourly' ? 'hourly' : (profile?.compensation?.compensationType || 'monthly_salary'));
-      const monthlyCTC = Number(emp.monthlyCTC) || Number(profile?.compensation?.ctc) || (Number(profile?.compensation?.salaryBreakup?.monthlyCTC) || 0);
+      const hourlyRate = Number(emp.hourlyRate) || Number(comp.hourlyRate) || Number(userSal.hourlyRate) || 0;
+      const payType = emp.payType || comp.payType || userSal.payType || 'salaried';
+      const compensationType = emp.compensationType || (payType === 'hourly' ? 'hourly' : (comp.compensationType || userSal.compensationType || rawBreakup.compensationType || 'monthly_salary'));
+      let monthlyCTC = Number(emp.monthlyCTC) || Number(comp.ctc) || Number(userSal.monthlyCTC) || Number(rawBreakup.monthlyCTC) || 0;
+      const annualCTC = Number(comp.annualCTC) || Number(userSal.annualCTC) || Number(rawBreakup.annualCTC) || (monthlyCTC ? monthlyCTC * 12 : 0);
+      if (!monthlyCTC && annualCTC > 0) monthlyCTC = Math.round(annualCTC / 12);
 
-      // Gather or calculate earnings and deductions
-      const earnings = emp.earnings || {};
-      const deductions = emp.deductions || {};
-      const employerContributions = emp.employerContributions || {};
-      const variablePay = emp.variablePay || {};
+      const variablePayInput = emp.variablePay || {};
+      const deductionsInput = emp.deductions || {};
+      const earningsInput = emp.earnings || {};
       const reimbursements = Array.isArray(emp.reimbursements) ? emp.reimbursements : [];
-
-      const totalEarnings = Number(earnings.totalEarnings) || (
-        (Number(earnings.basic) || 0) +
-        (Number(earnings.hra) || 0) +
-        (Number(earnings.flexiAmount) || 0) +
-        (Number(earnings.specialAllowance) || 0) +
-        (Number(earnings.broadband) || 0) +
-        (Number(earnings.petrol) || 0) +
-        (Number(earnings.lta) || 0) +
-        (Number(earnings.conveyance) || 0) +
-        (Number(earnings.medicalAllowance) || 0) +
-        (Number(earnings.overtime) || 0)
-      );
-
-      const totalVariablePay = Number(variablePay.totalVariablePay) || (
-        (Number(variablePay.joiningBonus) || 0) +
-        (Number(variablePay.incentive) || 0) +
-        (Number(variablePay.specialBonus) || 0) +
-        (Number(variablePay.otherAllowanceArrear) || 0)
-      );
-
-      const totalDeductions = Number(deductions.totalDeductions) || (
-        (Number(deductions.pfEmployee) || 0) +
-        (Number(deductions.esiEmployee) || 0) +
-        (Number(deductions.professionalTax) || 0) +
-        (Number(deductions.tds) || 0) +
-        (Number(deductions.lwfEmployee) || 0) +
-        (Number(deductions.loanDeduction) || 0) +
-        (Number(deductions.advanceDeduction) || 0)
-      );
-
       const totalReimbursementApproved = reimbursements.reduce((acc, r) => acc + (Number(r.approved) || 0), 0);
-      const netSalary = emp.netSalary !== undefined ? Number(emp.netSalary) : Math.max(0, (totalEarnings + totalVariablePay + totalReimbursementApproved) - totalDeductions);
+
+      const autoJoiningBonus = shouldApplyJoiningBonus(user.joiningDate, month, year)
+        ? (Number(comp.joiningBonus || userSal.joiningBonus || rawBreakup.joiningBonus) || 0)
+        : 0;
+      const joiningBonus = variablePayInput.joiningBonus !== undefined ? (Number(variablePayInput.joiningBonus) || 0) : autoJoiningBonus;
+      const incentive = Number(variablePayInput.incentive) || 0;
+      const specialBonus = Number(variablePayInput.specialBonus) || 0;
+      const otherAllowanceArrear = Number(variablePayInput.otherAllowanceArrear) || 0;
+      const overtime = Number(earningsInput.overtime) || 0;
+      const loanDeduction = Number(deductionsInput.loanDeduction) || 0;
+      const advanceDeduction = Number(deductionsInput.advanceDeduction) || 0;
+
+      const rawBasicPct = empFlags.basicPercent || comp.salaryBreakup?.basicPercent || rawBreakup.basicPercent || config.basicPercent || 0.5;
+      const rawHraPct = empFlags.hraPercent || comp.salaryBreakup?.hraPercent || rawBreakup.hraPercent || config.hraPercent || 0.5;
+
+      const source = {
+        ...rawBreakup,
+        _id: user._id,
+        monthlyCTC,
+        annualCTC,
+        payType,
+        hourlyRate,
+        compensationType,
+        ptState: empFlags.ptState || comp.salaryBreakup?.ptState || rawBreakup.ptState || 'custom',
+        taxRegime: profile?.identity?.taxRegime || 'new',
+        pfEnabled: empFlags.pfEnabled ?? comp.salaryBreakup?.pfEnabled ?? rawBreakup.pfEnabled ?? true,
+        esiEnabled: empFlags.esiEnabled ?? comp.salaryBreakup?.esiEnabled ?? rawBreakup.esiEnabled ?? true,
+        ptEnabled: empFlags.ptEnabled ?? comp.salaryBreakup?.ptEnabled ?? rawBreakup.ptEnabled ?? true,
+        lwfEnabled: empFlags.lwfEnabled ?? comp.salaryBreakup?.lwfEnabled ?? rawBreakup.lwfEnabled ?? true,
+        gratuityEnabled: empFlags.gratuityEnabled ?? comp.salaryBreakup?.gratuityEnabled ?? rawBreakup.gratuityEnabled ?? true,
+        basicPercent: Number(rawBasicPct) > 1 ? Number(rawBasicPct) / 100 : Number(rawBasicPct),
+        hraPercent: Number(rawHraPct) > 1 ? Number(rawHraPct) / 100 : Number(rawHraPct),
+        salaryStructure: rawBreakup
+      };
+
+      const adj = {
+        joiningBonus,
+        incentive,
+        specialBonus,
+        otherAllowanceArrear,
+        reimbursements: totalReimbursementApproved,
+        ...(deductionsInput.tds !== undefined && deductionsInput.tds !== '' ? { tds: Number(deductionsInput.tds) } : {})
+      };
+
+      const snapshot = buildPayrollSnapshot(source, config, { workingDays, paidDays, lop, hoursWorked }, adj, month, year);
+
+      const totalEarnings = Number(((snapshot.totalEarnings || 0) + overtime).toFixed(2));
+      const totalVariablePay = Number((joiningBonus + incentive + specialBonus + otherAllowanceArrear).toFixed(2));
+      const tdsVal = deductionsInput.tds !== undefined && deductionsInput.tds !== '' ? Number(deductionsInput.tds) : (snapshot.tds || 0);
+      const ptVal = deductionsInput.professionalTax !== undefined && deductionsInput.professionalTax !== '' && Number(deductionsInput.professionalTax) >= 0 && empFlags.manualPtOverride
+        ? Number(deductionsInput.professionalTax)
+        : (snapshot.professionalTax || 0);
+      const totalDeductions = Number(((snapshot.pfEmployee || 0) + (snapshot.esiEmployee || 0) + ptVal + tdsVal + (snapshot.lwfEmployee || 0) + loanDeduction + advanceDeduction).toFixed(2));
+      const netSalary = Math.max(0, Number(((totalEarnings + totalVariablePay + totalReimbursementApproved) - totalDeductions).toFixed(2)));
 
       const updateData = {
         companyId,
@@ -884,45 +960,48 @@ exports.processPayroll = async (req, res) => {
         unpaidLeaves: Number(emp.unpaidLeaves) || 0,
         lop,
         hoursWorked,
+        attendanceSource: emp.attendanceSource || 'hrms',
         payType,
         hourlyRate,
         compensationType,
         periodInput: emp.periodInput || {},
         earnings: {
-          basic: Number(earnings.basic) || 0,
-          hra: Number(earnings.hra) || 0,
-          flexiAmount: Number(earnings.flexiAmount) || 0,
-          broadband: Number(earnings.broadband) || 0,
-          petrol: Number(earnings.petrol) || 0,
-          lta: Number(earnings.lta) || 0,
-          specialAllowance: Number(earnings.specialAllowance) || 0,
-          overtime: Number(earnings.overtime) || 0,
-          conveyance: Number(earnings.conveyance) || 0,
-          medicalAllowance: Number(earnings.medicalAllowance) || 0,
+          basic: snapshot.basic || 0,
+          hra: snapshot.hra || 0,
+          flexiAmount: snapshot.flexi || 0,
+          broadband: snapshot.broadband || 0,
+          petrol: snapshot.petrol || 0,
+          lta: snapshot.lta || 0,
+          specialAllowance: snapshot.specialAllowance || 0,
+          overtime,
+          conveyance: snapshot.conveyance || 0,
+          medicalAllowance: snapshot.medicalAllowance || 0,
           totalEarnings
         },
         employerContributions: {
-          pfEmployer: Number(employerContributions.pfEmployer) || 0,
-          esiEmployer: Number(employerContributions.esiEmployer) || 0,
-          gratuity: Number(employerContributions.gratuity) || 0,
-          lwfEmployer: Number(employerContributions.lwfEmployer) || 0,
-          grossTotalSalary: Number(employerContributions.grossTotalSalary) || (totalEarnings + (Number(employerContributions.pfEmployer) || 0))
+          pfEmployer: snapshot.pfEmployer || 0,
+          esiEmployer: snapshot.esiEmployer || 0,
+          gratuity: snapshot.gratuity || 0,
+          lwfEmployer: snapshot.lwfEmployer || 0,
+          insuranceEmployer: snapshot.insurance || 0,
+          nps: snapshot.employerNPS || 0,
+          grossTotalSalary: Number((totalEarnings + (snapshot.pfEmployer || 0) + (snapshot.esiEmployer || 0) + (snapshot.gratuity || 0) + (snapshot.lwfEmployer || 0) + (snapshot.insurance || 0) + (snapshot.employerNPS || 0)).toFixed(2))
         },
         variablePay: {
-          joiningBonus: Number(variablePay.joiningBonus) || 0,
-          incentive: Number(variablePay.incentive) || 0,
-          specialBonus: Number(variablePay.specialBonus) || 0,
-          otherAllowanceArrear: Number(variablePay.otherAllowanceArrear) || 0,
+          joiningBonus,
+          incentive,
+          specialBonus,
+          otherAllowanceArrear,
           totalVariablePay
         },
         deductions: {
-          pfEmployee: Number(deductions.pfEmployee) || 0,
-          esiEmployee: Number(deductions.esiEmployee) || 0,
-          professionalTax: Number(deductions.professionalTax) || 0,
-          tds: Number(deductions.tds) || 0,
-          lwfEmployee: Number(deductions.lwfEmployee) || 0,
-          loanDeduction: Number(deductions.loanDeduction) || 0,
-          advanceDeduction: Number(deductions.advanceDeduction) || 0,
+          pfEmployee: snapshot.pfEmployee || 0,
+          esiEmployee: snapshot.esiEmployee || 0,
+          professionalTax: ptVal,
+          tds: tdsVal,
+          lwfEmployee: snapshot.lwfEmployee || 0,
+          loanDeduction,
+          advanceDeduction,
           totalDeductions
         },
         totalPayable: totalEarnings + totalVariablePay,
@@ -1031,7 +1110,11 @@ exports.previewPayroll = async (req, res) => {
       annualCTC = monthlyCTC * 12;
     }
 
+    const rawPrevBasicPct = adjustments.basicPercent !== undefined ? adjustments.basicPercent : (comp.salaryBreakup?.basicPercent || rawBreakup.basicPercent || config.basicPercent || 0.5);
+    const rawPrevHraPct = adjustments.hraPercent !== undefined ? adjustments.hraPercent : (comp.salaryBreakup?.hraPercent || rawBreakup.hraPercent || config.hraPercent || 0.5);
+
     const source = {
+      ...rawBreakup,
       _id: user._id,
       employeeId: user.employeeCode || String(user._id),
       employeeCode: user.employeeCode || '',
@@ -1052,18 +1135,30 @@ exports.previewPayroll = async (req, res) => {
       ptEnabled: adjustments.ptEnabled !== undefined ? adjustments.ptEnabled : (comp.salaryBreakup?.ptEnabled ?? rawBreakup.ptEnabled ?? true),
       lwfEnabled: adjustments.lwfEnabled !== undefined ? adjustments.lwfEnabled : (comp.salaryBreakup?.lwfEnabled ?? rawBreakup.lwfEnabled ?? true),
       gratuityEnabled: adjustments.gratuityEnabled !== undefined ? adjustments.gratuityEnabled : (comp.salaryBreakup?.gratuityEnabled ?? rawBreakup.gratuityEnabled ?? true),
-      basicPercent: adjustments.basicPercent !== undefined ? adjustments.basicPercent : (comp.salaryBreakup?.basicPercent || rawBreakup.basicPercent || config.basicPercent || 0.5),
-      hraPercent: adjustments.hraPercent !== undefined ? adjustments.hraPercent : (comp.salaryBreakup?.hraPercent || rawBreakup.hraPercent || config.hraPercent || 0.5),
-      salaryStructure: rawBreakup,
-      ...rawBreakup
+      basicPercent: Number(rawPrevBasicPct) > 1 ? Number(rawPrevBasicPct) / 100 : Number(rawPrevBasicPct),
+      hraPercent: Number(rawPrevHraPct) > 1 ? Number(rawPrevHraPct) / 100 : Number(rawPrevHraPct),
+      salaryStructure: rawBreakup
     };
 
     const snapshot = buildPayrollSnapshot(source, config, attendance, adjustments, Number(month), Number(year));
+    const employerContributions = {
+      pfEmployer: snapshot.pfEmployer || 0,
+      esiEmployer: snapshot.esiEmployer || 0,
+      gratuity: snapshot.gratuity || 0,
+      lwfEmployer: snapshot.lwfEmployer || 0,
+      insuranceEmployer: snapshot.insurance || 0,
+      nps: snapshot.employerNPS || 0
+    };
+    const annualBenefits = extractAnnualBenefits(rawBreakup);
+
     return res.json({
       ...snapshot,
+      employerContributions,
+      annualBenefits,
+      monthlyCTC,
       success: true,
-      snapshot,
-      calculation: snapshot,
+      snapshot: { ...snapshot, employerContributions, annualBenefits, monthlyCTC },
+      calculation: { ...snapshot, employerContributions, annualBenefits, monthlyCTC },
       master: source
     });
   } catch (error) {
@@ -1191,10 +1286,13 @@ exports.updatePayroll = async (req, res) => {
       return res.status(400).json({ message: 'Cannot edit paid payroll. Please reopen payroll first.' });
     }
 
-    const updateFields = req.body || {};
+    const updateFields = { ...(req.body || {}) };
     delete updateFields._id;
     delete updateFields.companyId;
     delete updateFields.user;
+    if (updateFields.status === 'paid') {
+      return res.status(400).json({ message: 'Use the mark-paid endpoint to mark a payroll as paid.' });
+    }
 
     Object.assign(payroll, updateFields);
     payroll.auditLog.push({
@@ -1399,6 +1497,17 @@ exports.reopenPayroll = async (req, res) => {
     });
     await payroll.save();
 
+    // Revert linked reimbursements back to Approved so they can be re-included
+    if (Array.isArray(payroll.reimbursements) && payroll.reimbursements.length > 0) {
+      const reimbIds = payroll.reimbursements.map(r => r._id).filter(Boolean);
+      if (reimbIds.length > 0) {
+        await Reimbursement.updateMany(
+          { _id: { $in: reimbIds }, companyId, status: 'Reimbursed' },
+          { $set: { status: 'Approved', payoutDate: null, payoutTransactionId: null } }
+        );
+      }
+    }
+
     // Clean up payslip from profile
     const monthName = MONTH_NAMES[payroll.month - 1] || 'Current';
     const periodLabel = `${monthName} ${payroll.year}`;
@@ -1552,6 +1661,11 @@ exports.processFullAndFinalSettlement = async (req, res) => {
       fnfDetails.loanRecoveryDeduction;
 
     const finalNet = netSalary !== undefined ? Number(netSalary) : Math.max(0, totalEarnings - totalDeductions);
+
+    const existingPaid = await Payroll.findOne({ companyId, user: userId, month, year, status: 'paid', isDeleted: { $ne: true } }).lean();
+    if (existingPaid) {
+      return res.status(400).json({ message: 'A paid payroll already exists for this period. Please reopen it before creating an FnF settlement.' });
+    }
 
     const payrollDoc = await Payroll.findOneAndUpdate(
       { companyId, user: userId, month, year, isDeleted: { $ne: true } },
@@ -1812,6 +1926,27 @@ exports.generatePayslip = async (req, res) => {
         details: 'LWF Contribution'
       });
     }
+    if (empContrib.insuranceEmployer > 0) {
+      employerContributionsLineItems.push({
+        id: 'insuranceEmployer',
+        name: 'Insurance (Flexi Benefit)',
+        amount: empContrib.insuranceEmployer,
+        details: 'Group Medical / Flexi Insurance'
+      });
+    }
+    if (empContrib.nps > 0) {
+      employerContributionsLineItems.push({
+        id: 'nps',
+        name: 'Employer NPS',
+        amount: empContrib.nps,
+        details: 'National Pension Scheme'
+      });
+    }
+
+    const rawProfileBreakup = (profile?.compensation?.salaryBreakup instanceof Map
+      ? Object.fromEntries(profile.compensation.salaryBreakup)
+      : profile?.compensation?.salaryBreakup) || {};
+    const annualBenefits = extractAnnualBenefits(rawProfileBreakup);
 
     const totalEmployerContributions = employerContributionsLineItems.reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
     const monthlyCTC = Number(snap.monthlyCTC) || (Number(earnings.totalEarnings) + totalEmployerContributions);
@@ -1902,6 +2037,7 @@ exports.generatePayslip = async (req, res) => {
         deductionsLineItems,
         employerContributionsLineItems,
         totalEmployerContributions,
+        annualBenefits,
         monthlyCTC,
         earnings: payroll.earnings,
         deductions: payroll.deductions,
@@ -2084,6 +2220,60 @@ exports.exportPayrollInputsExcel = async (req, res) => {
   } catch (error) {
     console.error('[PayrollController] exportPayrollInputsExcel error:', error);
     return res.status(500).json({ message: `Error exporting payroll inputs: ${error.message}` });
+  }
+};
+
+/**
+ * GET /api/payroll/my-payslips
+ * Allows an authenticated employee to fetch their own approved/paid Payroll records
+ */
+exports.getMyPayslips = async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    const userId = req.user?._id;
+    if (!companyId || !userId) {
+      return res.status(400).json({ message: 'Company or user context missing.' });
+    }
+
+    const records = await Payroll.find({
+      companyId,
+      user: userId,
+      status: { $in: ['approved', 'paid'] },
+      isDeleted: { $ne: true }
+    })
+      .sort({ year: -1, month: -1, createdAt: -1 })
+      .lean();
+
+    return res.json({ data: records });
+  } catch (error) {
+    console.error('[PayrollController] getMyPayslips error:', error);
+    return res.status(500).json({ message: `Error fetching your payslips: ${error.message}` });
+  }
+};
+
+/**
+ * GET /api/payroll/my-payslips/:id/generate-payslip
+ * Allows an authenticated employee to generate/view their own itemized payslip
+ */
+exports.generateMyPayslip = async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    const userId = req.user?._id;
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid payroll ID.' });
+    }
+
+    const payroll = await Payroll.findOne({ _id: id, companyId, user: userId, isDeleted: { $ne: true } }).select('_id status').lean();
+    if (!payroll) {
+      return res.status(404).json({ message: 'Payslip not found for your account.' });
+    }
+
+    return exports.generatePayslip(req, res);
+  } catch (error) {
+    console.error('[PayrollController] generateMyPayslip error:', error);
+    return res.status(500).json({ message: `Error generating payslip: ${error.message}` });
   }
 };
 

@@ -268,6 +268,7 @@ const startAnnouncementScheduler = require('./src/modules/announcement/announcem
 const startEscalationCron = require('./src/modules/helpdesk/escalation.cron');
 const { startEmployeeRevisionCron } = require('./src/modules/dossier/employeeRevision.cron');
 const startPmsRemindersCron = require('./src/modules/performance/services/pmsReminders.cron');
+const { startPayrollAutoRunCron } = require('./src/modules/payroll/payrollAutoRun.cron');
 
 const startImpersonationCleanup = () => {
     setInterval(async () => {
@@ -295,6 +296,7 @@ const initServer = async () => {
     startAnnouncementScheduler(io);
     startEmployeeRevisionCron();
     startPmsRemindersCron(io);
+    startPayrollAutoRunCron();
     startImpersonationCleanup();
 
     server.listen(PORT, () => {
