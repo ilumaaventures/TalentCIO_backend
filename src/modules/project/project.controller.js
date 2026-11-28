@@ -42,7 +42,7 @@ const getEmployees = async (req, res) => {
         }
 
         res.set('Cache-Control', 'private, max-age=45, stale-while-revalidate=45');
-        const users = await User.find({ companyId: req.companyId })
+        const users = await User.find({ companyId: req.companyId, isActive: { $ne: false } })
             .select('firstName lastName email profilePicture profilePhoto')
             .lean();
         res.json(users);

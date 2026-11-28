@@ -971,14 +971,14 @@ exports.getProjectBootstrap = async (req, res) => {
 
         // Direct reports for team performance tracking
         const directReports = (canViewTeam || canViewAllUserPerformance)
-            ? await User.find({ reportingManagers: req.user._id, companyId: req.companyId, isDeleted: { $ne: true } }).select('_id').lean()
+            ? await User.find({ reportingManagers: req.user._id, companyId: req.companyId, isDeleted: { $ne: true }, isActive: { $ne: false } }).select('_id').lean()
             : [];
         const teamUserIds = directReports.map(u => u._id.toString());
         teamUserIds.push(req.user._id.toString());
 
         let employeePromise;
         if (canViewAllUserPerformance || canManageProjects) {
-            employeePromise = User.find({ companyId: req.companyId, isDeleted: { $ne: true } })
+            employeePromise = User.find({ companyId: req.companyId, isDeleted: { $ne: true }, isActive: { $ne: false } })
                 .select('firstName lastName email department profilePicture profilePhoto')
                 .sort({ firstName: 1, lastName: 1 })
                 .lean();
@@ -986,7 +986,8 @@ exports.getProjectBootstrap = async (req, res) => {
             employeePromise = User.find({
                 companyId: req.companyId,
                 _id: { $in: teamUserIds },
-                isDeleted: { $ne: true }
+                isDeleted: { $ne: true },
+                isActive: { $ne: false }
             })
                 .select('firstName lastName email department profilePicture profilePhoto')
                 .sort({ firstName: 1, lastName: 1 })
@@ -995,7 +996,8 @@ exports.getProjectBootstrap = async (req, res) => {
             employeePromise = User.find({
                 companyId: req.companyId,
                 _id: req.user._id,
-                isDeleted: { $ne: true }
+                isDeleted: { $ne: true },
+                isActive: { $ne: false }
             })
                 .select('firstName lastName email department profilePicture profilePhoto')
                 .lean();
